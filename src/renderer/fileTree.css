@@ -1,0 +1,200 @@
+/* ============================================================
+   File Tree (VS Code-style Explorer)
+   ============================================================ */
+
+#file-tree {
+  padding: 2px 0 8px;
+  font-size: 13px;
+  cursor: default;
+  user-select: none;
+}
+
+/* ---------- Rows ---------- */
+.ft-row {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  line-height: 22px;
+  padding-right: 8px;
+  white-space: nowrap;
+  color: var(--text);
+  position: relative;
+}
+.ft-row:hover {
+  background: var(--hover);
+}
+/* Inactive selection: subtle grey; active (tree focused): blue tint + ring. */
+.ft-row.selected {
+  background: var(--select-hi);
+}
+#file-tree:focus-within .ft-row.selected {
+  background: var(--select);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* ---------- Twisty (chevron) ---------- */
+.ft-twisty {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  transition: transform 0.08s ease;
+}
+.ft-twisty .ft-svg {
+  display: block;
+  transition: transform 0.08s ease;
+}
+.ft-twisty.open .ft-svg {
+  transform: rotate(90deg);
+}
+
+/* ---------- Icon ---------- */
+.ft-icon {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 22px;
+  margin-right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ft-icon .ft-svg {
+  display: block;
+}
+
+/* ---------- Label ---------- */
+.ft-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Inline edit input ---------- */
+.ft-row.ft-inline {
+  background: transparent;
+}
+.ft-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 19px;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  padding: 0 4px;
+}
+.ft-input.ft-input-error {
+  border-color: var(--red);
+}
+
+/* ============================================================
+   Context menu
+   ============================================================ */
+.ft-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  padding: 4px 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  color: var(--text);
+  user-select: none;
+}
+.ft-menu-item {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 26px 0 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ft-menu-item:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.ft-menu-item.danger {
+  color: var(--red);
+}
+.ft-menu-item.danger:hover {
+  background: var(--red);
+  color: #fff;
+}
+.ft-menu-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-strong);
+}
+
+/* ============================================================
+   Delete confirmation
+   ============================================================ */
+.ft-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 18vh;
+}
+.ft-confirm {
+  width: 420px;
+  max-width: calc(100vw - 40px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  padding: 18px 18px 16px;
+  color: var(--text);
+}
+.ft-confirm-msg {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+.ft-confirm-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.ft-confirm-sub.ft-confirm-err {
+  color: var(--red);
+}
+.ft-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+.ft-confirm-actions .btn {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+.ft-btn-secondary {
+  background: var(--bg-input);
+  color: var(--text);
+}
+.ft-btn-secondary:hover {
+  background: var(--border-strong);
+}
+.ft-btn-danger {
+  background: #c4493f;
+}
+.ft-btn-danger:hover {
+  background: #d65348;
+}
+.ft-btn-danger:disabled {
+  opacity: 0.6;
+}

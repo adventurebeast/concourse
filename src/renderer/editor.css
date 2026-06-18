@@ -1,0 +1,130 @@
+/* ===== Editor module (Monaco tabs + diff) ===== */
+
+/* The Monaco standalone editor and diff editor containers fill the stack. */
+#editor .editor-pane {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+#editor .editor-pane[hidden] {
+  display: none;
+}
+
+/* Monaco roots fill their container. */
+#editor .monaco-host {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ===== Tabs (VS Code style) ===== */
+#editor-tabs {
+  /* .tab-bar provides height/background/border/overflow; refine here. */
+  align-items: stretch;
+}
+
+.etab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  position: relative;
+  height: 35px;
+  padding: 0 8px 0 12px;
+  max-width: 220px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-faint);
+  background: var(--tab-inactive);
+  border-right: 1px solid var(--border);
+  border-top: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.etab:hover {
+  background: var(--hover);
+}
+
+.etab.active {
+  color: var(--text);
+  background: var(--tab-active);
+  border-top-color: var(--accent);
+}
+
+/* Diff/⇄ marker sits before the label. */
+.etab .etab-marker {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.etab.active .etab-marker {
+  color: var(--green);
+}
+
+.etab .etab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Trailing slot holds either the close button or the dirty dot. */
+.etab .etab-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+}
+
+.etab .etab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-dim);
+  opacity: 0;
+}
+.etab:hover .etab-close,
+.etab.active .etab-close {
+  opacity: 1;
+}
+.etab .etab-close:hover {
+  background: var(--border-strong);
+  color: var(--text);
+}
+
+/* Dirty indicator: a filled dot replacing the close button until hover. */
+.etab .etab-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text);
+}
+/* When dirty, show the dot and hide the close — but on hover swap to close. */
+.etab.dirty .etab-close {
+  opacity: 0;
+}
+.etab.dirty .etab-dot {
+  display: block;
+}
+.etab.dirty:hover .etab-dot {
+  display: none;
+}
+.etab.dirty:hover .etab-close {
+  opacity: 1;
+}
+.etab:not(.dirty) .etab-dot {
+  display: none;
+}

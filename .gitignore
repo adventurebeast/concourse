@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build output
+out/
+dist/
+*.log
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Native build artifacts
+build/
+*.node

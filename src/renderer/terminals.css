@@ -1,0 +1,151 @@
+/* ---------- Status dots (activity / attention / exited) ---------- */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-faint);
+}
+.dot.running {
+  background: var(--green);
+}
+.dot.activity {
+  background: var(--accent);
+}
+.dot.attention {
+  background: var(--orange);
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+.dot.exited {
+  background: var(--text-faint);
+}
+@keyframes dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* ---------- Tab labels / rename ---------- */
+.term-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.term-tab.exited .term-tab-label {
+  opacity: 0.55;
+}
+.rename-input {
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 12px;
+  padding: 0 4px;
+  width: 100px;
+  outline: none;
+}
+
+/* ---------- Panes container: tabs vs grid ---------- */
+#term-panes.tabs .term-cell {
+  position: absolute;
+  inset: 0;
+  display: none;
+}
+#term-panes.tabs .term-cell.active {
+  display: flex;
+  flex-direction: column;
+}
+#term-panes.tabs .cell-header {
+  display: none;
+}
+
+#term-panes.grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 1), 1fr);
+  grid-auto-rows: 1fr;
+  gap: 1px;
+  background: var(--border);
+}
+#term-panes.grid .term-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-panel);
+}
+
+/* ---------- Cell ---------- */
+.term-cell {
+  overflow: hidden;
+}
+.term-cell.focused {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.cell-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 24px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+.cell-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+.cell-header .close {
+  opacity: 0.5;
+  cursor: pointer;
+  padding: 0 3px;
+  border-radius: 3px;
+}
+.cell-header .close:hover {
+  opacity: 1;
+  background: var(--border-strong);
+}
+.cell-body {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 2px 4px 10px;
+  overflow: hidden;
+}
+.cell-body .xterm {
+  height: 100%;
+}
+
+/* ---------- Preset dropdown ---------- */
+.term-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+  min-width: 200px;
+}
+.term-menu-item {
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+  white-space: nowrap;
+}
+.term-menu-item:hover {
+  background: var(--accent);
+  color: #fff;
+}
