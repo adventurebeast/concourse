@@ -247,6 +247,20 @@ body {
   display: flex;
   gap: 2px;
 }
+.workspace-root {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text);
+  padding: 2px 8px 4px 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.workspace-root[hidden] {
+  display: none;
+}
 .panel-body {
   flex: 1;
   overflow: auto;
@@ -269,6 +283,10 @@ body {
 }
 .icon-btn:hover {
   background: var(--hover);
+  color: var(--text);
+}
+.icon-btn.active {
+  background: var(--select-hi);
   color: var(--text);
 }
 .icon-btn:disabled {
@@ -381,11 +399,21 @@ body {
   align-items: center;
   margin-bottom: -1px;
 }
+/* Chrome-inspired tab strip: the active tab is "lifted" onto the editor
+   surface so it reads as one piece with the terminal pane below (answering
+   "which agent am I looking at?"), corners are subtly rounded, and the hard
+   per-tab dividers soften to hairlines that fade next to the active/hovered
+   tab. Keeps VS Code muscle memory while feeling calmer and more welcoming. */
 .term-tabs {
+  /* Baseline-align so rounded-top tabs sit on the strip floor and the active
+     tab can bleed 1px over the bottom border to fuse with the pane. */
   display: flex;
-  align-items: stretch;
+  align-items: flex-end;
   flex: 1;
+  min-width: 0;
   margin-left: 12px;
+  padding: 0 4px;
+  gap: 2px;
   overflow-x: auto;
 }
 .term-tabs::-webkit-scrollbar {
@@ -393,36 +421,115 @@ body {
 }
 .panel-controls {
   display: flex;
+  align-items: center;
   gap: 2px;
   padding-right: 8px;
 }
 .term-tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 6px 0 11px;
+  min-width: 110px;
+  max-width: 180px;
   font-size: 12px;
   color: var(--text-dim);
   background: none;
-  border: none;
-  border-radius: 0;
+  border: 1px solid transparent; /* reserve the frame; only the active tab shows it */
+  border-bottom: none;
+  border-radius: 6px 6px 0 0; /* subtle top rounding only */
   cursor: pointer;
-  max-width: 170px;
   white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
 }
+/* Hairline divider between adjacent inactive tabs — short, centred, faint. */
+.term-tab::after {
+  content: '';
+  position: absolute;
+  right: -2px;
+  top: 50%;
+  height: 16px;
+  width: 1px;
+  transform: translateY(-50%);
+  background: var(--border);
+  transition: opacity 0.1s ease;
+}
+/* Dividers disappear on BOTH flanks of the active/hovered tab (and after the
+   last tab). The :has() pair covers the divider to the LEFT of an active/hovered
+   tab; the sibling rules cover the right. */
+.term-tab:hover::after,
+.term-tab.active::after,
+.term-tab:hover + .term-tab::after,
+.term-tab.active + .term-tab::after,
+.term-tab:has(+ .term-tab:hover)::after,
+.term-tab:has(+ .term-tab.active)::after,
+.term-tab:last-of-type::after {
+  opacity: 0;
+}
+/* Hover: soft rounded highlight + a whisper of the identity colour. */
 .term-tab:hover {
-  background: var(--hover);
-}
-.term-tab.active {
-  background: var(--select-hi);
+  background: color-mix(in srgb, var(--term-color, var(--hover)) 10%, var(--hover));
   color: var(--text);
 }
+/* Active: lifted onto the editor surface so it connects to the pane below.
+   Hairline frame on top + sides; no lavender fill, no hard blue top line. */
+.term-tab.active {
+  color: var(--text);
+  background: var(--bg-editor);
+  border-color: var(--border);
+  margin-bottom: -1px; /* cover the strip's bottom border → fuse with the pane */
+  padding-bottom: 1px;
+}
+/* Identity colour, gently: a 2px rounded underline hugging the tab floor on
+   the active tab (replaces the old hard 3px left bar). */
+.term-tab.active::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--term-color, var(--accent));
+}
+/* Keyboard focus — always visible, drawn inside so it isn't clipped. */
+.term-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.term-tab.dragging {
+  opacity: 0.5;
+}
+.term-tab.dragging::after {
+  opacity: 0;
+}
+/* Dimmed dead-shell state. */
+.term-tab.exited {
+  color: var(--text-faint);
+}
+.term-tab.exited.active::before {
+  background: var(--text-faint);
+}
+.term-tab .term-tab-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .term-tab .close {
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
   line-height: 1;
   opacity: 0;
-  border-radius: 4px;
-  padding: 1px 3px;
+  border-radius: 5px;
+  color: var(--text-dim);
+  transition: opacity 0.1s ease, background 0.1s ease, color 0.1s ease;
 }
 .term-tab:hover .close,
 .term-tab.active .close {
@@ -430,7 +537,48 @@ body {
 }
 .term-tab .close:hover {
   opacity: 1;
-  background: var(--border-strong);
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+}
+.term-tab .close:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* Inline "+" that follows the last tab — a clean rounded button. */
+.term-tab-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  width: 26px;
+  height: 26px;
+  margin: 0 2px 1px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.term-tab-add:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.term-tab-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  color: var(--text);
+}
+/* Respect reduced-motion: drop the easing. */
+@media (prefers-reduced-motion: reduce) {
+  .term-tab,
+  .term-tab::after,
+  .term-tab .close,
+  .term-tab-add {
+    transition: none;
+  }
 }
 #term-panes {
   flex: 1;

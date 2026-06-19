@@ -129,6 +129,7 @@ export function createEditor() {
   let diffSeq = 0
 
   const saveListeners = []
+  const tabsListeners = []
 
   function fileKey(path) {
     return 'file:' + path
@@ -136,6 +137,13 @@ export function createEditor() {
 
   function syncWelcome() {
     welcome.style.display = tabs.size === 0 ? 'flex' : 'none'
+    for (const cb of tabsListeners) {
+      try {
+        cb(tabs.size)
+      } catch (_e) {
+        /* ignore listener errors */
+      }
+    }
   }
 
   function showHost(kind) {
@@ -395,6 +403,11 @@ export function createEditor() {
     if (typeof cb === 'function') saveListeners.push(cb)
   }
 
+  // Notify whenever the number of open tabs changes (fires on open and close).
+  function onTabsChange(cb) {
+    if (typeof cb === 'function') tabsListeners.push(cb)
+  }
+
   // Switch Monaco theme ('vs' light / 'vs-dark' dark) — global to all editors.
   function setTheme(name) {
     monaco.editor.setTheme(name)
@@ -410,5 +423,5 @@ export function createEditor() {
 
   syncWelcome()
 
-  return { openFile, openDiff, save, onSave, setTheme }
+  return { openFile, openDiff, save, onSave, onTabsChange, setTheme }
 }

@@ -231,7 +231,7 @@ export function createFileTree({ onOpenFile }) {
 
     // No folder open — show a call-to-action instead of a tree.
     if (!root) {
-      if (nameEl) nameEl.textContent = 'EXPLORER'
+      if (nameEl) { nameEl.textContent = ''; nameEl.hidden = true }
       container.innerHTML = ''
       const hint = document.createElement('div')
       hint.className = 'empty-hint'
@@ -246,7 +246,7 @@ export function createFileTree({ onOpenFile }) {
       return
     }
 
-    if (nameEl) nameEl.textContent = (basename(root) || 'EXPLORER').toUpperCase()
+    if (nameEl) { nameEl.textContent = (basename(root) || '').toUpperCase(); nameEl.hidden = false }
     await loadChildren(root)
     render()
   }

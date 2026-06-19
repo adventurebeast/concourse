@@ -99,16 +99,25 @@ document.getElementById('toggle-panel').addEventListener('click', (e) => {
 })
 
 // Terminals-only: hide the editor entirely so terminals fill the workbench.
-document.getElementById('toggle-terminals').addEventListener('click', (e) => {
-  const on = document.getElementById('main').classList.toggle('terminals-only')
-  e.currentTarget.classList.toggle('active', on)
+function setTerminalsOnly(on) {
+  const main = document.getElementById('main')
+  if (main.classList.contains('terminals-only') === on) return
+  main.classList.toggle('terminals-only', on)
+  document.getElementById('toggle-terminals').classList.toggle('active', on)
   if (on) {
     // make sure the terminal panel is actually visible
     document.getElementById('terminal-region').classList.remove('hidden')
     document.getElementById('toggle-panel').classList.add('active')
   }
   terminals.fitActive()
+}
+document.getElementById('toggle-terminals').addEventListener('click', () => {
+  setTerminalsOnly(!document.getElementById('main').classList.contains('terminals-only'))
 })
+
+// Document viewer follows the open documents: showing the editor when a document
+// is open, and reverting to terminals-only mode once every document is closed.
+editor.onTabsChange((count) => setTerminalsOnly(count === 0))
 
 // ---------- Theme (light default, dark optional, persisted) ----------
 const THEME_KEY = 'concourse-theme'
@@ -129,6 +138,28 @@ document.getElementById('toggle-theme').addEventListener('click', () => {
   applyTheme(theme === 'dark' ? 'light' : 'dark')
 })
 applyTheme(theme)
+
+// ---------- Experience mode (beginner default, expert optional, persisted) ----------
+// Two "lanes": beginner is calmer and more guided for people new to IDEs; expert
+// follows standard IDE conventions. Foundation only for now — the flag lives on
+// <html data-mode> (like data-theme) so CSS and feature code can branch off it.
+// The one behavioral hook today: beginner terminals get a friendlier prompt.
+const MODE_KEY = 'concourse-mode'
+let mode = localStorage.getItem(MODE_KEY) || 'beginner'
+function applyMode(next) {
+  mode = next === 'expert' ? 'expert' : 'beginner'
+  document.documentElement.dataset.mode = mode
+  const btn = document.getElementById('toggle-mode')
+  btn.innerHTML = icon(mode === 'expert' ? 'compass' : 'lifeBuoy')
+  const tip = mode === 'expert' ? 'Switch to Beginner Mode' : 'Switch to Expert Mode'
+  btn.setAttribute('title', tip)
+  btn.dataset.tip = tip
+  localStorage.setItem(MODE_KEY, mode)
+}
+document.getElementById('toggle-mode').addEventListener('click', () => {
+  applyMode(mode === 'expert' ? 'beginner' : 'expert')
+})
+applyMode(mode)
 
 // ---------- Open folder ----------
 async function setWorkspace(root) {
@@ -186,4 +217,6 @@ dragH(document.getElementById('drag-y'), document.getElementById('terminal-regio
   await fileTree.load(currentRoot)
   git.refresh()
   terminals.create()
+  // Launch in terminals-only mode; opening a document reveals the editor.
+  setTerminalsOnly(true)
 })()

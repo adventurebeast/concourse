@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Terminals — handlers implemented in src/main/ipc-pty.js
   term: {
-    create: (id, cwd) => ipcRenderer.send('term:create', { id, cwd }),
+    create: (id, cwd, opts = {}) => ipcRenderer.send('term:create', { id, cwd, ...opts }),
     input: (id, data) => ipcRenderer.send('term:input', { id, data }),
     resize: (id, cols, rows) => ipcRenderer.send('term:resize', { id, cols, rows }),
     kill: (id) => ipcRenderer.send('term:kill', { id }),

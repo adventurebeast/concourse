@@ -21,6 +21,7 @@
           <button id="toggle-sidebar" class="title-btn active" data-icon="panelLeft" title="Toggle Sidebar"></button>
           <button id="toggle-panel" class="title-btn active" data-icon="panelBottom" title="Toggle Terminal Panel"></button>
           <button id="toggle-terminals" class="title-btn" data-icon="terminal" title="Terminals Only (hide editor)"></button>
+          <button id="toggle-mode" class="title-btn" data-icon="lifeBuoy" title="Switch to Expert Mode"></button>
           <button id="toggle-theme" class="title-btn" data-icon="moon" title="Toggle Light / Dark Theme"></button>
         </div>
       </header>
@@ -35,7 +36,7 @@
         <aside id="sidebar">
           <section id="explorer-panel" class="view-panel">
             <div class="pane-header">
-              <span id="workspace-name" class="pane-title">EXPLORER</span>
+              <span class="pane-title">EXPLORER</span>
               <div class="pane-actions">
                 <button id="ft-new-file" class="icon-btn" data-icon="filePlus" title="New File"></button>
                 <button id="ft-new-folder" class="icon-btn" data-icon="folderPlus" title="New Folder"></button>
@@ -44,6 +45,7 @@
                 <button id="open-folder" class="icon-btn" data-icon="folderOpen" title="Open Folder…"></button>
               </div>
             </div>
+            <div id="workspace-name" class="workspace-root" hidden></div>
             <div id="file-tree" class="panel-body"></div>
           </section>
 
@@ -83,9 +85,7 @@
             <div class="panel-tabbar">
               <div class="panel-label">TERMINAL</div>
               <div id="term-tabs" class="term-tabs"></div>
-              <div class="panel-controls">
-                <button id="new-term" class="icon-btn" data-icon="plus" title="New Terminal"></button>
-              </div>
+              <div class="panel-controls"></div>
             </div>
             <div id="term-panes"></div>
           </section>
