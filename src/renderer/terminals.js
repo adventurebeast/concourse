@@ -35,7 +35,7 @@ export function createTerminals({ getRoot }) {
   let themeName = 'light'
   panesEl.classList.add('tabs')
 
-  // ---- watchdog ----
+  // ---- pulse ----
   // Monotonic clock for the silence timers.
   const now = () => performance.now()
   // Layer A (deterministic, free): a pane that has produced no output for QUIET_MS
@@ -47,11 +47,11 @@ export function createTerminals({ getRoot }) {
   // Anthropic key, or a live local OpenAI-compatible endpoint); without it the
   // deterministic Layer A still works. Queried once at startup — restart to pick up a
   // provider you brought up later.
-  let watchdogEnabled = false
-  api.watchdog
+  let pulseEnabled = false
+  api.pulse
     ?.status?.()
     .then((st) => {
-      watchdogEnabled = !!(st && st.enabled && st.reachable)
+      pulseEnabled = !!(st && st.enabled && st.reachable)
     })
     .catch(() => {})
 
@@ -388,8 +388,8 @@ export function createTerminals({ getRoot }) {
   }
 
   // ---- indicator dot ----
-  // Maps the richer watchdog state onto a dot class. status (running/exited) is the
-  // hard fact; state (working/quiet/blocked/done/error/idle) is the watchdog verdict.
+  // Maps the richer pulse state onto a dot class. status (running/exited) is the
+  // hard fact; state (working/quiet/blocked/done/error/idle) is the pulse verdict.
   function updateIndicators(s) {
     let cls
     if (s.status === 'exited') cls = s.state === 'error' ? 'error' : 'done'
@@ -501,7 +501,7 @@ export function createTerminals({ getRoot }) {
       id, term, fit, cell, tabEl, tabDot, tabLabel, cellLabel, cellDot, color,
       stub, stubDot, stubLabel,
       status: 'running', activity: false, attention: false, custom: false,
-      state: 'working', // watchdog state: working|quiet|blocked|done|error|idle
+      state: 'working', // pulse state: working|quiet|blocked|done|error|idle
       lastOutputAt: now(), // timestamp of last PTY output — drives the silence timer
       summaryText: null, // last Layer-B label (summary, or the pending question)
       lastSummaryHash: null, // hash of the last tail summarised — skip no-op repeats
@@ -611,6 +611,9 @@ export function createTerminals({ getRoot }) {
     s.stub.remove()
     s.tabEl.remove()
     sessions.delete(id)
+    // When the last pane closes, reset the counter so numbering starts at 1
+    // again rather than climbing forever (Tab 31, 32, …).
+    if (sessions.size === 0) counter = 0
     applyLayout()
     if (layout === 'flow' && sessions.size) {
       // Keep a visible (centred) terminal focused, never a hidden neighbour.
@@ -779,7 +782,7 @@ export function createTerminals({ getRoot }) {
     if (!s) return
     s.term.write(data)
     // Output means the pane is alive and working — reset the silence timer and drop
-    // any stale watchdog verdict so the label tracks live activity again.
+    // any stale pulse verdict so the label tracks live activity again.
     s.lastOutputAt = now()
     let changed = false
     if (s.state !== 'working') {
@@ -810,7 +813,7 @@ export function createTerminals({ getRoot }) {
     applyTitle(s)
   })
 
-  // ---- watchdog Layer B: model summary of quiet panes ----
+  // ---- pulse Layer B: model summary of quiet panes ----
   // Read the last lines the pane shows (clean text straight from the xterm buffer,
   // no ANSI), hashed so we never re-ask about an unchanged screen. The model call
   // itself lives in main (the key never touches the renderer); we just send the tail.
@@ -830,7 +833,7 @@ export function createTerminals({ getRoot }) {
     return h
   }
   async function summarize(s) {
-    if (!watchdogEnabled || !api.watchdog?.summarize) return
+    if (!pulseEnabled || !api.pulse?.summarize) return
     if (s.summarizing) return // one request per pane at a time
     const tail = tailOf(s)
     if (!tail) return
@@ -839,7 +842,7 @@ export function createTerminals({ getRoot }) {
     s.summarizing = true
     let res = null
     try {
-      res = await api.watchdog.summarize({
+      res = await api.pulse.summarize({
         id: s.id,
         tail,
         baseName: s.baseName,
@@ -924,5 +927,19 @@ export function createTerminals({ getRoot }) {
     }
   }
 
-  return { create, fitActive, fitAll, setLayout, setTheme, cdInto, stepActive, activateIndex, setLayout, cycleLayout, closeActive, getState, restore }
+  // Type text into the active terminal WITHOUT running it — no trailing newline.
+  // The user reads the command on the prompt and presses Enter themselves. Used by
+  // the beginner command palette ("type, don't run"). Focusing the pane afterwards
+  // means they can immediately edit or run it. Marks the pane "used" so cdInto()
+  // won't later type a cd into a terminal the user has started driving.
+  function typeIntoActive(text) {
+    const s = sessions.get(activeId)
+    if (!s || !text) return false
+    s.used = true
+    api.term.input(s.id, text)
+    s.term.focus()
+    return true
+  }
+
+  return { create, fitActive, fitAll, setLayout, setTheme, cdInto, typeIntoActive, stepActive, activateIndex, setLayout, cycleLayout, closeActive, getState, restore }
 }

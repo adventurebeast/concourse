@@ -7,7 +7,7 @@ import { registerGit } from './ipc-git.js'
 import { registerSearch } from './ipc-search.js'
 import { registerSession } from './ipc-session.js'
 import { registerPty } from './ipc-pty.js'
-import { registerWatchdog } from './ipc-watchdog.js'
+import { registerPulse } from './ipc-pulse.js'
 
 const ctx = createContext()
 let disposePty = null
@@ -72,7 +72,7 @@ app.whenReady().then(() => {
   registerSearch(ctx)
   registerSession()
   disposePty = registerPty(ctx)
-  registerWatchdog()
+  registerPulse()
 
   createWindow()
   app.on('activate', () => {

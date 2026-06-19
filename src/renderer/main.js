@@ -6,6 +6,8 @@ import { createSearch } from './search.js'
 import { createTerminals } from './terminals.js'
 import { createWelcome } from './welcome.js'
 import { createKeybindings } from './keybindings.js'
+import { createCommandPalette } from './commandPalette.js'
+import { createBeginnerHud } from './beginnerHud.js'
 import { icon } from './icons.js'
 
 const api = window.api
@@ -51,9 +53,15 @@ let currentRoot = null
 // ---------- Modules ----------
 const editor = createEditor()
 
+// Beginner heads-up line above the terminal: "you're in <folder>, a git project on
+// <branch>, N changes waiting" — ties the prompt to concrete context.
+const hud = createBeginnerHud()
+
 const git = createGit({
   // Open a git diff as a read-only tab in the editor.
-  onOpenDiff: (opts) => editor.openDiff(opts)
+  onOpenDiff: (opts) => editor.openDiff(opts),
+  // Keep the beginner context line in sync with repo state on every refresh.
+  onStatus: (status) => hud.setStatus(status)
 })
 
 const fileTree = createFileTree({
@@ -69,6 +77,13 @@ const search = createSearch({
 const terminals = createTerminals({
   getRoot: () => currentRoot
 })
+
+// Beginner command palette: a clickable launcher that TYPES a curated command onto
+// the active prompt (the user presses Enter). Trigger lives in the terminal tab bar
+// (beginner mode only, gated in CSS); also opens with Cmd/Ctrl+K.
+const palette = createCommandPalette({ typeInto: (cmd) => terminals.typeIntoActive(cmd) })
+document.getElementById('cmd-trigger').addEventListener('click', () => palette.toggle())
+palette.mountStrip(document.getElementById('cmd-strip'))
 
 // Saving a file should refresh git status.
 editor.onSave(() => git.refresh())
@@ -90,6 +105,7 @@ for (let n = 1; n <= 9; n++) {
 }
 // Cmd/Ctrl+W closes the active terminal (routes through the confirm dialog).
 keys.register('mod+w', () => terminals.closeActive())
+keys.register('mod+k', () => palette.toggle())
 // Layout modes: a single cycler plus direct keys. tabs/grid/stack/flow sit on
 // the adjacent U I O P keys; Cmd+Shift+L taps through them in order.
 keys.register('mod+shift+l', () => terminals.cycleLayout(1))
@@ -199,8 +215,15 @@ function applyMode(next) {
   mode = next === 'expert' ? 'expert' : 'beginner'
   document.documentElement.dataset.mode = mode
   const btn = document.getElementById('toggle-mode')
-  btn.innerHTML = icon(mode === 'expert' ? 'compass' : 'lifeBuoy')
-  const tip = mode === 'expert' ? 'Switch to Beginner Mode' : 'Switch to Expert Mode'
+  // Show the CURRENT mode as a labelled, colour-coded pill: a wand (guided "magic")
+  // for beginner, a terminal glyph (raw shell) for expert. Clicking switches.
+  const beginner = mode !== 'expert'
+  btn.innerHTML =
+    icon(beginner ? 'wand' : 'terminal', 14) +
+    `<span class="mode-toggle-label">${beginner ? 'Beginner' : 'Expert'}</span>`
+  btn.classList.toggle('beginner', beginner)
+  btn.classList.toggle('expert', !beginner)
+  const tip = beginner ? 'Switch to Expert Mode' : 'Switch to Beginner Mode'
   btn.setAttribute('title', tip)
   btn.dataset.tip = tip
   localStorage.setItem(MODE_KEY, mode)
@@ -217,6 +240,7 @@ async function setWorkspace(root) {
   currentRoot = root
   welcome.hide()
   setTitle(root)
+  hud.setRoot(root)
   terminals.cdInto(root) // cd fresh shells (e.g. Shell 1) into the opened folder
   await fileTree.load(root)
   git.refresh()

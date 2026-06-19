@@ -28,7 +28,7 @@ function splitPath(p) {
   return { name: norm.slice(idx + 1), dir: norm.slice(0, idx) }
 }
 
-export function createGit({ onOpenDiff } = {}) {
+export function createGit({ onOpenDiff, onStatus } = {}) {
   const body = document.getElementById('scm-body')
   // Track which groups are collapsed across refreshes.
   const collapsed = { staged: false, changes: false }
@@ -294,6 +294,7 @@ export function createGit({ onOpenDiff } = {}) {
     }
     lastStatus = status || { isRepo: false }
     render(lastStatus)
+    if (onStatus) onStatus(lastStatus) // let the beginner context line track repo/branch
   }
 
   return { refresh }

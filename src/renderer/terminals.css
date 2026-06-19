@@ -31,7 +31,7 @@
   }
 }
 
-/* ---------- Watchdog states (Layer A deterministic + Layer B model verdict) ---------- */
+/* ---------- Pulse states (Layer A deterministic + Layer B model verdict) ---------- */
 .dot.working {
   background: var(--term-color, var(--green));
 }

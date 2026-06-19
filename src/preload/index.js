@@ -57,11 +57,11 @@ contextBridge.exposeInMainWorld('api', {
     onExit: (cb) => ipcRenderer.on('term:exit', (_e, payload) => cb(payload))
   },
 
-  // Watchdog — Layer B model summariser, handlers in src/main/ipc-watchdog.js.
+  // Pulse — Layer B model summariser, handlers in src/main/ipc-pulse.js.
   // The API key lives only in the main process; the renderer sends a text tail and
   // gets back a { state, summary, question } verdict (or null when disabled).
-  watchdog: {
-    status: () => ipcRenderer.invoke('watchdog:status'),
-    summarize: (payload) => ipcRenderer.invoke('watchdog:summarize', payload)
+  pulse: {
+    status: () => ipcRenderer.invoke('pulse:status'),
+    summarize: (payload) => ipcRenderer.invoke('pulse:summarize', payload)
   }
 })

@@ -59,27 +59,42 @@ export function registerPty(ctx) {
     })
 
     // Give newbies a calm, friendly prompt instead of the default `Mac:dir user$`.
-    // Runs after the user's profile loads, then clears the screen so any shell
-    // startup noise (deprecation notices, MOTD) is gone. We only do this when the
-    // user hasn't set up their own prompt — a custom PS1/framework is left untouched.
-    if (!isWin && friendlyPrompt && !userHasCustomPrompt(shellPath)) {
-      // One short line: just the current folder name and a simple cursor — no
-      // full path, no hostname/username, no color. Calm and unintimidating.
+    // We only do this when the user hasn't set up their own prompt — a custom
+    // PS1/framework is left untouched.
+    //
+    // This has to be injected as shell input (PS1 is reset by the rc files a login
+    // shell sources, so we can't just pass it in env). The catch: writing on a fixed
+    // timer races the shell's own startup output — the bytes interleave and the line
+    // gets mangled (`%1~` tears into `clear1~`, `clear` never runs). Instead we wait
+    // until the shell has printed its first prompt and gone idle, then inject once.
+    let promptInjected = !(!isWin && friendlyPrompt && !userHasCustomPrompt(shellPath))
+    let idleTimer = null
+    const injectPrompt = () => {
+      promptInjected = true
+      // `\r` first puts us on a fresh prompt line; `clear` at the end wipes both the
+      // echoed setup command and any shell startup noise (deprecation nags, MOTD).
+      // One short line: current folder name + a simple cursor — no path, host, or color.
       const setup =
         " PS1=$'\\W ❯ '" +
         " PROMPT=$'%1~ ❯ '" +
         " && clear\r"
-      setTimeout(() => term.write(setup), 250)
+      term.write(setup)
     }
 
     term.onData((data) => {
       const win = ctx.getWindow()
       if (win) win.webContents.send('term:data', { id, data })
+      // Debounce: inject once the shell has been quiet for a beat (i.e. it has
+      // finished printing its prompt and is waiting for input).
+      if (!promptInjected) {
+        if (idleTimer) clearTimeout(idleTimer)
+        idleTimer = setTimeout(injectPrompt, 150)
+      }
     })
     term.onExit((e) => {
       const win = ctx.getWindow()
       // Forward the exit code so the renderer can tell a clean finish (0) from a
-      // failure (non-zero) — the watchdog maps that to its done/error state.
+      // failure (non-zero) — Pulse maps that to its done/error state.
       if (win) win.webContents.send('term:exit', { id, exitCode: e?.exitCode ?? 0 })
       terminals.delete(id)
     })
