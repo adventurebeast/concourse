@@ -135,6 +135,7 @@ async function setWorkspace(root) {
   if (!root) return
   currentRoot = root
   setTitle(root)
+  terminals.cdInto(root) // cd fresh shells (e.g. Shell 1) into the opened folder
   await fileTree.load(root)
   git.refresh()
 }

@@ -248,12 +248,16 @@ export function createTerminals({ getRoot }) {
 
     const s = {
       id, term, fit, cell, tabEl, tabDot, tabLabel, cellLabel, cellDot,
-      status: 'running', activity: false, attention: false, custom: false
+      status: 'running', activity: false, attention: false, custom: false,
+      used: false // true once the user types or a command runs — then we won't auto-cd it
     }
     sessions.set(id, s)
 
     api.term.create(id, getRoot())
-    term.onData((data) => api.term.input(id, data))
+    term.onData((data) => {
+      s.used = true
+      api.term.input(id, data)
+    })
     term.onResize(({ cols, rows }) => api.term.resize(id, cols, rows))
     term.onBell(() => {
       s.attention = true
@@ -278,8 +282,11 @@ export function createTerminals({ getRoot }) {
     applyGrid()
     activate(id)
 
-    // Fire the preset command once the shell has settled.
-    if (command) setTimeout(() => api.term.input(id, command + '\r'), 500)
+    // Fire the preset command once the shell has settled (this counts as "used").
+    if (command) {
+      s.used = true
+      setTimeout(() => api.term.input(id, command + '\r'), 500)
+    }
     return id
   }
 
@@ -384,5 +391,17 @@ export function createTerminals({ getRoot }) {
     for (const s of sessions.values()) s.term.options.theme = TERM_THEMES[themeName]
   }
 
-  return { create, fitActive, fitAll, setLayout, setTheme }
+  // cd fresh shells into a newly-opened folder (skip terminals already in use,
+  // e.g. running an agent — we don't want to type `cd` into them).
+  function cdInto(path) {
+    if (!path) return
+    const quoted = "'" + String(path).replace(/'/g, "'\\''") + "'"
+    for (const s of sessions.values()) {
+      if (s.status === 'running' && !s.used) {
+        api.term.input(s.id, ` cd ${quoted} && clear\r`)
+      }
+    }
+  }
+
+  return { create, fitActive, fitAll, setLayout, setTheme, cdInto }
 }
