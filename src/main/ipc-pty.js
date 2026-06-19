@@ -38,14 +38,23 @@ export function registerPty(ctx) {
     // ~/.zprofile…) — gives the normal prompt (PS1), aliases, and PATH like Terminal/Cursor.
     const args = isWin ? [] : ['-l']
     const term = pty.spawn(shellPath, args, {
-      name: 'xterm-color',
+      // 256-color terminfo. (The old 'xterm-color' is only 8-color.) xterm.js on
+      // the renderer side handles 256-color + truecolor fine.
+      name: 'xterm-256color',
       cols: 80,
       rows: 24,
       cwd: cwd || ctx.getRoot() || os.homedir(),
       env: {
         ...process.env,
         // Silence macOS's "default shell is now zsh" deprecation nag in bash.
-        BASH_SILENCE_DEPRECATION_WARNING: '1'
+        BASH_SILENCE_DEPRECATION_WARNING: '1',
+        // Pin the color environment so terminals render identically whether the
+        // app was launched from a terminal (dev) or from Finder/Dock (packaged).
+        // When launched from Finder the process inherits the bare launchd env,
+        // which lacks COLORTERM — without this, CLIs like Claude Code detect no
+        // truecolor support and fall back to a dimmer palette.
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor'
       }
     })
 
@@ -54,9 +63,11 @@ export function registerPty(ctx) {
     // startup noise (deprecation notices, MOTD) is gone. We only do this when the
     // user hasn't set up their own prompt — a custom PS1/framework is left untouched.
     if (!isWin && friendlyPrompt && !userHasCustomPrompt(shellPath)) {
+      // One short line: just the current folder name and a simple cursor — no
+      // full path, no hostname/username, no color. Calm and unintimidating.
       const setup =
-        " PS1=$'\\n\\001\\e[1;36m\\002\\w\\001\\e[0m\\002\\n\\001\\e[1;32m\\002❯\\001\\e[0m\\002 '" +
-        " PROMPT=$'\\n%F{cyan}%~%f\\n%F{green}❯%f '" +
+        " PS1=$'\\W ❯ '" +
+        " PROMPT=$'%1~ ❯ '" +
         " && clear\r"
       setTimeout(() => term.write(setup), 250)
     }
@@ -65,9 +76,11 @@ export function registerPty(ctx) {
       const win = ctx.getWindow()
       if (win) win.webContents.send('term:data', { id, data })
     })
-    term.onExit(() => {
+    term.onExit((e) => {
       const win = ctx.getWindow()
-      if (win) win.webContents.send('term:exit', { id })
+      // Forward the exit code so the renderer can tell a clean finish (0) from a
+      // failure (non-zero) — the watchdog maps that to its done/error state.
+      if (win) win.webContents.send('term:exit', { id, exitCode: e?.exitCode ?? 0 })
       terminals.delete(id)
     })
 

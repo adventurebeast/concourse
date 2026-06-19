@@ -1,0 +1,131 @@
+/* ---------- Launch / start screen overlay ---------- */
+
+#welcome-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-editor);
+}
+#welcome-overlay[hidden] {
+  display: none;
+}
+
+.welcome-card {
+  width: 420px;
+  max-width: 80%;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.welcome-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.welcome-logo {
+  color: var(--accent);
+  display: inline-flex;
+}
+.welcome-heading {
+  font-size: 30px;
+  font-weight: 200;
+  letter-spacing: 5px;
+  color: var(--text);
+}
+.welcome-tagline {
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+.welcome-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.welcome-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 0 4px 2px;
+}
+
+.welcome-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.welcome-action:hover {
+  background: var(--hover);
+}
+.welcome-action-icon {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.welcome-recents {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.welcome-recent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.welcome-recent:hover {
+  background: var(--hover);
+}
+.welcome-recent-icon {
+  display: inline-flex;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.welcome-recent-name {
+  font-size: 13px;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.welcome-recent-dir {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.welcome-empty {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+}

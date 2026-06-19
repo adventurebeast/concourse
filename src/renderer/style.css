@@ -1,21 +1,21 @@
 /* Light theme — default */
 :root {
   --bg-editor: #ffffff;
-  --bg-sidebar: #f3f3f3;
-  --bg-activity: #f3f3f3;
-  --bg-panel: #f3f3f3;
+  --bg-sidebar: #fafafa;
+  --bg-activity: #fafafa;
+  --bg-panel: #fafafa;
   --bg-elevated: #ffffff;
   --bg-input: #ffffff;
   --tab-active: #ffffff;
-  --tab-inactive: #ececec;
-  --border: #e5e5e5;
-  --border-strong: #cecece;
+  --tab-inactive: #f5f5f5;
+  --border: #ececec;
+  --border-strong: #d6d6d6;
   --text: #3b3b3b;
   --text-dim: #5f5f5f;
   --text-faint: #8c8c8c;
   --accent: #005fb8;
   --accent-hi: #0258a8;
-  --hover: #e8e8e8;
+  --hover: #f0f0f0;
   --select: #cfe3ff;
   --select-hi: #e4e6f1;
   --green: #2e8b3d;
@@ -172,6 +172,7 @@ body {
   flex: 1;
   display: flex;
   min-height: 0;
+  position: relative; /* anchor for #welcome-overlay */
 }
 
 .hidden {
@@ -320,12 +321,14 @@ body {
   min-height: 0;
 }
 
-/* ---------- Editor region ---------- */
+/* ---------- Editor region (now the bottom document viewer) ---------- */
 #editor-region {
-  flex: 1;
+  height: 320px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   min-height: 80px;
+  border-top: 1px solid var(--border);
 }
 .tab-bar {
   display: flex;
@@ -373,12 +376,11 @@ body {
 
 /* ---------- Terminal panel ---------- */
 #terminal-region {
-  height: 260px;
+  flex: 1;
   min-height: 60px;
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
-  border-top: 1px solid var(--border);
 }
 .panel-tabbar {
   display: flex;

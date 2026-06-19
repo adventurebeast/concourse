@@ -35,6 +35,26 @@ export function createTerminals({ getRoot }) {
   let themeName = 'light'
   panesEl.classList.add('tabs')
 
+  // ---- watchdog ----
+  // Monotonic clock for the silence timers.
+  const now = () => performance.now()
+  // Layer A (deterministic, free): a pane that has produced no output for QUIET_MS
+  // after being active becomes a "quiet" candidate — we then ask Layer B (the model
+  // summariser in main) what actually happened. A long further silence settles to idle.
+  const QUIET_MS = 8000
+  const IDLE_MS = 60000
+  // Layer B only runs when a provider is configured in main AND reachable (an
+  // Anthropic key, or a live local OpenAI-compatible endpoint); without it the
+  // deterministic Layer A still works. Queried once at startup — restart to pick up a
+  // provider you brought up later.
+  let watchdogEnabled = false
+  api.watchdog
+    ?.status?.()
+    .then((st) => {
+      watchdogEnabled = !!(st && st.enabled && st.reachable)
+    })
+    .catch(() => {})
+
   // ---- inject extra panel controls: one button per layout, always visible ----
   // The button for the current layout is highlighted (.active).
   const LAYOUTS = [
@@ -160,24 +180,33 @@ export function createTerminals({ getRoot }) {
     box.appendChild(actions)
     overlay.appendChild(box)
     document.body.appendChild(overlay)
-    cancel.focus()
+    // Focus the destructive action so Return confirms the closure immediately —
+    // Escape (or clicking away / Cancel) backs out.
+    ok.focus()
 
     const finish = () => {
       overlay.remove()
-      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onKey, true)
+    }
+    const confirm = () => {
+      finish()
+      destroy(s.id)
     }
     const onKey = (e) => {
-      if (e.key === 'Escape') finish()
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        finish()
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        confirm()
+      }
     }
-    document.addEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, true)
     cancel.addEventListener('click', finish)
     overlay.addEventListener('mousedown', (e) => {
       if (e.target === overlay) finish()
     })
-    ok.addEventListener('click', () => {
-      finish()
-      destroy(s.id)
-    })
+    ok.addEventListener('click', confirm)
   }
 
   // ---- layout ----
@@ -201,6 +230,19 @@ export function createTerminals({ getRoot }) {
     fitAll()
     if (activeId) activate(activeId)
   }
+  // Cycle through the layouts in their on-screen button order. Used by the
+  // single-key layout cycler hotkey.
+  const LAYOUT_ORDER = ['tabs', 'grid', 'stack', 'flow']
+  function cycleLayout(dir = 1) {
+    const i = LAYOUT_ORDER.indexOf(layout)
+    const next = LAYOUT_ORDER[((i + dir) % LAYOUT_ORDER.length + LAYOUT_ORDER.length) % LAYOUT_ORDER.length]
+    setLayout(next)
+  }
+  // Close the active terminal through the same confirm dialog as the X button.
+  function closeActive() {
+    const s = sessions.get(activeId)
+    if (s) confirmClose(s)
+  }
   function applyLayout() {
     if (layout === 'grid') applyGrid()
     else if (layout === 'stack') applyStack()
@@ -214,6 +256,9 @@ export function createTerminals({ getRoot }) {
       s.cell.style.gridRow = ''
       s.cell.style.order = ''
       s.cell.classList.remove('flow-center', 'flow-prev', 'flow-next')
+      s.stub.style.gridColumn = ''
+      s.stub.style.gridRow = ''
+      s.stub.classList.remove('on')
     }
   }
   function applyGrid() {
@@ -236,18 +281,31 @@ export function createTerminals({ getRoot }) {
   function applyStack() {
     resetCellStyles()
     const order = [...sessions.values()]
-    const rail = order.filter((s) => s.id !== activeId)
-    const rows = Math.max(1, rail.length)
+    const n = order.length
+    if (!n) return
+    const rows = Math.max(1, n)
     panesEl.style.setProperty('--stack-rows', rows)
-    const primary = sessions.get(activeId) || order[0]
-    if (primary) {
-      // With no rail tiles the primary takes the whole width (no empty rail gap).
-      primary.cell.style.gridColumn = rail.length ? '1' : '1 / -1'
-      primary.cell.style.gridRow = `1 / span ${rows}`
-    }
-    rail.forEach((s, i) => {
-      s.cell.style.gridColumn = '2'
-      s.cell.style.gridRow = `${i + 1} / span 1`
+    const active = sessions.get(activeId) || order[0]
+    const alone = n === 1
+    // Every terminal owns a fixed row in the rail (column 2) by its position in
+    // the list, so selecting one never reshuffles the others. The active terminal
+    // maximizes into the primary column (1) and a compact stub holds its rail row
+    // — it stays visible and clickable in the sidebar, just not live there.
+    order.forEach((s, i) => {
+      const isActive = s === active
+      if (isActive) {
+        s.cell.style.gridColumn = alone ? '1 / -1' : '1'
+        s.cell.style.gridRow = `1 / span ${rows}`
+        // When alone there's no rail to occupy; skip the stub entirely.
+        if (!alone) {
+          s.stub.classList.add('on')
+          s.stub.style.gridColumn = '2'
+          s.stub.style.gridRow = `${i + 1} / span 1`
+        }
+      } else {
+        s.cell.style.gridColumn = '2'
+        s.cell.style.gridRow = `${i + 1} / span 1`
+      }
     })
   }
 
@@ -308,25 +366,67 @@ export function createTerminals({ getRoot }) {
     if (center) activate(center.id)
   }
 
+  // Move the active terminal selection by ±1 in tab order (wraps around). In the
+  // album/flow layout this is the same as stepping the flow; in every other
+  // layout it just activates the neighbouring tab.
+  function stepActive(dir) {
+    const order = [...sessions.values()]
+    if (!order.length) return
+    if (layout === 'flow') return stepFlow(dir)
+    let idx = order.findIndex((s) => s.id === activeId)
+    if (idx < 0) idx = 0
+    const next = order[((idx + dir) % order.length + order.length) % order.length]
+    if (next) selectCell(next.id)
+  }
+
+  // Jump straight to the Nth terminal (0-based) in tab order. Out-of-range
+  // indices are ignored, so Cmd+9 with only three tabs does nothing.
+  function activateIndex(i) {
+    const order = [...sessions.values()]
+    const s = order[i]
+    if (s) selectCell(s.id)
+  }
+
   // ---- indicator dot ----
+  // Maps the richer watchdog state onto a dot class. status (running/exited) is the
+  // hard fact; state (working/quiet/blocked/done/error/idle) is the watchdog verdict.
   function updateIndicators(s) {
-    let cls = 'running'
-    if (s.status === 'exited') cls = 'exited'
-    else if (s.attention) cls = 'attention'
+    let cls
+    if (s.status === 'exited') cls = s.state === 'error' ? 'error' : 'done'
+    else if (s.attention || s.state === 'blocked') cls = 'blocked'
+    else if (s.state === 'error') cls = 'error'
+    else if (s.state === 'done') cls = 'done'
+    else if (s.state === 'idle') cls = 'idle'
+    else if (s.state === 'quiet') cls = 'quiet'
     else if (s.activity) cls = 'activity'
+    else cls = 'working'
     s.tabDot.className = 'dot ' + cls
     s.cellDot.className = 'dot ' + cls
+    s.stubDot.className = 'dot ' + cls
   }
   function clearFlags(s) {
     s.activity = false
     s.attention = false
+    // Focusing a pane that was flagged blocked means you're now dealing with it —
+    // drop the alarm so the dot stops pulsing; Layer A/B re-evaluates once it's
+    // quiet again. (Without this the blocked dot would survive until new output.)
+    if (s.status !== 'exited' && s.state === 'blocked') {
+      s.state = 'working'
+      s.summaryText = null
+      s.lastOutputAt = now() // fresh silence window so it doesn't instantly re-quiet
+    }
     updateIndicators(s)
   }
 
   // ---- create / destroy ----
-  function create({ name, command } = {}) {
+  function create({ name, command, label } = {}) {
     const id = 'term-' + ++counter
-    const displayName = name ? `${name} ${counter}` : `shell ${counter}`
+    // Beginner mode uses the plainest possible default ("Tab 1"); expert mode
+    // keeps the conventional "shell N". A preset name (e.g. an agent) wins either way.
+    // `label` is used verbatim (session restore) — it skips the counter suffix.
+    const beginner = document.documentElement.dataset.mode !== 'expert'
+    const defaultName = beginner ? `Tab ${counter}` : `shell ${counter}`
+    const displayName = label || (name ? `${name} ${counter}` : defaultName)
     const color = TERM_COLORS[(counter - 1) % TERM_COLORS.length]
 
     // Tab
@@ -364,6 +464,26 @@ export function createTerminals({ getRoot }) {
     cell.append(cellHeader, cellBody)
     panesEl.appendChild(cell)
 
+    // Rail stub: a compact, non-live entry that holds this terminal's slot in the
+    // master-stack rail while its live view is maximized in the primary column.
+    // Keeps the rail order stable (no reshuffle on select) and means the active
+    // terminal is still visible/clickable in the sidebar. Only shown in 'stack'
+    // layout for the active session (CSS gates it); hidden everywhere else.
+    const stub = document.createElement('div')
+    stub.className = 'term-stub'
+    stub.style.setProperty('--term-color', color)
+    const stubDot = document.createElement('span')
+    stubDot.className = 'dot running'
+    const stubLabel = document.createElement('span')
+    stubLabel.className = 'stub-label'
+    stubLabel.textContent = displayName
+    const stubMax = document.createElement('span')
+    stubMax.className = 'stub-max'
+    stubMax.innerHTML = icon('square', 12)
+    stubMax.title = 'Maximized'
+    stub.append(stubDot, stubLabel, stubMax)
+    panesEl.appendChild(stub)
+
     const term = new Terminal({
       fontFamily: 'Menlo, Monaco, "SF Mono", "Courier New", monospace',
       fontSize: 12.5,
@@ -379,7 +499,13 @@ export function createTerminals({ getRoot }) {
 
     const s = {
       id, term, fit, cell, tabEl, tabDot, tabLabel, cellLabel, cellDot, color,
+      stub, stubDot, stubLabel,
       status: 'running', activity: false, attention: false, custom: false,
+      state: 'working', // watchdog state: working|quiet|blocked|done|error|idle
+      lastOutputAt: now(), // timestamp of last PTY output — drives the silence timer
+      summaryText: null, // last Layer-B label (summary, or the pending question)
+      lastSummaryHash: null, // hash of the last tail summarised — skip no-op repeats
+      summarizing: false, // a Layer-B request is in flight for this pane
       used: false, // true once the user types or a command runs — then we won't auto-cd it
       isShell: !command, // plain shell vs an agent preset — gates command capture
       lineBuf: '', // keystroke accumulator for the last-command heuristic
@@ -400,7 +526,9 @@ export function createTerminals({ getRoot }) {
     })
     term.onResize(({ cols, rows }) => api.term.resize(id, cols, rows))
     term.onBell(() => {
+      // The bell is the strongest "wants you" signal a program can send.
       s.attention = true
+      s.state = 'blocked'
       updateIndicators(s)
     })
     // Auto-title: catch the OSC 0/2 title ANY program emits (a shell with a
@@ -454,6 +582,25 @@ export function createTerminals({ getRoot }) {
     return id
   }
 
+  // ---- session restore (Tier A: fresh shells, same layout) ----
+  // Snapshot the terminal set for persistence: tab labels, layout, active index.
+  // Live process state and scrollback are intentionally not captured.
+  function getState() {
+    const list = [...sessions.values()]
+    const tabs = list.map((s) => ({ label: s.tabLabel.textContent || s.baseName }))
+    const active = Math.max(0, list.findIndex((s) => s.id === activeId))
+    return { layout, active, tabs }
+  }
+
+  // Recreate terminals from a snapshot. Returns true if anything was restored.
+  function restore(state) {
+    if (!state || !Array.isArray(state.tabs) || state.tabs.length === 0) return false
+    for (const t of state.tabs) create({ label: t && t.label })
+    if (state.layout) setLayout(state.layout)
+    if (Number.isInteger(state.active)) activateIndex(state.active)
+    return true
+  }
+
   function destroy(id) {
     const s = sessions.get(id)
     if (!s) return
@@ -461,6 +608,7 @@ export function createTerminals({ getRoot }) {
     api.term.kill(id)
     s.term.dispose()
     s.cell.remove()
+    s.stub.remove()
     s.tabEl.remove()
     sessions.delete(id)
     applyLayout()
@@ -493,6 +641,10 @@ export function createTerminals({ getRoot }) {
     if (layout === 'stack') {
       applyStack()
       fitAll()
+      // The clicked tile just became the primary pane; focus on the next tick
+      // once the reflow/refit has settled so a single click lands the cursor
+      // (same as album flow's centerOn).
+      setTimeout(() => s.term.focus(), 0)
     }
     clearFlags(s)
     s.fit.fit()
@@ -520,6 +672,7 @@ export function createTerminals({ getRoot }) {
       s.custom = true
       s.tabLabel.textContent = v
       s.cellLabel.textContent = v
+      s.stubLabel.textContent = v
     }
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') commit()
@@ -538,12 +691,16 @@ export function createTerminals({ getRoot }) {
     // Guard against writing into a label that's mid-rename (detached node).
     if (s.tabLabel.isConnected) s.tabLabel.textContent = text
     if (s.cellLabel.isConnected) s.cellLabel.textContent = text
+    s.stubLabel.textContent = text
     s.tabEl.title = text // full untruncated string on hover
     s.cell.title = text
   }
   function applyTitle(s) {
     if (s.custom) return // a manual rename always wins
-    let t = s.oscTitle || s.heurTitle || s.baseName
+    // The Layer-B summary (what the pane just did / is asking) is the richest auto
+    // label — it wins over a program's OSC title (often static, e.g. "claude") and
+    // the keystroke heuristic. A manual rename still trumps everything.
+    let t = s.summaryText || s.oscTitle || s.heurTitle || s.baseName
     if (t.length > MAX_TITLE) t = t.slice(0, MAX_TITLE - 1) + '…'
     applyAutoLabels(s, t)
   }
@@ -621,15 +778,29 @@ export function createTerminals({ getRoot }) {
     const s = sessions.get(id)
     if (!s) return
     s.term.write(data)
-    if (id !== activeId && !s.attention) {
-      s.activity = true
-      updateIndicators(s)
+    // Output means the pane is alive and working — reset the silence timer and drop
+    // any stale watchdog verdict so the label tracks live activity again.
+    s.lastOutputAt = now()
+    let changed = false
+    if (s.state !== 'working') {
+      s.state = 'working'
+      s.attention = false
+      s.summaryText = null
+      applyTitle(s)
+      changed = true
     }
+    if (id !== activeId && !s.activity && !s.attention) {
+      s.activity = true
+      changed = true
+    }
+    if (changed) updateIndicators(s)
   })
-  api.term.onExit(({ id }) => {
+  api.term.onExit(({ id, exitCode }) => {
     const s = sessions.get(id)
     if (!s) return
     s.status = 'exited'
+    // A non-zero exit code is an error; 0 (or unknown) reads as a clean finish.
+    s.state = exitCode ? 'error' : 'done'
     updateIndicators(s)
     s.tabEl.classList.add('exited')
     // Clear any stale OSC title (programs may leave one set on exit); the resolver
@@ -638,6 +809,87 @@ export function createTerminals({ getRoot }) {
     s.oscTitle = null
     applyTitle(s)
   })
+
+  // ---- watchdog Layer B: model summary of quiet panes ----
+  // Read the last lines the pane shows (clean text straight from the xterm buffer,
+  // no ANSI), hashed so we never re-ask about an unchanged screen. The model call
+  // itself lives in main (the key never touches the renderer); we just send the tail.
+  function tailOf(s, maxLines = 40) {
+    const buf = s.term.buffer.active
+    const end = buf.baseY + buf.cursorY
+    const lines = []
+    for (let i = end; i >= 0 && lines.length < maxLines; i--) {
+      const line = buf.getLine(i)
+      if (line) lines.push(line.translateToString(true))
+    }
+    return lines.reverse().join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  }
+  function hashStr(str) {
+    let h = 0
+    for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0
+    return h
+  }
+  async function summarize(s) {
+    if (!watchdogEnabled || !api.watchdog?.summarize) return
+    if (s.summarizing) return // one request per pane at a time
+    const tail = tailOf(s)
+    if (!tail) return
+    const h = hashStr(tail)
+    if (h === s.lastSummaryHash) return // this exact screen already has a verdict
+    s.summarizing = true
+    let res = null
+    try {
+      res = await api.watchdog.summarize({
+        id: s.id,
+        tail,
+        baseName: s.baseName,
+        lastCommand: s.heurTitle || null,
+        branch: cachedBranch || null
+      })
+    } catch {
+      res = null
+    } finally {
+      s.summarizing = false
+    }
+    if (!res || !res.state) return // failed/empty: leave the hash unset so we retry
+    // Only apply if the pane is STILL the candidate we asked about. A stale verdict
+    // must not overwrite a pane that has since produced output (working), exited
+    // (done/error), or already settled (idle). quiet and blocked are the awaiting
+    // states a verdict may refine.
+    if (s.status === 'exited') return
+    if (s.state !== 'quiet' && s.state !== 'blocked') return
+    s.lastSummaryHash = h // commit only now that a verdict is actually applied
+    s.state = res.state
+    const label = res.question ? `⏳ ${res.question}` : res.summary
+    s.summaryText = label && label.trim() ? label.trim() : null
+    applyTitle(s)
+    updateIndicators(s)
+  }
+  // Layer A tick: flip working -> quiet after silence (kicking off a Layer-B
+  // summary); keep refining quiet/blocked candidates as their screen changes; and
+  // settle a long-silent quiet pane to idle. The hash + in-flight guards in
+  // summarize() mean re-calling it every tick only hits the model on a real change.
+  setInterval(() => {
+    const t = now()
+    for (const s of sessions.values()) {
+      if (s.status === 'exited') continue
+      const quietFor = t - s.lastOutputAt
+      if (quietFor < QUIET_MS) continue
+      if (s.state === 'working') {
+        s.state = 'quiet'
+        updateIndicators(s)
+        summarize(s)
+      } else if (s.state === 'quiet' || s.state === 'blocked') {
+        summarize(s) // let Layer B refine it (e.g. a completion bell that's really done)
+        if (s.state === 'quiet' && quietFor >= IDLE_MS) {
+          s.state = 'idle'
+          s.summaryText = null
+          applyTitle(s)
+          updateIndicators(s)
+        }
+      }
+    }
+  }, 2000)
 
   window.addEventListener('resize', fitAll)
 
@@ -672,5 +924,5 @@ export function createTerminals({ getRoot }) {
     }
   }
 
-  return { create, fitActive, fitAll, setLayout, setTheme, cdInto }
+  return { create, fitActive, fitAll, setLayout, setTheme, cdInto, stepActive, activateIndex, setLayout, cycleLayout, closeActive, getState, restore }
 }

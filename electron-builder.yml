@@ -1,0 +1,25 @@
+appId: com.concourse.ide
+productName: Concourse
+# Where the packaged app + installer land
+directories:
+  output: release
+  buildResources: build
+# electron-vite already compiled everything into out/ — ship that + the manifest
+files:
+  - out/**/*
+  - package.json
+# node-pty is a native module: it must live outside the asar archive so the
+# compiled .node binary can be dlopen'd at runtime.
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  # Local "stable" build for personal use — no Apple signing/notarization.
+  identity: null
+# Skip the implicit `npm rebuild` electron-builder runs; native deps were
+# already rebuilt for this Electron by the postinstall electron-rebuild step.
+npmRebuild: false

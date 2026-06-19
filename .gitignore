@@ -4,7 +4,11 @@ node_modules/
 # Build output
 out/
 dist/
+release/
 *.log
+
+# Internal notes
+_launch.md
 
 # OS / editor
 .DS_Store

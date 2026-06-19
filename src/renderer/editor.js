@@ -286,13 +286,29 @@ export function createEditor() {
     tab.tabEl.classList.toggle('dirty', dirty)
   }
 
+  // Reveal a 1-based line (optionally a column range) in the file editor.
+  function revealLine(line, column, endColumn) {
+    if (!line) return
+    const col = column || 1
+    fileEditor.revealLineInCenter(line)
+    fileEditor.setSelection({
+      startLineNumber: line,
+      startColumn: col,
+      endLineNumber: line,
+      endColumn: endColumn || col
+    })
+    fileEditor.focus()
+  }
+
   // ---------- Public: openFile ----------
-  async function openFile(path) {
+  // opts: { line, column, endColumn } — when given, scroll to and select that span.
+  async function openFile(path, opts = {}) {
     if (!path) return
     const key = fileKey(path)
     const existing = tabs.get(key)
     if (existing) {
       activate(key)
+      if (opts.line) revealLine(opts.line, opts.column, opts.endColumn)
       return
     }
 
@@ -330,6 +346,7 @@ export function createEditor() {
     tabs.set(key, tab)
     tabBar.appendChild(el)
     activate(key)
+    if (opts.line) revealLine(opts.line, opts.column, opts.endColumn)
   }
 
   // ---------- Public: openDiff ----------
@@ -413,6 +430,22 @@ export function createEditor() {
     monaco.editor.setTheme(name)
   }
 
+  // Snapshot of open *file* tabs for session restore (diffs are transient and skipped).
+  // Returns { files: [{ path, line, active }] } in tab order.
+  function listOpenFiles() {
+    const files = []
+    for (const [key, tab] of tabs) {
+      if (tab.kind !== 'file') continue
+      const active = key === activeKey
+      // Cursor line: live from the editor for the active tab, else from saved view state.
+      let line = 1
+      if (active) line = fileEditor.getPosition()?.lineNumber || 1
+      else line = tab.viewState?.cursorState?.[0]?.position?.lineNumber || 1
+      files.push({ path: tab.path, line, active })
+    }
+    return { files }
+  }
+
   // Cmd/Ctrl+S saves the active file tab.
   window.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
@@ -423,5 +456,5 @@ export function createEditor() {
 
   syncWelcome()
 
-  return { openFile, openDiff, save, onSave, onTabsChange, setTheme }
+  return { openFile, openDiff, save, onSave, onTabsChange, setTheme, listOpenFiles }
 }

@@ -30,6 +30,7 @@
       <div id="body">
         <nav id="activity-bar">
           <button class="activity-btn active" data-view="explorer" data-icon="files" data-size="24" title="Explorer"></button>
+          <button class="activity-btn" data-view="search" data-icon="search" data-size="24" title="Search"></button>
           <button class="activity-btn" data-view="scm" data-icon="gitBranch" data-size="24" title="Source Control"></button>
         </nav>
 
@@ -49,6 +50,27 @@
             <div id="file-tree" class="panel-body"></div>
           </section>
 
+          <section id="search-panel" class="view-panel" hidden>
+            <div class="pane-header">
+              <span class="pane-title">SEARCH</span>
+              <div class="pane-actions">
+                <button id="search-clear" class="icon-btn" data-icon="close" title="Clear Search"></button>
+              </div>
+            </div>
+            <div class="search-controls">
+              <div class="search-field">
+                <textarea id="search-input" class="search-input" rows="1" placeholder="Search" spellcheck="false"></textarea>
+                <div class="search-toggles">
+                  <button id="search-case" class="search-toggle" title="Match Case">Aa</button>
+                  <button id="search-word" class="search-toggle" title="Match Whole Word"><u>ab</u></button>
+                  <button id="search-regex" class="search-toggle" title="Use Regular Expression">.*</button>
+                </div>
+              </div>
+            </div>
+            <div id="search-summary" class="search-summary" hidden></div>
+            <div id="search-body" class="panel-body"></div>
+          </section>
+
           <section id="scm-panel" class="view-panel" hidden>
             <div class="pane-header">
               <span class="pane-title">SOURCE CONTROL</span>
@@ -64,8 +86,21 @@
         <div id="drag-x" class="dragbar-v"></div>
 
         <main id="main">
+          <section id="terminal-region">
+            <div class="panel-tabbar">
+              <div class="panel-label">TERMINAL</div>
+              <div id="term-tabs" class="term-tabs"></div>
+              <div class="panel-controls"></div>
+            </div>
+            <div id="term-panes"></div>
+          </section>
+
+          <div id="drag-y" class="dragbar-h"></div>
+
           <section id="editor-region">
-            <div id="editor-tabs" class="tab-bar"></div>
+            <div id="editor-tabs" class="tab-bar">
+              <button id="editor-minimize" class="icon-btn editor-minimize" data-icon="chevronDown" title="Minimize (hide the editor, keep tabs)"></button>
+            </div>
             <div id="editor-stack">
               <div id="editor"></div>
               <div id="editor-welcome">
@@ -78,18 +113,31 @@
               </div>
             </div>
           </section>
-
-          <div id="drag-y" class="dragbar-h"></div>
-
-          <section id="terminal-region">
-            <div class="panel-tabbar">
-              <div class="panel-label">TERMINAL</div>
-              <div id="term-tabs" class="term-tabs"></div>
-              <div class="panel-controls"></div>
-            </div>
-            <div id="term-panes"></div>
-          </section>
         </main>
+
+        <!-- Launch / start screen: shown over the workbench when no folder is open -->
+        <div id="welcome-overlay" hidden>
+          <div class="welcome-card">
+            <div class="welcome-brand">
+              <span class="welcome-logo" data-icon="box" data-size="44"></span>
+              <div class="welcome-heading">Concourse</div>
+              <div class="welcome-tagline">Drive many CLI coding agents from one workbench.</div>
+            </div>
+
+            <div class="welcome-section">
+              <div class="welcome-section-title">Start</div>
+              <button id="welcome-open" class="welcome-action">
+                <span class="welcome-action-icon" data-icon="folderOpen" data-size="16"></span>
+                <span>Open Folder…</span>
+              </button>
+            </div>
+
+            <div class="welcome-section">
+              <div class="welcome-section-title">Recent</div>
+              <div id="welcome-recents" class="welcome-recents"></div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Full-width bottom status bar -->

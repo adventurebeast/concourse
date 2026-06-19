@@ -4,7 +4,10 @@ import { createContext } from './context.js'
 import { registerWorkspace } from './ipc-workspace.js'
 import { registerFs } from './ipc-fs.js'
 import { registerGit } from './ipc-git.js'
+import { registerSearch } from './ipc-search.js'
+import { registerSession } from './ipc-session.js'
 import { registerPty } from './ipc-pty.js'
+import { registerWatchdog } from './ipc-watchdog.js'
 
 const ctx = createContext()
 let disposePty = null
@@ -37,6 +40,15 @@ function createWindow() {
       console.log('[render-process-gone]', JSON.stringify(d))
     )
   }
+  // Swallow the browser-style reload shortcuts. This is an app, not a web page —
+  // Cmd/Ctrl+R would blow away every terminal and the editor state. The renderer
+  // owns all other hotkeys; reload has to die here because menu accelerators fire
+  // before the renderer ever sees the keystroke.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    const mod = input.meta || input.control
+    if (mod && input.key && input.key.toLowerCase() === 'r') event.preventDefault()
+  })
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
@@ -57,7 +69,10 @@ app.whenReady().then(() => {
   registerWorkspace(ctx)
   registerFs(ctx)
   registerGit(ctx)
+  registerSearch(ctx)
+  registerSession()
   disposePty = registerPty(ctx)
+  registerWatchdog()
 
   createWindow()
   app.on('activate', () => {

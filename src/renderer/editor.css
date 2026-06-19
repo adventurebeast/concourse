@@ -25,6 +25,18 @@
   align-items: stretch;
 }
 
+/* Minimize button pinned to the far left of the editor tab bar: drops the
+   editor out of view so the terminals fill the workbench. Stays put while the
+   tabs scroll past it. */
+.editor-minimize {
+  flex-shrink: 0;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  align-self: center;
+  margin: 0 4px;
+}
+
 .etab {
   display: flex;
   align-items: center;
@@ -52,7 +64,7 @@
 .etab.active {
   color: var(--text);
   background: var(--tab-active);
-  border-top-color: var(--accent);
+  border-top-color: var(--text-faint);
 }
 
 /* Diff/⇄ marker sits before the label. */
