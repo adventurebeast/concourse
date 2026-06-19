@@ -11,55 +11,56 @@
   </head>
   <body>
     <div id="app">
-      <!-- Far-left thin activity bar (view switcher) -->
-      <nav id="activity-bar">
-        <button class="activity-btn active" data-view="explorer" title="Explorer">
-          <svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor">
-            <path d="M14 4v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h4l1.5 1.5H13a1 1 0 0 1 1 .5z" opacity=".25"/>
-            <path d="M14.5 3H8.7L7.4 1.7 7 1.5H2.5l-.5.5v11l.5.5h12l.5-.5V3.5l-.5-.5zM14 13H3V3h3.8l1.3 1.3.4.2H14v8.5z"/>
-          </svg>
-        </button>
-        <button class="activity-btn" data-view="scm" title="Source Control">
-          <svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor">
-            <path d="M12.5 3a2 2 0 0 0-.7 3.9A2.5 2.5 0 0 1 9.4 9H6.6a3.4 3.4 0 0 0-1.1.2V5.9a2 2 0 1 0-1 0v4.2a2 2 0 1 0 1 .1V10c0-.9.7-1.6 1.6-1.6h2.8a3.5 3.5 0 0 0 3.4-2.6A2 2 0 0 0 12.5 3zM4 3a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm0 10a1 1 0 1 1 0-2 1 1 0 0 1 0 2zm8.5-7a1 1 0 1 1 0-2 1 1 0 0 1 0 2z"/>
-          </svg>
-        </button>
-      </nav>
+      <!-- Full-width top title bar -->
+      <header id="titlebar">
+        <div class="titlebar-left">
+          <span class="titlebar-logo" data-icon="box" data-size="16"></span>
+        </div>
+        <div class="titlebar-center" id="titlebar-title">Concourse</div>
+        <div class="titlebar-right">
+          <button id="toggle-sidebar" class="title-btn active" data-icon="panelLeft" title="Toggle Sidebar"></button>
+          <button id="toggle-panel" class="title-btn active" data-icon="panelBottom" title="Toggle Terminal Panel"></button>
+          <button id="toggle-terminals" class="title-btn" data-icon="terminal" title="Terminals Only (hide editor)"></button>
+          <button id="toggle-theme" class="title-btn" data-icon="moon" title="Toggle Light / Dark Theme"></button>
+        </div>
+      </header>
 
-      <!-- Primary sidebar: hosts whichever view is active -->
-      <aside id="sidebar">
-        <!-- Explorer view -->
-        <section id="explorer-panel" class="view-panel">
-          <div class="pane-header">
-            <span id="workspace-name" class="pane-title">EXPLORER</span>
-            <div class="pane-actions">
-              <button id="ft-new-file" class="icon-btn" title="New File">⊕</button>
-              <button id="ft-new-folder" class="icon-btn" title="New Folder">⊞</button>
-              <button id="ft-refresh" class="icon-btn" title="Refresh">⟳</button>
-              <button id="ft-collapse" class="icon-btn" title="Collapse All">⊟</button>
-              <button id="open-folder" class="icon-btn" title="Open Folder…">📂</button>
+      <!-- Body row: activity bar + sidebar + main -->
+      <div id="body">
+        <nav id="activity-bar">
+          <button class="activity-btn active" data-view="explorer" data-icon="files" data-size="24" title="Explorer"></button>
+          <button class="activity-btn" data-view="scm" data-icon="gitBranch" data-size="24" title="Source Control"></button>
+        </nav>
+
+        <aside id="sidebar">
+          <section id="explorer-panel" class="view-panel">
+            <div class="pane-header">
+              <span id="workspace-name" class="pane-title">EXPLORER</span>
+              <div class="pane-actions">
+                <button id="ft-new-file" class="icon-btn" data-icon="filePlus" title="New File"></button>
+                <button id="ft-new-folder" class="icon-btn" data-icon="folderPlus" title="New Folder"></button>
+                <button id="ft-refresh" class="icon-btn" data-icon="refresh" title="Refresh"></button>
+                <button id="ft-collapse" class="icon-btn" data-icon="collapse" title="Collapse All"></button>
+                <button id="open-folder" class="icon-btn" data-icon="folderOpen" title="Open Folder…"></button>
+              </div>
             </div>
-          </div>
-          <div id="file-tree" class="panel-body"></div>
-        </section>
+            <div id="file-tree" class="panel-body"></div>
+          </section>
 
-        <!-- Source Control view -->
-        <section id="scm-panel" class="view-panel" hidden>
-          <div class="pane-header">
-            <span class="pane-title">SOURCE CONTROL</span>
-            <div class="pane-actions">
-              <button id="scm-commit" class="icon-btn" title="Commit">✓</button>
-              <button id="scm-refresh" class="icon-btn" title="Refresh">⟳</button>
+          <section id="scm-panel" class="view-panel" hidden>
+            <div class="pane-header">
+              <span class="pane-title">SOURCE CONTROL</span>
+              <div class="pane-actions">
+                <button id="scm-commit" class="icon-btn" data-icon="check" title="Commit"></button>
+                <button id="scm-refresh" class="icon-btn" data-icon="refresh" title="Refresh"></button>
+              </div>
             </div>
-          </div>
-          <div id="scm-body" class="panel-body"></div>
-        </section>
-      </aside>
+            <div id="scm-body" class="panel-body"></div>
+          </section>
+        </aside>
 
-      <div id="drag-x" class="dragbar-v"></div>
+        <div id="drag-x" class="dragbar-v"></div>
 
-      <!-- Right side: editor on top, terminal panel below, status bar at bottom -->
-      <div id="workbench">
         <main id="main">
           <section id="editor-region">
             <div id="editor-tabs" class="tab-bar"></div>
@@ -83,22 +84,24 @@
               <div class="panel-label">TERMINAL</div>
               <div id="term-tabs" class="term-tabs"></div>
               <div class="panel-controls">
-                <button id="new-term" class="icon-btn" title="New Terminal">＋</button>
+                <button id="new-term" class="icon-btn" data-icon="plus" title="New Terminal"></button>
               </div>
             </div>
             <div id="term-panes"></div>
           </section>
         </main>
-
-        <footer id="status-bar">
-          <div class="status-left">
-            <span id="status-branch" class="status-item" title="Git branch"></span>
-          </div>
-          <div class="status-right">
-            <span id="status-info" class="status-item">Concourse</span>
-          </div>
-        </footer>
       </div>
+
+      <!-- Full-width bottom status bar -->
+      <footer id="status-bar">
+        <div class="status-left">
+          <span id="status-branch" class="status-item" title="Git branch"></span>
+          <span id="status-workspace" class="status-item"></span>
+        </div>
+        <div class="status-right">
+          <span id="status-info" class="status-item">Concourse</span>
+        </div>
+      </footer>
     </div>
     <script type="module" src="./main.js"></script>
   </body>

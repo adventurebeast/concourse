@@ -94,7 +94,7 @@ export function createEditor() {
   editorRoot.appendChild(diffHost)
 
   const editorOptions = {
-    theme: 'vs-dark',
+    theme: 'vs',
     automaticLayout: true,
     fontSize: 13,
     minimap: { enabled: true },
@@ -395,6 +395,11 @@ export function createEditor() {
     if (typeof cb === 'function') saveListeners.push(cb)
   }
 
+  // Switch Monaco theme ('vs' light / 'vs-dark' dark) — global to all editors.
+  function setTheme(name) {
+    monaco.editor.setTheme(name)
+  }
+
   // Cmd/Ctrl+S saves the active file tab.
   window.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
@@ -405,5 +410,5 @@ export function createEditor() {
 
   syncWelcome()
 
-  return { openFile, openDiff, save, onSave }
+  return { openFile, openDiff, save, onSave, setTheme }
 }

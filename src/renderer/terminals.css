@@ -119,8 +119,9 @@
 .cell-body {
   flex: 1;
   min-height: 0;
-  padding: 4px 2px 4px 10px;
+  padding: 6px 10px;
   overflow: hidden;
+  background: var(--bg-editor);
 }
 .cell-body .xterm {
   height: 100%;
@@ -148,4 +149,59 @@
 .term-menu-item:hover {
   background: var(--accent);
   color: #fff;
+}
+.term-menu-item.danger:hover {
+  background: var(--red);
+  color: #fff;
+}
+
+/* ---------- Close confirmation ---------- */
+.term-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.term-confirm {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55);
+  padding: 20px;
+  width: 360px;
+  max-width: 80vw;
+}
+.tc-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.tc-msg {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.tc-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+.tc-cancel {
+  background: var(--bg-input);
+  color: var(--text);
+}
+.tc-cancel:hover {
+  background: var(--border-strong);
+}
+.tc-danger {
+  background: var(--red);
+  color: #fff;
+}
+.tc-danger:hover {
+  filter: brightness(1.1);
 }

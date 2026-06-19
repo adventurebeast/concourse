@@ -34,6 +34,8 @@ export function registerGit(ctx) {
   // ---- status ---------------------------------------------------------------
   ipcMain.handle('git:status', async () => {
     try {
+      // No folder open — don't fall back to the process cwd.
+      if (!ctx.getRoot()) return { isRepo: false, noFolder: true }
       const git = simpleGit(ctx.getRoot())
       const isRepo = await git.checkIsRepo().catch(() => false)
       if (!isRepo) return { isRepo: false }

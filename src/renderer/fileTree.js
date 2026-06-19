@@ -2,125 +2,88 @@ import './fileTree.css'
 
 const api = window.api
 
-// ---------- Icons ----------
-// Folder icons (open / closed). VS Code uses a soft slate-blue folder glyph.
-const FOLDER_COLOR = '#c09553'
-
-function svg(viewBox, body, color) {
-  return `<svg class="ft-svg" viewBox="${viewBox}" width="16" height="16" fill="${color}" aria-hidden="true">${body}</svg>`
+// ---------- Icons (Lucide-style mono outline, matching the app chrome) ----------
+function svg(body, color, size = 16) {
+  return `<svg class="ft-svg" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`
 }
+
+const FOLDER_COLOR = '#5a8bbd'
 
 function folderIcon(open) {
   if (open) {
     return svg(
-      '0 0 16 16',
-      '<path d="M1.5 13.5 3 7.5h12l-1.5 6a.5.5 0 0 1-.49.4H2A.5.5 0 0 1 1.5 13.5z"/><path d="M1.5 6V3.5a.5.5 0 0 1 .5-.5h4l1.5 1.5H14a.5.5 0 0 1 .5.5V7H3.4a.5.5 0 0 0-.48.36L1.5 12z" opacity=".55"/>',
+      '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
       FOLDER_COLOR
     )
   }
   return svg(
-    '0 0 16 16',
-    '<path d="M2 3.5a.5.5 0 0 1 .5-.5h4l1.5 1.5h5.5a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5z"/>',
+    '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
     FOLDER_COLOR
   )
 }
 
-// A generic file (sheet with folded corner).
+// File glyphs by category — distinguished by shape, with muted tints that read
+// on both light and dark backgrounds.
+const GLYPHS = {
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  code: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m10 13-2 2 2 2"/><path d="m14 13 2 2-2 2"/>',
+  data: '<path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1"/><path d="M16 21h1a2 2 0 0 0 2-2v-5a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/>',
+  doc: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  archive: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'
+}
+
+// A generic file glyph in an arbitrary color (used by the inline-create row).
 function fileGlyph(color) {
-  return svg(
-    '0 0 16 16',
-    '<path d="M4 1.5h5L13 5.5V14a.5.5 0 0 1-.5.5h-8A.5.5 0 0 1 4 14z"/><path d="M9 1.5 13 5.5H9.5A.5.5 0 0 1 9 5z" opacity=".5"/>',
-    color
-  )
+  return svg(GLYPHS.file, color)
 }
 
-// Map an extension/name to a tasteful color so file types are visually distinct
-// even with a shared glyph (clean + consistent, like a minimal icon theme).
-const EXT_COLORS = {
-  js: '#e8d44d',
-  mjs: '#e8d44d',
-  cjs: '#e8d44d',
-  jsx: '#e8d44d',
-  ts: '#3aa6f0',
-  tsx: '#3aa6f0',
-  json: '#cbcb41',
-  md: '#519aba',
-  markdown: '#519aba',
-  css: '#42a5f5',
-  scss: '#cf649a',
-  sass: '#cf649a',
-  less: '#2a5e8c',
-  html: '#e37933',
-  htm: '#e37933',
-  vue: '#41b883',
-  svelte: '#ff3e00',
-  py: '#4b8bbe',
-  rb: '#cc342d',
-  go: '#00add8',
-  rs: '#dea584',
-  java: '#cc4f37',
-  c: '#599eff',
-  h: '#a074c4',
-  cpp: '#599eff',
-  cc: '#599eff',
-  cs: '#68217a',
-  php: '#7377ad',
-  sh: '#89e051',
-  bash: '#89e051',
-  zsh: '#89e051',
-  yml: '#cb4b16',
-  yaml: '#cb4b16',
-  toml: '#9c7a4d',
-  xml: '#e37933',
-  sql: '#dad8d8',
-  lock: '#787878',
-  env: '#dcca4a',
-  txt: '#9d9d9d',
-  log: '#9d9d9d',
-  svg: '#ffb13b',
-  png: '#a074c4',
-  jpg: '#a074c4',
-  jpeg: '#a074c4',
-  gif: '#a074c4',
-  webp: '#a074c4',
-  ico: '#a074c4',
-  pdf: '#e2574c',
-  zip: '#afafaf',
-  gz: '#afafaf',
-  tar: '#afafaf'
+// Muted category tints (work on light + dark).
+const CAT_COLOR = {
+  file: 'currentColor',
+  code: '#4a90d9',
+  data: '#c0892f',
+  doc: '#5a9aa8',
+  image: '#9b72c6',
+  archive: '#9a9a9a'
 }
 
-// Specific full-name overrides (configs, manifests).
-const NAME_ICONS = {
-  'package.json': '#8bc34a',
-  'package-lock.json': '#787878',
-  'tsconfig.json': '#3aa6f0',
-  'jsconfig.json': '#e8d44d',
-  '.gitignore': '#e8623f',
-  '.gitattributes': '#e8623f',
-  '.npmrc': '#cb3837',
-  '.editorconfig': '#dad8d8',
-  'dockerfile': '#0db7ed',
-  'license': '#d4b54a',
-  'license.md': '#d4b54a',
-  'readme.md': '#519aba',
-  '.env': '#dcca4a'
+// Extension -> category.
+const EXT_CAT = {
+  js: 'code', mjs: 'code', cjs: 'code', jsx: 'code', ts: 'code', tsx: 'code',
+  py: 'code', rb: 'code', go: 'code', rs: 'code', java: 'code', c: 'code',
+  h: 'code', cpp: 'code', cc: 'code', cs: 'code', php: 'code', sh: 'code',
+  bash: 'code', zsh: 'code', css: 'code', scss: 'code', sass: 'code',
+  less: 'code', html: 'code', htm: 'code', vue: 'code', svelte: 'code',
+  xml: 'code', sql: 'code',
+  json: 'data', yml: 'data', yaml: 'data', toml: 'data', env: 'data',
+  lock: 'data', ini: 'data', conf: 'data',
+  md: 'doc', markdown: 'doc', txt: 'doc', log: 'doc', pdf: 'doc', rst: 'doc',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image',
+  ico: 'image', svg: 'image', bmp: 'image',
+  zip: 'archive', gz: 'archive', tar: 'archive', tgz: 'archive', rar: 'archive', '7z': 'archive'
+}
+
+// Specific full-name overrides (manifests, dotfiles).
+const NAME_CAT = {
+  'package.json': 'data', 'package-lock.json': 'data', 'tsconfig.json': 'data',
+  'jsconfig.json': 'data', '.gitignore': 'data', '.gitattributes': 'data',
+  '.npmrc': 'data', '.editorconfig': 'data', '.env': 'data',
+  dockerfile: 'code', 'readme.md': 'doc', license: 'doc', 'license.md': 'doc'
 }
 
 function fileIcon(name) {
   const lower = name.toLowerCase()
-  if (NAME_ICONS[lower]) return fileGlyph(NAME_ICONS[lower])
-  const dot = lower.lastIndexOf('.')
-  const ext = dot >= 0 ? lower.slice(dot + 1) : ''
-  const color = EXT_COLORS[ext] || '#9d9d9d'
-  return fileGlyph(color)
+  let cat = NAME_CAT[lower]
+  if (!cat) {
+    const dot = lower.lastIndexOf('.')
+    const ext = dot >= 0 ? lower.slice(dot + 1) : ''
+    cat = EXT_CAT[ext] || 'file'
+  }
+  return svg(GLYPHS[cat], CAT_COLOR[cat])
 }
 
-const chevron = svg(
-  '0 0 16 16',
-  '<path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>',
-  'currentColor'
-)
+const chevron = svg('<path d="m9 18 6-6-6-6"/>', 'currentColor', 16)
 
 function basename(p) {
   if (!p) return ''
@@ -265,6 +228,24 @@ export function createFileTree({ onOpenFile }) {
     childrenCache.clear()
     selected = null
     const nameEl = document.getElementById('workspace-name')
+
+    // No folder open — show a call-to-action instead of a tree.
+    if (!root) {
+      if (nameEl) nameEl.textContent = 'EXPLORER'
+      container.innerHTML = ''
+      const hint = document.createElement('div')
+      hint.className = 'empty-hint'
+      hint.innerHTML = '<p>You have not opened a folder.</p>'
+      const btn = document.createElement('button')
+      btn.className = 'btn'
+      btn.textContent = 'Open Folder'
+      btn.style.marginTop = '10px'
+      btn.addEventListener('click', () => document.getElementById('open-folder').click())
+      hint.appendChild(btn)
+      container.appendChild(hint)
+      return
+    }
+
     if (nameEl) nameEl.textContent = (basename(root) || 'EXPLORER').toUpperCase()
     await loadChildren(root)
     render()

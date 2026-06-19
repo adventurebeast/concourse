@@ -1,8 +1,6 @@
-import os from 'os'
-
 // Shared, mutable app state passed to every IPC-registering module.
 export function createContext() {
-  let workspaceRoot = os.homedir()
+  let workspaceRoot = null // no folder open until the user picks one
   let mainWindow = null
   return {
     getRoot: () => workspaceRoot,

@@ -3,8 +3,44 @@ import { createEditor } from './editor.js'
 import { createFileTree } from './fileTree.js'
 import { createGit } from './git.js'
 import { createTerminals } from './terminals.js'
+import { icon } from './icons.js'
 
 const api = window.api
+
+// ---------- Icons: fill every [data-icon] button from the shared set ----------
+function renderIcons(scope = document) {
+  scope.querySelectorAll('[data-icon]').forEach((el) => {
+    el.innerHTML = icon(el.dataset.icon, +(el.dataset.size || 16))
+  })
+}
+renderIcons()
+
+// ---------- Custom tooltips (works for static + dynamically-added [title]) ----------
+const tipEl = document.createElement('div')
+tipEl.className = 'tooltip'
+document.body.appendChild(tipEl)
+document.addEventListener('mouseover', (e) => {
+  const el = e.target.closest('[title], [data-tip]')
+  if (!el) return
+  const text = el.dataset.tip || el.getAttribute('title')
+  if (!text) return
+  if (el.hasAttribute('title')) {
+    el.dataset.tip = text // migrate so the native tooltip never shows
+    el.removeAttribute('title')
+  }
+  tipEl.textContent = text
+  tipEl.classList.add('show')
+  const r = el.getBoundingClientRect()
+  let left = r.left + r.width / 2 - tipEl.offsetWidth / 2
+  left = Math.max(6, Math.min(left, window.innerWidth - tipEl.offsetWidth - 6))
+  let top = r.bottom + 6
+  if (top + tipEl.offsetHeight > window.innerHeight - 6) top = r.top - tipEl.offsetHeight - 6
+  tipEl.style.left = left + 'px'
+  tipEl.style.top = top + 'px'
+})
+document.addEventListener('mouseout', (e) => {
+  if (e.target.closest('[title], [data-tip]')) tipEl.classList.remove('show')
+})
 
 // Authoritative current workspace root in the renderer (mirrors the main process).
 let currentRoot = null
@@ -42,10 +78,63 @@ document.querySelectorAll('.activity-btn').forEach((btn) => {
   })
 })
 
+// ---------- Title bar ----------
+const basename = (p) => (p ? p.split('/').filter(Boolean).pop() || p : 'Concourse')
+function setTitle(root) {
+  document.getElementById('titlebar-title').textContent = root ? basename(root) : 'Concourse'
+  document.getElementById('status-workspace').textContent = root ? basename(root) : ''
+}
+
+// Toggle sidebar (explorer/scm + its resizer) and the bottom terminal panel.
+document.getElementById('toggle-sidebar').addEventListener('click', (e) => {
+  const hidden = document.getElementById('sidebar').classList.toggle('hidden')
+  document.getElementById('drag-x').classList.toggle('hidden', hidden)
+  e.currentTarget.classList.toggle('active', !hidden)
+})
+document.getElementById('toggle-panel').addEventListener('click', (e) => {
+  const hidden = document.getElementById('terminal-region').classList.toggle('hidden')
+  document.getElementById('drag-y').classList.toggle('hidden', hidden)
+  e.currentTarget.classList.toggle('active', !hidden)
+  if (!hidden) terminals.fitActive()
+})
+
+// Terminals-only: hide the editor entirely so terminals fill the workbench.
+document.getElementById('toggle-terminals').addEventListener('click', (e) => {
+  const on = document.getElementById('main').classList.toggle('terminals-only')
+  e.currentTarget.classList.toggle('active', on)
+  if (on) {
+    // make sure the terminal panel is actually visible
+    document.getElementById('terminal-region').classList.remove('hidden')
+    document.getElementById('toggle-panel').classList.add('active')
+  }
+  terminals.fitActive()
+})
+
+// ---------- Theme (light default, dark optional, persisted) ----------
+const THEME_KEY = 'concourse-theme'
+let theme = localStorage.getItem(THEME_KEY) || 'light'
+function applyTheme(mode) {
+  theme = mode === 'dark' ? 'dark' : 'light'
+  document.documentElement.dataset.theme = theme
+  editor.setTheme(theme === 'dark' ? 'vs-dark' : 'vs')
+  terminals.setTheme(theme)
+  const btn = document.getElementById('toggle-theme')
+  btn.innerHTML = icon(theme === 'dark' ? 'sun' : 'moon')
+  const tip = theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'
+  btn.setAttribute('title', tip)
+  btn.dataset.tip = tip
+  localStorage.setItem(THEME_KEY, theme)
+}
+document.getElementById('toggle-theme').addEventListener('click', () => {
+  applyTheme(theme === 'dark' ? 'light' : 'dark')
+})
+applyTheme(theme)
+
 // ---------- Open folder ----------
 async function setWorkspace(root) {
   if (!root) return
   currentRoot = root
+  setTitle(root)
   await fileTree.load(root)
   git.refresh()
 }
@@ -92,6 +181,7 @@ dragH(document.getElementById('drag-y'), document.getElementById('terminal-regio
 // ---------- Boot ----------
 ;(async () => {
   currentRoot = await api.workspace.get()
+  setTitle(currentRoot)
   await fileTree.load(currentRoot)
   git.refresh()
   terminals.create()

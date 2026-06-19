@@ -13,7 +13,7 @@ export function registerPty(ctx) {
       name: 'xterm-color',
       cols: 80,
       rows: 24,
-      cwd: cwd || ctx.getRoot(),
+      cwd: cwd || ctx.getRoot() || os.homedir(),
       env: process.env
     })
 

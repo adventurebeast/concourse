@@ -2,8 +2,15 @@ import '@xterm/xterm/css/xterm.css'
 import './terminals.css'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { icon } from './icons.js'
 
 const api = window.api
+
+// xterm color themes, switched together with the app light/dark theme.
+const TERM_THEMES = {
+  light: { background: '#ffffff', foreground: '#383838', cursor: '#383838', selectionBackground: '#cfe3ff' },
+  dark: { background: '#181818', foreground: '#cccccc', cursor: '#cccccc', selectionBackground: '#264f78' }
+}
 
 // Spawn presets — the whole point of Concourse: launch many CLI agents fast.
 const PRESETS = [
@@ -24,19 +31,20 @@ export function createTerminals({ getRoot }) {
   let activeId = null
   let counter = 0
   let layout = 'tabs' // 'tabs' | 'grid'
+  let themeName = 'light'
   panesEl.classList.add('tabs')
 
   // ---- inject extra panel controls (layout toggle + preset caret) ----
   const layoutBtn = document.createElement('button')
   layoutBtn.className = 'icon-btn'
   layoutBtn.title = 'Toggle grid / tabs layout'
-  layoutBtn.textContent = '▦'
+  layoutBtn.innerHTML = icon('grid')
   controls.insertBefore(layoutBtn, newBtn)
 
   const caretBtn = document.createElement('button')
   caretBtn.className = 'icon-btn'
   caretBtn.title = 'New terminal / agent…'
-  caretBtn.textContent = '▾'
+  caretBtn.innerHTML = icon('chevronDown')
   controls.appendChild(caretBtn)
 
   layoutBtn.addEventListener('click', () => setLayout(layout === 'tabs' ? 'grid' : 'tabs'))
@@ -73,21 +81,107 @@ export function createTerminals({ getRoot }) {
     if (m) m.remove()
   }
 
+  // ---- per-terminal right-click menu (rename / close) ----
+  function openTabMenu(x, y, s) {
+    const existing = document.getElementById('term-tab-menu')
+    if (existing) existing.remove()
+    const menu = document.createElement('div')
+    menu.className = 'term-menu'
+    menu.id = 'term-tab-menu'
+
+    const rename = document.createElement('div')
+    rename.className = 'term-menu-item'
+    rename.textContent = 'Rename…'
+    rename.addEventListener('click', () => {
+      menu.remove()
+      activate(s.id)
+      renameStart(s, s.tabLabel)
+    })
+
+    const close = document.createElement('div')
+    close.className = 'term-menu-item danger'
+    close.textContent = 'Close Terminal'
+    close.addEventListener('click', () => {
+      menu.remove()
+      confirmClose(s)
+    })
+
+    menu.append(rename, close)
+    document.body.appendChild(menu)
+    // clamp to viewport
+    menu.style.left = Math.min(x, window.innerWidth - menu.offsetWidth - 8) + 'px'
+    menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 8) + 'px'
+    const dismiss = (e) => {
+      if (!menu.contains(e.target)) menu.remove()
+    }
+    setTimeout(() => document.addEventListener('mousedown', dismiss, { once: true }), 0)
+  }
+
+  // ---- confirmation before terminating a shell (no window.confirm) ----
+  function confirmClose(s) {
+    const overlay = document.createElement('div')
+    overlay.className = 'term-confirm-overlay'
+    const box = document.createElement('div')
+    box.className = 'term-confirm'
+    const name = s.tabLabel.textContent
+    box.innerHTML =
+      `<div class="tc-title">Close “${name}”?</div>` +
+      `<div class="tc-msg">The shell and any running agent will be terminated.</div>`
+    const actions = document.createElement('div')
+    actions.className = 'tc-actions'
+    const cancel = document.createElement('button')
+    cancel.className = 'btn tc-cancel'
+    cancel.textContent = 'Cancel'
+    const ok = document.createElement('button')
+    ok.className = 'btn tc-danger'
+    ok.textContent = 'Close Terminal'
+    actions.append(cancel, ok)
+    box.appendChild(actions)
+    overlay.appendChild(box)
+    document.body.appendChild(overlay)
+    cancel.focus()
+
+    const finish = () => {
+      overlay.remove()
+      document.removeEventListener('keydown', onKey)
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') finish()
+    }
+    document.addEventListener('keydown', onKey)
+    cancel.addEventListener('click', finish)
+    overlay.addEventListener('mousedown', (e) => {
+      if (e.target === overlay) finish()
+    })
+    ok.addEventListener('click', () => {
+      finish()
+      destroy(s.id)
+    })
+  }
+
   // ---- layout ----
   function setLayout(mode) {
     layout = mode
     panesEl.classList.toggle('grid', mode === 'grid')
     panesEl.classList.toggle('tabs', mode === 'tabs')
-    layoutBtn.textContent = mode === 'grid' ? '▭' : '▦'
+    layoutBtn.innerHTML = icon(mode === 'grid' ? 'square' : 'grid')
     applyGrid()
     fitAll()
     if (activeId) activate(activeId)
   }
   function applyGrid() {
+    // Reset any spans first (keeps tabs mode / relayout clean).
+    for (const s of sessions.values()) s.cell.style.gridColumn = ''
     if (layout !== 'grid') return
     const n = sessions.size
     const cols = Math.max(1, Math.ceil(Math.sqrt(n)))
     panesEl.style.setProperty('--cols', cols)
+    // If the last row isn't full, let the final cell fill the gap (no ghost cell).
+    const remainder = n % cols
+    if (remainder !== 0) {
+      const last = [...sessions.values()].pop()
+      if (last) last.cell.style.gridColumn = `span ${cols - remainder + 1}`
+    }
   }
 
   // ---- indicator dot ----
@@ -118,10 +212,8 @@ export function createTerminals({ getRoot }) {
     const tabLabel = document.createElement('span')
     tabLabel.className = 'term-tab-label'
     tabLabel.textContent = displayName
-    const tabClose = document.createElement('span')
-    tabClose.className = 'close'
-    tabClose.textContent = '✕'
-    tabEl.append(tabDot, tabLabel, tabClose)
+    // No close button on tabs — shells are meant to persist. Close via right-click.
+    tabEl.append(tabDot, tabLabel)
     tabBar.appendChild(tabEl)
 
     // Cell (holds the xterm; lives in both tabs and grid layout)
@@ -134,10 +226,8 @@ export function createTerminals({ getRoot }) {
     const cellLabel = document.createElement('span')
     cellLabel.className = 'cell-label'
     cellLabel.textContent = displayName
-    const cellClose = document.createElement('span')
-    cellClose.className = 'close'
-    cellClose.textContent = '✕'
-    cellHeader.append(cellDot, cellLabel, cellClose)
+    // No close button — persist shells. Close via right-click (with confirm).
+    cellHeader.append(cellDot, cellLabel)
     const cellBody = document.createElement('div')
     cellBody.className = 'cell-body'
     cell.append(cellHeader, cellBody)
@@ -146,7 +236,7 @@ export function createTerminals({ getRoot }) {
     const term = new Terminal({
       fontFamily: 'Menlo, Monaco, "SF Mono", "Courier New", monospace',
       fontSize: 12.5,
-      theme: { background: '#181818', foreground: '#cccccc', cursor: '#cccccc' },
+      theme: TERM_THEMES[themeName],
       cursorBlink: true,
       scrollback: 10000,
       allowProposedApi: true
@@ -172,17 +262,15 @@ export function createTerminals({ getRoot }) {
 
     // focus this cell when clicked
     cell.addEventListener('mousedown', () => activate(id))
-    tabEl.addEventListener('click', (e) => {
-      if (e.target === tabClose) return
-      activate(id)
+    tabEl.addEventListener('click', () => activate(id))
+    // Close is intentionally indirect: right-click menu + confirmation.
+    tabEl.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      openTabMenu(e.clientX, e.clientY, s)
     })
-    tabClose.addEventListener('click', (e) => {
-      e.stopPropagation()
-      destroy(id)
-    })
-    cellClose.addEventListener('click', (e) => {
-      e.stopPropagation()
-      destroy(id)
+    cellHeader.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      openTabMenu(e.clientX, e.clientY, s)
     })
     tabLabel.addEventListener('dblclick', () => renameStart(s, tabLabel))
     cellLabel.addEventListener('dblclick', () => renameStart(s, cellLabel))
@@ -290,5 +378,11 @@ export function createTerminals({ getRoot }) {
 
   window.addEventListener('resize', fitAll)
 
-  return { create, fitActive, fitAll, setLayout }
+  // Apply a light/dark theme to all existing terminals and future ones.
+  function setTheme(name) {
+    themeName = TERM_THEMES[name] ? name : 'light'
+    for (const s of sessions.values()) s.term.options.theme = TERM_THEMES[themeName]
+  }
+
+  return { create, fitActive, fitAll, setLayout, setTheme }
 }

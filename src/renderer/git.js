@@ -219,7 +219,25 @@ export function createGit({ onOpenDiff } = {}) {
   function render(status) {
     body.innerHTML = ''
 
-    if (!status || !status.isRepo) {
+    // No folder open — nothing to initialize; prompt to open one.
+    if (!status || status.noFolder) {
+      setBranch(null)
+      const hint = document.createElement('div')
+      hint.className = 'empty-hint'
+      const msg = document.createElement('div')
+      msg.textContent = 'Open a folder to use Source Control.'
+      const openBtn = document.createElement('button')
+      openBtn.className = 'btn'
+      openBtn.textContent = 'Open Folder'
+      openBtn.style.marginTop = '10px'
+      openBtn.addEventListener('click', () => document.getElementById('open-folder').click())
+      hint.appendChild(msg)
+      hint.appendChild(openBtn)
+      body.appendChild(hint)
+      return
+    }
+
+    if (!status.isRepo) {
       setBranch(null)
       const hint = document.createElement('div')
       hint.className = 'empty-hint'

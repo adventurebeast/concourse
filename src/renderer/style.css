@@ -1,4 +1,31 @@
+/* Light theme — default */
 :root {
+  --bg-editor: #ffffff;
+  --bg-sidebar: #f3f3f3;
+  --bg-activity: #f3f3f3;
+  --bg-panel: #f3f3f3;
+  --bg-elevated: #ffffff;
+  --bg-input: #ffffff;
+  --tab-active: #ffffff;
+  --tab-inactive: #ececec;
+  --border: #e5e5e5;
+  --border-strong: #cecece;
+  --text: #3b3b3b;
+  --text-dim: #5f5f5f;
+  --text-faint: #8c8c8c;
+  --accent: #005fb8;
+  --accent-hi: #0258a8;
+  --hover: #e8e8e8;
+  --select: #cfe3ff;
+  --select-hi: #e4e6f1;
+  --green: #2e8b3d;
+  --orange: #b5790a;
+  --red: #cd3131;
+  --modified: #b5790a;
+}
+
+/* Dark theme */
+:root[data-theme='dark'] {
   --bg-editor: #1e1e1e;
   --bg-sidebar: #181818;
   --bg-activity: #181818;
@@ -47,7 +74,108 @@ body {
 
 #app {
   display: flex;
+  flex-direction: column;
   height: 100%;
+}
+
+/* ---------- Title bar (full width, top) ---------- */
+#titlebar {
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  position: relative;
+  background: var(--bg-activity);
+  border-bottom: 1px solid var(--border);
+  padding-left: 80px; /* room for macOS traffic lights */
+  padding-right: 8px;
+  -webkit-app-region: drag;
+}
+.titlebar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+}
+.titlebar-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  color: var(--text);
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+}
+.title-btn {
+  width: 30px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.title-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.title-btn.active {
+  color: var(--accent);
+}
+
+/* ---------- Tooltips ---------- */
+.tooltip {
+  position: fixed;
+  z-index: 2000;
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.08s ease;
+}
+.tooltip.show {
+  opacity: 1;
+}
+
+/* ---------- Terminals-only mode (editor hidden) ---------- */
+#main.terminals-only #editor-region,
+#main.terminals-only #drag-y {
+  display: none;
+}
+#main.terminals-only #terminal-region {
+  height: auto !important;
+  flex: 1;
+}
+
+/* ---------- Body row (activity bar + sidebar + main) ---------- */
+#body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.hidden {
+  display: none !important;
 }
 
 /* ---------- Activity bar ---------- */
@@ -77,8 +205,8 @@ body {
   color: var(--text);
 }
 .activity-btn.active {
-  color: #fff;
-  border-left-color: #fff;
+  color: var(--text);
+  border-left-color: var(--accent);
 }
 
 /* ---------- Sidebar ---------- */
@@ -165,17 +293,12 @@ body {
   cursor: default;
 }
 
-/* ---------- Workbench (editor + terminal + status) ---------- */
-#workbench {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
+/* ---------- Main (editor + terminal) ---------- */
 #main {
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 
