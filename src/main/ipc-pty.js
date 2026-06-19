@@ -7,9 +7,12 @@ export function registerPty(ctx) {
   const terminals = new Map()
 
   ipcMain.on('term:create', (_e, { id, cwd }) => {
-    const shellPath =
-      os.platform() === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/bash'
-    const term = pty.spawn(shellPath, [], {
+    const isWin = os.platform() === 'win32'
+    const shellPath = isWin ? 'powershell.exe' : process.env.SHELL || '/bin/zsh'
+    // Login shell (-l) so it sources the user's profile (/etc/profile, ~/.bash_profile,
+    // ~/.zprofile…) — gives the normal prompt (PS1), aliases, and PATH like Terminal/Cursor.
+    const args = isWin ? [] : ['-l']
+    const term = pty.spawn(shellPath, args, {
       name: 'xterm-color',
       cols: 80,
       rows: 24,
