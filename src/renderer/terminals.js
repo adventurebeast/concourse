@@ -997,8 +997,16 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     if (paneRole(s) !== 'primary') return
     if (!s.body.isConnected || s.body.clientWidth === 0 || s.body.clientHeight === 0) return
     try {
+      // Was the view pinned to the latest output before we reflow? A resize reflows
+      // the buffer and can leave the viewport a row or two above the bottom — so the
+      // newest line (an agent's input box / prompt) renders just below the fold and you
+      // can't see it until a keypress scrolls down. Capture "at bottom" first, then
+      // re-pin after the fit so a refit never strands the bottom of the pane off-screen.
+      const buf = s.term.buffer.active
+      const wasAtBottom = buf.viewportY >= buf.baseY
       s.fit.fit()
       api.term.resize(s.id, s.term.cols, s.term.rows)
+      if (wasAtBottom) s.term.scrollToBottom()
     } catch {
       /* measured mid-layout; the observer/settle tick will catch the final size */
     }
