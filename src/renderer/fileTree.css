@@ -73,6 +73,24 @@
   white-space: nowrap;
 }
 
+/* ---------- Git status indicator ---------- */
+/* A letter for files (M/A/U/D/R) or a dot for folders that contain changes.
+   The label is tinted to the same color in decorateRow(). */
+.ft-status {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  min-width: 12px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.95;
+}
+.ft-status-dir {
+  font-size: 9px;
+  font-weight: 400;
+}
+
 /* ---------- Inline edit input ---------- */
 .ft-row.ft-inline {
   background: transparent;

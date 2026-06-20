@@ -199,8 +199,21 @@ body {
 }
 
 /* ---------- Terminals-only mode (editor hidden) ---------- */
-#main.terminals-only #editor-region,
+/* Minimized with documents open: collapse the editor down to just its tab strip
+   so the tabs stay visible and clickable at the bottom. Clicking a tab activates
+   it, which restores the editor via the onTabsChange wiring in main.js. */
+#main.terminals-only #editor-region {
+  height: auto;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+#main.terminals-only #editor-stack,
 #main.terminals-only #drag-y {
+  display: none;
+}
+/* No documents open at all: hide the editor region entirely (clean view, no
+   empty tab strip). */
+#main.terminals-only:not(:has(.etab)) #editor-region {
   display: none;
 }
 #main.terminals-only #terminal-region {
@@ -640,28 +653,114 @@ body {
 
 /* ---------- Status bar ---------- */
 #status-bar {
-  height: 22px;
+  height: 24px;
   flex-shrink: 0;
   background: var(--bg-panel);
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 8px;
+  padding: 0 10px;
   font-size: 12px;
   color: var(--text-dim);
+  user-select: none;
 }
 .status-left,
 .status-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 .status-item {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   cursor: default;
+  line-height: 1;
+}
+.status-item:empty {
+  display: none; /* collapse the gap when a section has nothing to say */
+}
+
+/* Clickable status segments (the git portion) get a subtle hover affordance. */
+.status-action {
+  border-radius: 4px;
+  padding: 2px 5px;
+  margin: 0 -2px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.status-action.clickable {
+  cursor: pointer;
+}
+.status-action.clickable:hover {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.14));
+  color: var(--text);
+}
+
+/* Git change counts beside the branch. */
+#status-git {
+  gap: 8px;
+}
+.git-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.git-changed {
+  color: var(--orange);
+}
+.git-staged {
+  color: var(--green);
+}
+
+/* Fleet pulse summary — colored dots + counts, hues mirror the pane dots. */
+#status-fleet {
+  gap: 9px;
+}
+.fleet-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+/* The "waiting on you" bucket — bold and in the alarm hue so it reads as the one
+   thing in the bar asking for action (its dot already pulses, see .fleet-dot.blocked). */
+.fleet-stat.needs-you {
+  font-weight: 600;
+  color: var(--orange);
+}
+.fleet-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-faint);
+}
+.fleet-dot.working {
+  background: var(--green);
+}
+.fleet-dot.quiet {
+  background: var(--yellow, #e3b341);
+}
+.fleet-dot.blocked {
+  background: var(--orange);
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+.fleet-dot.done {
+  background: var(--green);
+  opacity: 0.65;
+}
+.fleet-dot.error {
+  background: var(--red);
+}
+.fleet-dot.idle {
+  background: var(--text-faint);
+}
+
+#status-clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
 }
 
 /* ---------- Drag bars ---------- */

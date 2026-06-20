@@ -2,6 +2,25 @@ import './fileTree.css'
 
 const api = window.api
 
+// Git status letter -> color / tooltip, mirroring the SCM panel (git.js) so the
+// explorer indicators read the same way. Folders roll up to a single dot.
+const STATUS_COLOR = {
+  M: 'var(--orange)',
+  A: 'var(--green)',
+  U: 'var(--green)',
+  D: 'var(--red)',
+  R: 'var(--orange)'
+}
+const STATUS_TITLE = {
+  M: 'Modified',
+  A: 'Added',
+  U: 'Untracked',
+  D: 'Deleted',
+  R: 'Renamed'
+}
+// When a path carries more than one status, the higher rank wins.
+const STATUS_RANK = { U: 1, A: 2, R: 3, M: 4, D: 5 }
+
 // ---------- Icons (Lucide-style mono outline, matching the app chrome) ----------
 function svg(body, color, size = 16) {
   return `<svg class="ft-svg" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`
@@ -111,6 +130,76 @@ export function createFileTree({ onOpenFile }) {
   // refresh can preserve expansion without re-walking lazily.
   const childrenCache = new Map() // dirPath -> [{name,path,isDir}]
 
+  // ---------- Git status decoration ----------
+  // Per-path status derived from the SCM status (applyGitStatus). Files map to
+  // their own letter; folders roll up to 'M' (contains tracked changes) or 'U'
+  // (contains only untracked files). Rows read these maps in decorateRow.
+  const fileStatus = new Map() // absPath -> 'M'|'A'|'U'|'D'|'R'
+  const dirStatus = new Map() // absPath -> 'M'|'U'
+
+  function absOf(rel) {
+    const base = root.replace(/[/\\]+$/, '')
+    return base + '/' + rel.replace(/\\/g, '/')
+  }
+
+  // Paint (or clear) a single rendered row's git indicator.
+  function decorateRow(row) {
+    const path = row.dataset.path
+    const isDir = row.dataset.dir === '1'
+    const label = row.querySelector('.ft-label')
+    const old = row.querySelector('.ft-status')
+    if (old) old.remove()
+    if (label) label.style.color = ''
+    row.classList.remove('ft-changed')
+
+    const st = isDir ? dirStatus.get(path) : fileStatus.get(path)
+    if (!st) return
+
+    const color = STATUS_COLOR[st] || 'var(--text)'
+    row.classList.add('ft-changed')
+    if (label) label.style.color = color
+    const badge = document.createElement('span')
+    badge.className = 'ft-status' + (isDir ? ' ft-status-dir' : '')
+    badge.textContent = isDir ? '●' : st
+    badge.style.color = color
+    badge.title = STATUS_TITLE[st] ? STATUS_TITLE[st] + (isDir ? ' contents' : '') : ''
+    row.appendChild(badge)
+  }
+
+  function decorateAll() {
+    for (const row of container.querySelectorAll('.ft-row[data-path]')) decorateRow(row)
+  }
+
+  // Rebuild the status maps from an SCM status object ({ staged, changes }) and
+  // repaint visible rows without disturbing expansion or an in-progress rename.
+  function applyGitStatus(status) {
+    fileStatus.clear()
+    dirStatus.clear()
+    if (root && status && status.isRepo) {
+      const entries = [...(status.staged || []), ...(status.changes || [])]
+      for (const e of entries) {
+        if (!e || !e.path) continue
+        const abs = absOf(e.path)
+        const prev = fileStatus.get(abs)
+        if (!prev || (STATUS_RANK[e.status] || 0) > (STATUS_RANK[prev] || 0)) {
+          fileStatus.set(abs, e.status)
+        }
+        // Roll the change up through every ancestor folder to the root.
+        const tracked = e.status !== 'U'
+        let dir = dirname(abs)
+        while (dir && dir.length >= root.length) {
+          if (tracked) dirStatus.set(dir, 'M')
+          else if (!dirStatus.get(dir)) dirStatus.set(dir, 'U')
+          if (dir === root) break
+          const parent = dirname(dir)
+          if (parent === dir) break
+          dir = parent
+        }
+      }
+    }
+    decorateAll()
+  }
+
   async function loadChildren(dirPath) {
     try {
       const list = await api.fs.readDir(dirPath)
@@ -166,6 +255,7 @@ export function createFileTree({ onOpenFile }) {
       openContextMenu(e.clientX, e.clientY, entry)
     })
 
+    decorateRow(row)
     return row
   }
 
@@ -503,6 +593,8 @@ export function createFileTree({ onOpenFile }) {
         }
       },
       { sep: true },
+      { label: 'Reveal in Finder', action: () => api.shell.showItemInFolder(entry.path) },
+      { sep: true },
       { label: 'Rename', action: () => startRename(entry) },
       { label: 'Delete', action: () => confirmDelete(entry), danger: true }
     ]
@@ -616,13 +708,16 @@ export function createFileTree({ onOpenFile }) {
     const el = document.getElementById(id)
     if (el) el.addEventListener('click', fn)
   }
-  bind('ft-refresh', () => refresh())
   bind('ft-collapse', () => {
     expanded.clear()
     render()
   })
   bind('ft-new-file', () => startCreate('file'))
   bind('ft-new-folder', () => startCreate('folder'))
+  // Reveal the workspace root in Finder (selected files use the context menu).
+  bind('ft-reveal', () => {
+    if (root) api.shell.showItemInFolder(root)
+  })
 
   // Click on empty tree area deselects.
   container.addEventListener('click', () => {
@@ -638,5 +733,5 @@ export function createFileTree({ onOpenFile }) {
     openContextMenu(e.clientX, e.clientY, { name: basename(root), path: root, isDir: true })
   })
 
-  return { load, refresh }
+  return { load, refresh, applyGitStatus }
 }

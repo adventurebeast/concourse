@@ -8,6 +8,7 @@ import { createWelcome } from './welcome.js'
 import { createKeybindings } from './keybindings.js'
 import { createCommandPalette } from './commandPalette.js'
 import { createBeginnerHud } from './beginnerHud.js'
+import { createStatusBar } from './statusbar.js'
 import { icon } from './icons.js'
 
 const api = window.api
@@ -33,6 +34,12 @@ document.addEventListener('mouseover', (e) => {
     el.dataset.tip = text // migrate so the native tooltip never shows
     el.removeAttribute('title')
   }
+  // Expert mode: suppress the terminal tab/cell auto-title pop-over. The label is
+  // already visible on the tab/header and the summary can lag the live pane, so the
+  // hover card is just noise that covers the terminal. We still migrated the native
+  // title away above, so nothing shows at all. Functional tooltips (close buttons,
+  // toolbar, status bar) are unaffected since they aren't the tab/cell themselves.
+  if (document.documentElement.dataset.mode === 'expert' && el.matches('.term-tab, .term-cell')) return
   tipEl.textContent = text
   tipEl.classList.add('show')
   const r = el.getBoundingClientRect()
@@ -57,11 +64,22 @@ const editor = createEditor()
 // <branch>, N changes waiting" — ties the prompt to concrete context.
 const hud = createBeginnerHud()
 
+// Bottom status bar: git counts + branch (left), live fleet pulse + clock (right).
+// Clicking the git portion opens Source Control.
+const statusbar = createStatusBar({
+  onOpenScm: () => document.querySelector('.activity-btn[data-view="scm"]')?.click()
+})
+
 const git = createGit({
   // Open a git diff as a read-only tab in the editor.
   onOpenDiff: (opts) => editor.openDiff(opts),
-  // Keep the beginner context line in sync with repo state on every refresh.
-  onStatus: (status) => hud.setStatus(status)
+  // Keep the beginner context line, the explorer's per-file git indicators, and
+  // the status-bar change counts in sync with repo state on every refresh.
+  onStatus: (status) => {
+    hud.setStatus(status)
+    fileTree.applyGitStatus(status)
+    statusbar.setGit(status)
+  }
 })
 
 const fileTree = createFileTree({
@@ -75,7 +93,9 @@ const search = createSearch({
 })
 
 const terminals = createTerminals({
-  getRoot: () => currentRoot
+  getRoot: () => currentRoot,
+  // Aggregate pane pulse states into the right side of the status bar.
+  onFleet: (fleet) => statusbar.setFleet(fleet)
 })
 
 // Beginner command palette: a clickable launcher that TYPES a curated command onto
@@ -99,6 +119,11 @@ keys.register('mod+t', () => terminals.create({}))
 // required so plain arrow keys still reach the shell inside a terminal.
 keys.register('mod+shift+left', () => terminals.stepActive(-1))
 keys.register('mod+shift+right', () => terminals.stepActive(1))
+// Cmd/Ctrl+; / ' are a single-modifier alias for the same cycle: the two keys
+// sit adjacent on the home row, with ; (left) stepping back and ' (right)
+// stepping forward, so it reads spatially like prev/next.
+keys.register('mod+;', () => terminals.stepActive(-1))
+keys.register("mod+'", () => terminals.stepActive(1))
 // Cmd/Ctrl+1..9 jump straight to the Nth terminal tab.
 for (let n = 1; n <= 9; n++) {
   keys.register(`mod+${n}`, () => terminals.activateIndex(n - 1))
@@ -251,6 +276,17 @@ document.getElementById('open-folder').addEventListener('click', async () => {
   await setWorkspace(root)
 })
 
+// Open another, independent app window (also on File ▸ New Window / ⇧⌘N).
+document.getElementById('new-window')?.addEventListener('click', () => api.window?.open())
+
+// Application-menu commands run the SAME action as the matching toolbar button,
+// so the menu and the in-app buttons stay in lockstep (see src/main/menu.js).
+api.menu?.onCommand?.((command) => {
+  if (command === 'open-folder') document.getElementById('open-folder')?.click()
+  else if (command === 'new-file') document.getElementById('ft-new-file')?.click()
+  else if (command === 'new-folder') document.getElementById('ft-new-folder')?.click()
+})
+
 // Launch / start screen: opens a folder via the dialog or a recent project.
 const welcome = createWelcome({
   onOpenDialog: async () => {
@@ -368,9 +404,14 @@ dragV(document.getElementById('drag-x'), document.getElementById('sidebar'))
 dragH(document.getElementById('drag-y'), document.getElementById('editor-region'))
 
 // ---------- Boot ----------
+// A window opened via "New Window" carries ?fresh=1 and starts blank (welcome
+// screen) so you can pick a different folder; the launch / dock-activate window
+// reopens the last session.
+const isFreshWindow = new URLSearchParams(location.search).get('fresh') === '1'
 ;(async () => {
-  // Auto-reopen the workspace from last session and restore its layout.
-  const lastRoot = await api.session.lastRoot()
+  // Auto-reopen the workspace from last session and restore its layout (skipped
+  // for a fresh window so it doesn't clone the last folder).
+  const lastRoot = isFreshWindow ? null : await api.session.lastRoot()
   if (lastRoot) {
     const root = await api.workspace.openPath(lastRoot)
     if (root) {

@@ -22,7 +22,7 @@ const TERM_COLORS = [
 
 // Tabbed + grid terminal multiplexer. Each session is an independent PTY shell;
 // run a CLI coding agent in each and watch them all at once in grid view.
-export function createTerminals({ getRoot }) {
+export function createTerminals({ getRoot, onFleet }) {
   const tabBar = document.getElementById('term-tabs')
   const panesEl = document.getElementById('term-panes')
   const controls = document.querySelector('#terminal-region .panel-controls')
@@ -43,6 +43,11 @@ export function createTerminals({ getRoot }) {
   // summariser in main) what actually happened. A long further silence settles to idle.
   const QUIET_MS = 8000
   const IDLE_MS = 60000
+  // When the user submits input (presses Enter) we kick a fresh Layer-B summary for
+  // that pane instead of waiting out the QUIET_MS silence window — so the label
+  // tracks "what I just asked / what it's now doing" promptly each turn. Debounced
+  // by this much so the new turn has actually started echoing before we read it.
+  const SUBMIT_DELAY_MS = 1200
   // Layer B only runs when a provider is configured in main AND reachable (an
   // Anthropic key, or a live local OpenAI-compatible endpoint); without it the
   // deterministic Layer A still works. Queried once at startup — restart to pick up a
@@ -120,6 +125,74 @@ export function createTerminals({ getRoot }) {
     for (const s of ordered) sessions.set(s.id, s)
     applyLayout()
     fitAll()
+  }
+
+  // ---- drag files in: drop a file/folder onto a pane to type its path ----
+  // Works in every layout (each pane wires its own listeners), and on every pane —
+  // not just the active one — so you can drop straight onto whichever terminal in
+  // the grid/flow you mean. The path is inserted as text only (no Enter); the user
+  // decides what to do with it (e.g. an agent reads the image at that path).
+  // Files from Finder resolve to their real path; an image dragged from a web page
+  // has no on-disk path, so the drop handler first writes its bytes to a temp file
+  // and inserts that path instead. Internal tab-reorder drags carry no files, so
+  // the `dragHasFiles` guard keeps them from triggering any of this.
+  function dragHasFiles(e) {
+    const t = e.dataTransfer && e.dataTransfer.types
+    return !!t && (t.includes ? t.includes('Files') : [...t].includes('Files'))
+  }
+  // Bare path when it only uses shell-safe characters; otherwise single-quote it
+  // (escaping embedded quotes) so spaces and metacharacters survive — same scheme
+  // as cdInto().
+  function shellEscapePath(p) {
+    if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(p)) return p
+    return "'" + p.replace(/'/g, "'\\''") + "'"
+  }
+  function wireCellDrop(cell, s) {
+    cell.addEventListener('dragover', (e) => {
+      if (!dragHasFiles(e)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      cell.classList.add('drop-target')
+    })
+    cell.addEventListener('dragleave', (e) => {
+      // Ignore the dragleave that fires when crossing between child elements.
+      if (e.relatedTarget && cell.contains(e.relatedTarget)) return
+      cell.classList.remove('drop-target')
+    })
+    cell.addEventListener('drop', async (e) => {
+      // Capture the File handles synchronously — the DataTransfer is only live
+      // during synchronous event handling, so we must read it (and preventDefault)
+      // before any await below.
+      const files = e.dataTransfer ? [...e.dataTransfer.files] : []
+      if (!files.length) return
+      e.preventDefault()
+      e.stopPropagation()
+      cell.classList.remove('drop-target')
+      const paths = []
+      for (const f of files) {
+        // A real file from Finder/desktop (screenshot thumbnail, Preview, Photos)
+        // resolves to its absolute path directly.
+        const p = api.pathForFile?.(f)
+        if (p) { paths.push(p); continue }
+        // No path means an in-memory image dragged from a web page/app. Persist
+        // its bytes to a temp file so the agent has a real file to read, then use
+        // that path. (Non-image pathless drags are skipped — nothing to point at.)
+        if (f.type.startsWith('image/')) {
+          try {
+            const bytes = new Uint8Array(await f.arrayBuffer())
+            const saved = await api.fs.saveDrop?.(f.name, f.type, bytes)
+            if (saved) paths.push(saved)
+          } catch { /* unreadable drop — skip this file */ }
+        }
+      }
+      if (!paths.length) return
+      // Trailing space so the next dropped/typed token doesn't run into this one.
+      const text = paths.map(shellEscapePath).join(' ') + ' '
+      activate(s.id)
+      s.used = true // hands-on now — don't auto-cd this pane later
+      api.term.input(s.id, text)
+      s.term.focus()
+    })
   }
 
   // ---- per-terminal right-click menu (rename / close) ----
@@ -390,23 +463,57 @@ export function createTerminals({ getRoot }) {
   // ---- indicator dot ----
   // Maps the richer pulse state onto a dot class. status (running/exited) is the
   // hard fact; state (working/quiet/blocked/done/error/idle) is the pulse verdict.
+  // The dot class is the single source of truth for a pane's visible state —
+  // used for the three per-pane dots AND the aggregate fleet summary in the
+  // status bar, so both always agree.
+  function dotClass(s) {
+    if (s.status === 'exited') return s.state === 'error' ? 'error' : 'done'
+    if (s.attention || s.state === 'blocked') return 'blocked'
+    if (s.state === 'error') return 'error'
+    if (s.state === 'done') return 'done'
+    if (s.state === 'idle') return 'idle'
+    if (s.state === 'quiet') return 'quiet'
+    if (s.activity) return 'activity'
+    return 'working'
+  }
+  // Settled states that warrant a look. A pane that *enters* one of these while
+  // unfocused gets flagged `unseen`, so its indicator keeps a soft "come look"
+  // nudge until you open it. (blocked already pulses on its own; flagging it too
+  // is harmless and keeps the rule uniform.)
+  const LOOK_STATES = new Set(['blocked', 'done', 'error'])
+  function flagUnseen(s) {
+    if (LOOK_STATES.has(s.state) && s.id !== activeId) s.unseen = true
+  }
   function updateIndicators(s) {
-    let cls
-    if (s.status === 'exited') cls = s.state === 'error' ? 'error' : 'done'
-    else if (s.attention || s.state === 'blocked') cls = 'blocked'
-    else if (s.state === 'error') cls = 'error'
-    else if (s.state === 'done') cls = 'done'
-    else if (s.state === 'idle') cls = 'idle'
-    else if (s.state === 'quiet') cls = 'quiet'
-    else if (s.activity) cls = 'activity'
-    else cls = 'working'
-    s.tabDot.className = 'dot ' + cls
-    s.cellDot.className = 'dot ' + cls
-    s.stubDot.className = 'dot ' + cls
+    const cls = 'dot ' + dotClass(s) + (s.unseen ? ' unseen' : '')
+    s.tabDot.className = cls
+    s.cellDot.className = cls
+    s.stubDot.className = cls
+    emitFleet()
+  }
+
+  // Aggregate every pane's dot class into bucket counts for the status bar.
+  // Coalesced through rAF so a burst of output (many updateIndicators calls)
+  // produces at most one summary per frame. 'activity' folds into 'working' —
+  // both just mean "actively producing output".
+  let fleetRaf = 0
+  function emitFleet() {
+    if (!onFleet || fleetRaf) return
+    fleetRaf = requestAnimationFrame(() => {
+      fleetRaf = 0
+      const counts = {}
+      for (const s of sessions.values()) {
+        let cls = dotClass(s)
+        if (cls === 'activity') cls = 'working'
+        counts[cls] = (counts[cls] || 0) + 1
+      }
+      onFleet({ total: sessions.size, counts })
+    })
   }
   function clearFlags(s) {
     s.activity = false
     s.attention = false
+    s.unseen = false // you're now looking at this pane — it's seen, stop nudging
     // Focusing a pane that was flagged blocked means you're now dealing with it —
     // drop the alarm so the dot stops pulsing; Layer A/B re-evaluates once it's
     // quiet again. (Without this the blocked dot would survive until new output.)
@@ -457,8 +564,14 @@ export function createTerminals({ getRoot }) {
     const cellLabel = document.createElement('span')
     cellLabel.className = 'cell-label'
     cellLabel.textContent = displayName
-    // No close button — persist shells. Close via right-click (with confirm).
-    cellHeader.append(cellDot, cellLabel)
+    // Close button on the pane itself — the only X you can reach in grid/stack/flow,
+    // where you're looking at the panes, not the tab bar. Still confirms before
+    // terminating the shell, same as the tab close.
+    const cellClose = document.createElement('span')
+    cellClose.className = 'close'
+    cellClose.innerHTML = icon('close', 12)
+    cellClose.title = 'Close Terminal'
+    cellHeader.append(cellDot, cellLabel, cellClose)
     const cellBody = document.createElement('div')
     cellBody.className = 'cell-body'
     cell.append(cellHeader, cellBody)
@@ -498,10 +611,13 @@ export function createTerminals({ getRoot }) {
     fit.fit()
 
     const s = {
-      id, term, fit, cell, tabEl, tabDot, tabLabel, cellLabel, cellDot, color,
+      id, term, fit, cell, body: cellBody, tabEl, tabDot, tabLabel, cellLabel, cellDot, color,
       stub, stubDot, stubLabel,
-      status: 'running', activity: false, attention: false, custom: false,
+      status: 'running', activity: false, attention: false, unseen: false, custom: false,
       state: 'working', // pulse state: working|quiet|blocked|done|error|idle
+      // unseen: pane *entered* a settled state (blocked/done/error) while you were
+      // looking elsewhere and you haven't opened it since — drives the "come look"
+      // nudge on its indicator until clearFlags marks it seen.
       lastOutputAt: now(), // timestamp of last PTY output — drives the silence timer
       summaryText: null, // last Layer-B label (summary, or the pending question)
       lastSummaryHash: null, // hash of the last tail summarised — skip no-op repeats
@@ -512,16 +628,41 @@ export function createTerminals({ getRoot }) {
       baseName: displayName, // fallback label shown when nothing better is known
       oscTitle: null, // last OSC 0/2 title the program emitted (Layer 0)
       heurTitle: null, // last heuristic label (last command + branch)
-      titleTimer: null // debounce handle for onTitleChange
+      titleTimer: null, // debounce handle for onTitleChange
+      submitTimer: null // debounce handle for the on-submit pulse refresh
     }
     sessions.set(id, s)
+    // Watch this pane's body so it refits itself on any size change (see the
+    // ResizeObserver above). Tag the element so the observer can find the session.
+    cellBody.__session = s
+    resizeObserver.observe(cellBody)
 
     // Beginner mode gets the calmer, friendlier shell prompt; expert mode is left bare.
     const friendlyPrompt = document.documentElement.dataset.mode !== 'expert'
     api.term.create(id, getRoot(), { friendlyPrompt })
+    // Cmd+Backspace clears the whole input line — the macOS "delete to start of
+    // line" gesture, mapped onto the shell's kill-line. We send Ctrl+E (jump to
+    // end) then Ctrl+U (kill from cursor to start) so the line is wiped no matter
+    // where the cursor sits. Returning false stops xterm sending a literal
+    // backspace as well. Works in shells and readline-based agent TUIs alike.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type === 'keydown' && e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'Backspace') {
+        s.used = true
+        api.term.input(id, '\x05\x15')
+        return false
+      }
+      return true
+    })
     term.onData((data) => {
       s.used = true
       if (s.isShell) captureCommand(s, data)
+      // Any pane (agent or shell): pressing Enter is a fresh user turn — refresh the
+      // pulse label promptly rather than waiting out the silence timer. Debounced so a
+      // burst of submits (or a paste with newlines) only schedules one refresh.
+      if (data.includes('\r') || data.includes('\n')) {
+        clearTimeout(s.submitTimer)
+        s.submitTimer = setTimeout(() => summarize(s, { force: true }), SUBMIT_DELAY_MS)
+      }
       api.term.input(id, data)
     })
     term.onResize(({ cols, rows }) => api.term.resize(id, cols, rows))
@@ -542,9 +683,18 @@ export function createTerminals({ getRoot }) {
       s.titleTimer = setTimeout(() => setAutoTitle(s, title), 150)
     })
 
+    // Drop files from Finder onto this pane to insert their paths as text.
+    wireCellDrop(cell, s)
     // Click selects. In flow mode, clicking a side preview brings it to centre;
     // clicking the centre (or any other layout) just focuses it.
     cell.addEventListener('mousedown', () => selectCell(id))
+    // The pane's own X. Swallow the mousedown so the cell doesn't select/centre
+    // the pane out from under the confirm dialog, then confirm on click.
+    cellClose.addEventListener('mousedown', (e) => e.stopPropagation())
+    cellClose.addEventListener('click', (e) => {
+      e.stopPropagation()
+      confirmClose(s)
+    })
     tabEl.addEventListener('click', (e) => {
       if (tabClose.contains(e.target)) return // close handled separately
       selectCell(id)
@@ -605,12 +755,16 @@ export function createTerminals({ getRoot }) {
     const s = sessions.get(id)
     if (!s) return
     clearTimeout(s.titleTimer)
+    clearTimeout(s.submitTimer)
+    resizeObserver.unobserve(s.body)
+    dirty.delete(s)
     api.term.kill(id)
     s.term.dispose()
     s.cell.remove()
     s.stub.remove()
     s.tabEl.remove()
     sessions.delete(id)
+    emitFleet() // the fleet shrank — refresh the status-bar summary
     // When the last pane closes, reset the counter so numbering starts at 1
     // again rather than climbing forever (Tab 31, 32, …).
     if (sessions.size === 0) counter = 0
@@ -776,6 +930,49 @@ export function createTerminals({ getRoot }) {
     if (s) s.fit.fit()
   }
 
+  // ---- auto-fit on ANY size change ----
+  // FitAddon only recomputes a terminal's cols/rows when something calls fit(), so
+  // historically every resize path had to remember to call it by hand — and any it
+  // missed (e.g. dragging the sidebar wider) left the text at the old size until the
+  // next manual fit. A ResizeObserver on each pane's body removes that whole class of
+  // bug: it fires whenever the element's box actually changes — the OS window
+  // resizing, either splitter dragging, the sidebar toggling, a layout switch, the
+  // monospace font finishing loading — and we refit + push the new size to the PTY
+  // (which SIGWINCHes the program so Claude repaints). Callbacks are coalesced through
+  // rAF so a drag (a burst of size changes) costs at most one fit per frame per pane.
+  const dirty = new Set()
+  let fitScheduled = false
+  function flushFits() {
+    fitScheduled = false
+    const batch = [...dirty]
+    dirty.clear()
+    for (const s of batch) refit(s)
+  }
+  function scheduleRefit(s) {
+    dirty.add(s)
+    if (fitScheduled) return
+    fitScheduled = true
+    requestAnimationFrame(flushFits)
+  }
+  function refit(s) {
+    // A hidden pane (inactive tab, off-screen flow neighbour, panel toggled off)
+    // reports a 0×0 body; fitting it would push a bogus 1-row size to the PTY. Skip —
+    // activate()/applyLayout() fit it the moment it becomes visible again.
+    if (!s.body.isConnected || s.body.clientWidth === 0 || s.body.clientHeight === 0) return
+    try {
+      s.fit.fit()
+      api.term.resize(s.id, s.term.cols, s.term.rows)
+    } catch {
+      /* measured mid-layout; the next observer tick will catch the settled size */
+    }
+  }
+  const resizeObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const s = entry.target.__session
+      if (s) scheduleRefit(s)
+    }
+  })
+
   // ---- pty output -> terminal, with activity/attention tracking ----
   api.term.onData(({ id, data }) => {
     const s = sessions.get(id)
@@ -788,6 +985,7 @@ export function createTerminals({ getRoot }) {
     if (s.state !== 'working') {
       s.state = 'working'
       s.attention = false
+      s.unseen = false // fresh output: no longer a settled pane awaiting a look
       s.summaryText = null
       applyTitle(s)
       changed = true
@@ -804,6 +1002,7 @@ export function createTerminals({ getRoot }) {
     s.status = 'exited'
     // A non-zero exit code is an error; 0 (or unknown) reads as a clean finish.
     s.state = exitCode ? 'error' : 'done'
+    flagUnseen(s) // finished while you may be elsewhere — nudge until you look
     updateIndicators(s)
     s.tabEl.classList.add('exited')
     // Clear any stale OSC title (programs may leave one set on exit); the resolver
@@ -832,7 +1031,7 @@ export function createTerminals({ getRoot }) {
     for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0
     return h
   }
-  async function summarize(s) {
+  async function summarize(s, { force = false } = {}) {
     if (!pulseEnabled || !api.pulse?.summarize) return
     if (s.summarizing) return // one request per pane at a time
     const tail = tailOf(s)
@@ -860,9 +1059,12 @@ export function createTerminals({ getRoot }) {
     // (done/error), or already settled (idle). quiet and blocked are the awaiting
     // states a verdict may refine.
     if (s.status === 'exited') return
-    if (s.state !== 'quiet' && s.state !== 'blocked') return
+    // Normally only quiet/blocked panes accept a verdict; a user-submit refresh (force)
+    // also applies to a 'working' pane so the label updates the moment a new turn starts.
+    if (!force && s.state !== 'quiet' && s.state !== 'blocked') return
     s.lastSummaryHash = h // commit only now that a verdict is actually applied
     s.state = res.state
+    flagUnseen(s) // a model verdict just settled this pane — nudge if you're away
     const label = res.question ? `⏳ ${res.question}` : res.summary
     s.summaryText = label && label.trim() ? label.trim() : null
     applyTitle(s)
@@ -894,7 +1096,9 @@ export function createTerminals({ getRoot }) {
     }
   }, 2000)
 
-  window.addEventListener('resize', fitAll)
+  // OS window resizes need no special handling: shrinking/growing the window
+  // changes every visible pane's body size, which the per-pane ResizeObserver above
+  // already picks up. (One coalesced fit per frame, vs the old un-debounced fitAll.)
 
   // Album-flow cycling: ⌥←/→ (Alt+Arrow) steps the centre through the terminals.
   // Alt keeps it clear of anything the focused shell would read from the arrows.
@@ -908,6 +1112,17 @@ export function createTerminals({ getRoot }) {
       stepFlow(-1)
     }
   })
+
+  // Safety net: a file dropped anywhere a handler didn't claim would otherwise make
+  // Electron navigate the window to that file (blanking the app). Swallow such stray
+  // file drops globally. We defer to anything that already handled the drop (a pane,
+  // or the editor) via defaultPrevented, so real drop zones still work.
+  const swallowStrayFileDrag = (e) => {
+    if (e.defaultPrevented || !dragHasFiles(e)) return
+    e.preventDefault()
+  }
+  window.addEventListener('dragover', swallowStrayFileDrag)
+  window.addEventListener('drop', swallowStrayFileDrag)
 
   // Apply a light/dark theme to all existing terminals and future ones.
   function setTheme(name) {

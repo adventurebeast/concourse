@@ -1,8 +1,32 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 // The complete, stable API surface exposed to the renderer.
 // Renderer modules (fileTree, editor, git, terminals) code against this contract.
 contextBridge.exposeInMainWorld('api', {
+  // Resolve a dropped File to its absolute filesystem path. Electron 33 removed
+  // the old File.path property; webUtils.getPathForFile is the supported way, and
+  // it can only run here in the preload. Returns '' for non-file drags.
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file) || ''
+    } catch {
+      return ''
+    }
+  },
+
+  // Windows — handler in src/main/index.js. Opens another, independent app window
+  // (its own folder, terminals, and session) at the welcome screen.
+  window: {
+    open: () => ipcRenderer.send('window:open')
+  },
+
+  // Application-menu commands (File ▸ New File / New Folder / Open Folder). The
+  // main process forwards the menu click here; the renderer runs the same action
+  // as the matching toolbar button. See src/main/menu.js.
+  menu: {
+    onCommand: (cb) => ipcRenderer.on('menu:command', (_e, command) => cb(command))
+  },
+
   workspace: {
     get: () => ipcRenderer.invoke('workspace:get'),
     open: () => ipcRenderer.invoke('workspace:open'),
@@ -20,7 +44,10 @@ contextBridge.exposeInMainWorld('api', {
     createFile: (p) => ipcRenderer.invoke('fs:createFile', p),
     createDir: (p) => ipcRenderer.invoke('fs:createDir', p),
     rename: (oldPath, newPath) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
-    delete: (p) => ipcRenderer.invoke('fs:delete', p)
+    delete: (p) => ipcRenderer.invoke('fs:delete', p),
+    // Write the bytes of a dropped, pathless item (e.g. an image dragged from a
+    // web page) to a temp file and return its absolute path. See ipc-fs.js.
+    saveDrop: (name, type, bytes) => ipcRenderer.invoke('fs:saveDrop', name, type, bytes)
   },
 
   // Git — handlers implemented in src/main/ipc-git.js (uses simple-git over the workspace root)
@@ -55,6 +82,12 @@ contextBridge.exposeInMainWorld('api', {
     kill: (id) => ipcRenderer.send('term:kill', { id }),
     onData: (cb) => ipcRenderer.on('term:data', (_e, payload) => cb(payload)),
     onExit: (cb) => ipcRenderer.on('term:exit', (_e, payload) => cb(payload))
+  },
+
+  // OS shell — handlers in src/main/ipc-shell.js (Reveal in Finder / open path)
+  shell: {
+    showItemInFolder: (p) => ipcRenderer.invoke('shell:showItemInFolder', p),
+    openPath: (p) => ipcRenderer.invoke('shell:openPath', p)
   },
 
   // Pulse — Layer B model summariser, handlers in src/main/ipc-pulse.js.

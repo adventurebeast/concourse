@@ -17,9 +17,10 @@
         </div>
         <div class="titlebar-center" id="titlebar-title">Concourse</div>
         <div class="titlebar-right">
+          <button id="new-window" class="title-btn" data-icon="newWindow" title="New Window (⇧⌘N)"></button>
           <button id="toggle-sidebar" class="title-btn active" data-icon="panelLeft" title="Toggle Sidebar"></button>
           <button id="toggle-panel" class="title-btn active" data-icon="panelBottom" title="Toggle Terminal Panel"></button>
-          <button id="toggle-terminals" class="title-btn" data-icon="terminal" title="Terminals Only (hide editor)"></button>
+          <button id="toggle-terminals" class="title-btn" data-icon="terminalSquare" title="Terminals Only (hide editor)"></button>
           <button id="toggle-mode" class="mode-toggle" title="Switch to Expert Mode"></button>
           <button id="toggle-theme" class="title-btn" data-icon="moon" title="Toggle Light / Dark Theme"></button>
         </div>
@@ -40,8 +41,8 @@
               <div class="pane-actions">
                 <button id="ft-new-file" class="icon-btn" data-icon="filePlus" title="New File"></button>
                 <button id="ft-new-folder" class="icon-btn" data-icon="folderPlus" title="New Folder"></button>
-                <button id="ft-refresh" class="icon-btn" data-icon="refresh" title="Refresh"></button>
                 <button id="ft-collapse" class="icon-btn" data-icon="collapse" title="Collapse All"></button>
+                <button id="ft-reveal" class="icon-btn" data-icon="folderReveal" title="Reveal in Finder"></button>
                 <button id="open-folder" class="icon-btn" data-icon="folderOpen" title="Open Folder…"></button>
               </div>
             </div>
@@ -148,11 +149,13 @@
       <!-- Full-width bottom status bar -->
       <footer id="status-bar">
         <div class="status-left">
-          <span id="status-branch" class="status-item" title="Git branch"></span>
+          <span id="status-branch" class="status-item status-action" title="Open Source Control"></span>
+          <span id="status-git" class="status-item status-action" title="Open Source Control"></span>
           <span id="status-workspace" class="status-item"></span>
         </div>
         <div class="status-right">
-          <span id="status-info" class="status-item">Concourse</span>
+          <span id="status-fleet" class="status-item" title="Terminal activity"></span>
+          <span id="status-clock" class="status-item"></span>
         </div>
       </footer>
     </div>

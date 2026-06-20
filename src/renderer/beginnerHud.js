@@ -1,5 +1,6 @@
 import './beginnerHud.css'
 import { icon } from './icons.js'
+import { detectProjectType } from './projectType.js'
 
 // The beginner "heads-up" line that sits just above the terminal: a calm, always-on
 // answer to "where am I and what's going on?". It ties the abstract prompt
@@ -14,6 +15,9 @@ export function createBeginnerHud() {
 
   let root = null
   let status = { isRepo: false }
+  // Detected { icon, label } for the open folder (e.g. { icon:'react', label:'a React app' }),
+  // or null while detecting / when the project kind is unknown.
+  let project = null
 
   function basename(p) {
     if (!p) return ''
@@ -31,16 +35,23 @@ export function createBeginnerHud() {
     el.hidden = false
 
     const parts = []
+    // The leading icon and description adapt to the kind of project detected: a
+    // React app shows the atom glyph and reads "a React app"; an unknown folder
+    // falls back to the plain folder icon and no description.
+    const leadIcon = project ? project.icon : 'folderOpen'
+    const desc = project ? `, ${escapeHtml(project.label)}` : ''
     parts.push(
-      `<span class="bh-item"><span class="bh-icon">${icon('folderOpen', 13)}</span>` +
-        `You're in <strong>${escapeHtml(basename(root))}</strong></span>`
+      `<span class="bh-item"><span class="bh-icon">${icon(leadIcon, 13)}</span>` +
+        `You're in <strong>${escapeHtml(basename(root))}</strong>${desc}</span>`
     )
 
     if (status.isRepo) {
       const branch = status.branch ? `on <strong>${escapeHtml(status.branch)}</strong>` : ''
+      // Once the project is already named, don't repeat "a git project" — just the branch.
+      const gitText = branch ? (project ? branch : `a git project ${branch}`) : 'a git project'
       parts.push(
         `<span class="bh-sep">·</span><span class="bh-item"><span class="bh-icon">${icon('gitBranch', 13)}</span>` +
-          `a git project ${branch}</span>`
+          `${gitText}</span>`
       )
       const n = (status.staged?.length || 0) + (status.changes?.length || 0)
       const changeText =
@@ -56,7 +67,15 @@ export function createBeginnerHud() {
   return {
     setRoot(r) {
       root = r
+      project = null // unknown until detection resolves; render the folder fallback now
       render()
+      if (!r) return
+      // Detect asynchronously and repaint — but only if this is still the open folder.
+      detectProjectType(r).then((p) => {
+        if (root !== r) return
+        project = p
+        render()
+      })
     },
     setStatus(s) {
       status = s || { isRepo: false }

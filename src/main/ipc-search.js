@@ -49,7 +49,7 @@ export function registerSearch(ctx) {
   // Returns { files: [{ path, name, dir, matches: [{ line, text, ranges:[[start,end]] }] }],
   //           truncated, totalMatches, error }
   ipcMain.handle('search:find', async (_e, query, opts = {}) => {
-    const root = ctx.getRoot()
+    const root = ctx.getRoot(_e.sender)
     if (!root) return { files: [], totalMatches: 0, truncated: false, noFolder: true }
     if (!query) return { files: [], totalMatches: 0, truncated: false }
 

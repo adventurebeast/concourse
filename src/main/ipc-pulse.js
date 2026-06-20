@@ -235,10 +235,13 @@ export function registerPulse() {
     // Don't spend a call on an empty/garbage payload (renderer gates too, but the
     // main process must not trust it).
     if (typeof payload?.tail !== 'string' || !payload.tail.trim()) return null
-    const { id } = payload
-    if (id != null) {
-      if (inFlight.has(id)) return null
-      inFlight.add(id)
+    // Pane ids (term-1, term-2, …) restart per window, so scope the in-flight key
+    // by the calling window's webContents id — otherwise two windows' "term-1"
+    // would block each other.
+    const key = payload.id != null ? `${_e.sender.id}:${payload.id}` : null
+    if (key != null) {
+      if (inFlight.has(key)) return null
+      inFlight.add(key)
     }
     try {
       const raw = await provider.summarize(payload)
@@ -247,7 +250,7 @@ export function registerPulse() {
       console.log('[pulse] summarize failed:', err?.status || '', err?.message || err)
       return null
     } finally {
-      if (id != null) inFlight.delete(id)
+      if (key != null) inFlight.delete(key)
     }
   })
 }

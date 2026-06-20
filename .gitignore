@@ -10,6 +10,10 @@ release/
 # Internal notes
 _launch.md
 
+# AI files
+*.ai
+~ai-*.tmp
+
 # OS / editor
 .DS_Store
 .vscode/

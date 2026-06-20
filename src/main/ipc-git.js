@@ -32,11 +32,12 @@ function mapCode(code) {
 
 export function registerGit(ctx) {
   // ---- status ---------------------------------------------------------------
-  ipcMain.handle('git:status', async () => {
+  ipcMain.handle('git:status', async (e) => {
     try {
+      const root = ctx.getRoot(e.sender)
       // No folder open — don't fall back to the process cwd.
-      if (!ctx.getRoot()) return { isRepo: false, noFolder: true }
-      const git = simpleGit(ctx.getRoot())
+      if (!root) return { isRepo: false, noFolder: true }
+      const git = simpleGit(root)
       const isRepo = await git.checkIsRepo().catch(() => false)
       if (!isRepo) return { isRepo: false }
 
@@ -81,8 +82,9 @@ export function registerGit(ctx) {
   })
 
   // ---- diff -----------------------------------------------------------------
-  ipcMain.handle('git:diff', async (_e, relPath, staged = false) => {
-    const git = simpleGit(ctx.getRoot())
+  ipcMain.handle('git:diff', async (e, relPath, staged = false) => {
+    const root = ctx.getRoot(e.sender)
+    const git = simpleGit(root)
 
     // original = HEAD blob
     let original = ''
@@ -102,7 +104,7 @@ export function registerGit(ctx) {
       }
     } else {
       try {
-        modified = await fs.readFile(join(ctx.getRoot(), relPath), 'utf8')
+        modified = await fs.readFile(join(root, relPath), 'utf8')
       } catch {
         modified = ''
       }
@@ -112,9 +114,9 @@ export function registerGit(ctx) {
   })
 
   // ---- stage ----------------------------------------------------------------
-  ipcMain.handle('git:stage', async (_e, paths) => {
+  ipcMain.handle('git:stage', async (e, paths) => {
     try {
-      const git = simpleGit(ctx.getRoot())
+      const git = simpleGit(ctx.getRoot(e.sender))
       const list = Array.isArray(paths) ? paths : [paths]
       if (list.length === 0) return false
       await git.add(list)
@@ -125,9 +127,9 @@ export function registerGit(ctx) {
   })
 
   // ---- unstage --------------------------------------------------------------
-  ipcMain.handle('git:unstage', async (_e, paths) => {
+  ipcMain.handle('git:unstage', async (e, paths) => {
     try {
-      const git = simpleGit(ctx.getRoot())
+      const git = simpleGit(ctx.getRoot(e.sender))
       const list = Array.isArray(paths) ? paths : [paths]
       if (list.length === 0) return false
       try {
@@ -143,10 +145,10 @@ export function registerGit(ctx) {
   })
 
   // ---- discard --------------------------------------------------------------
-  ipcMain.handle('git:discard', async (_e, paths) => {
-    const git = simpleGit(ctx.getRoot())
+  ipcMain.handle('git:discard', async (e, paths) => {
+    const root = ctx.getRoot(e.sender)
+    const git = simpleGit(root)
     const list = Array.isArray(paths) ? paths : [paths]
-    const root = ctx.getRoot()
 
     // Determine which paths are tracked vs untracked so we know how to discard.
     let untracked = new Set()
@@ -174,9 +176,9 @@ export function registerGit(ctx) {
   })
 
   // ---- commit ---------------------------------------------------------------
-  ipcMain.handle('git:commit', async (_e, message) => {
+  ipcMain.handle('git:commit', async (e, message) => {
     try {
-      const git = simpleGit(ctx.getRoot())
+      const git = simpleGit(ctx.getRoot(e.sender))
       const result = await git.commit(message)
       return result
     } catch (err) {
@@ -185,9 +187,9 @@ export function registerGit(ctx) {
   })
 
   // ---- init -----------------------------------------------------------------
-  ipcMain.handle('git:init', async () => {
+  ipcMain.handle('git:init', async (e) => {
     try {
-      const git = simpleGit(ctx.getRoot())
+      const git = simpleGit(ctx.getRoot(e.sender))
       await git.init()
       return true
     } catch {
