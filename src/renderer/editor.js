@@ -130,6 +130,12 @@ export function createEditor() {
 
   const saveListeners = []
   const tabsListeners = []
+  // Last tab count we notified listeners with. syncWelcome() runs on every
+  // activate() (i.e. plain tab switches too), but onTabsChange must only fire
+  // on genuine open/close transitions — otherwise switching tabs would re-run
+  // derived state like terminals-only and yank the editor around. -1 forces the
+  // first sync to notify.
+  let lastTabsCount = -1
 
   function fileKey(path) {
     return 'file:' + path
@@ -137,6 +143,8 @@ export function createEditor() {
 
   function syncWelcome() {
     welcome.style.display = tabs.size === 0 ? 'flex' : 'none'
+    if (tabs.size === lastTabsCount) return
+    lastTabsCount = tabs.size
     for (const cb of tabsListeners) {
       try {
         cb(tabs.size)
@@ -420,7 +428,8 @@ export function createEditor() {
     if (typeof cb === 'function') saveListeners.push(cb)
   }
 
-  // Notify whenever the number of open tabs changes (fires on open and close).
+  // Notify only when the number of open tabs actually changes (open/close),
+  // not on plain tab switches. See lastTabsCount in syncWelcome().
   function onTabsChange(cb) {
     if (typeof cb === 'function') tabsListeners.push(cb)
   }

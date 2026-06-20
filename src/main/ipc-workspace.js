@@ -6,7 +6,11 @@ import { setLastRoot } from './session.js'
 // The workspace root is per window (event.sender), so each open window can hold a
 // different folder. `setLastRoot` still records the most-recently-opened folder
 // across all windows for the launch / dock-activate window to reopen.
-export function registerWorkspace(ctx) {
+//
+// `watchers` is the recursive fs-watcher manager (src/main/watcher.js): every time
+// a window's root changes we (re)point its watcher at the new folder so the file
+// tree stays in sync with on-disk changes.
+export function registerWorkspace(ctx, watchers) {
   ipcMain.handle('workspace:get', (e) => ctx.getRoot(e.sender))
 
   ipcMain.handle('workspace:open', async (e) => {
@@ -14,13 +18,15 @@ export function registerWorkspace(ctx) {
     const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
     if (result.canceled || result.filePaths.length === 0) return null
     ctx.setRoot(e.sender, result.filePaths[0])
+    watchers.start(win, result.filePaths[0])
     await addRecent(result.filePaths[0])
     await setLastRoot(result.filePaths[0])
     return ctx.getRoot(e.sender)
   })
 
-  // Open a known path (e.g. a click on a recent project). Validates that the
-  // directory still exists; returns null if it's gone so the renderer can prune.
+  // Open a known path (e.g. a click on a recent project, or session restore on
+  // launch). Validates that the directory still exists; returns null if it's gone
+  // so the renderer can prune.
   ipcMain.handle('workspace:openPath', async (e, dir) => {
     if (!dir) return null
     try {
@@ -30,6 +36,7 @@ export function registerWorkspace(ctx) {
       return null
     }
     ctx.setRoot(e.sender, dir)
+    watchers.start(BrowserWindow.fromWebContents(e.sender), dir)
     await addRecent(dir)
     await setLastRoot(dir)
     return ctx.getRoot(e.sender)

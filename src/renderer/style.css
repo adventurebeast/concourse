@@ -418,6 +418,14 @@ body {
   background: var(--bg-editor);
   pointer-events: none;
 }
+/* Empty-editor brand mark: same runway logo, but a quiet ghost — thin stroke,
+   faint color inherited from #editor-welcome. */
+.editor-welcome-logo {
+  display: inline-flex;
+}
+.editor-welcome-logo svg {
+  stroke-width: 1;
+}
 .welcome-title {
   font-size: 26px;
   font-weight: 200;
@@ -724,8 +732,8 @@ body {
   gap: 4px;
   font-variant-numeric: tabular-nums;
 }
-/* The "waiting on you" bucket — bold and in the alarm hue so it reads as the one
-   thing in the bar asking for action (its dot already pulses, see .fleet-dot.blocked). */
+/* The "awaiting input" bucket — bold and in the alarm hue so it reads as the one
+   thing in the bar asking for action (see .fleet-dot.awaiting). */
 .fleet-stat.needs-you {
   font-weight: 600;
   color: var(--orange);
@@ -743,9 +751,10 @@ body {
 .fleet-dot.quiet {
   background: var(--yellow, #e3b341);
 }
-.fleet-dot.blocked {
+.fleet-dot.awaiting {
+  /* Steady amber: with a fleet, several panes can be awaiting at once — a pulsing bar
+     would be noise. The bold count + label (.needs-you) carry the emphasis instead. */
   background: var(--orange);
-  animation: dot-pulse 1s ease-in-out infinite;
 }
 .fleet-dot.done {
   background: var(--green);

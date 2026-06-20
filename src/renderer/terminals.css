@@ -31,16 +31,24 @@
 }
 
 /* ---------- Pulse states (Layer A deterministic + Layer B model verdict) ---------- */
-/* Working / actively producing output: a small spinning ring — the "thinking…"
-   cue. A faint full ring with one brighter arc rotating reads as in-progress at a
-   glance, in the terminal's own identity hue. */
+/* Working: the ring spins ONLY while output is actively streaming (the `.streaming`
+   modifier, driven by live byte flow in terminals.js). A working pane whose output
+   has paused drops to a calm solid dot in its identity hue — still "working", just
+   not visibly producing text — so the spinner reads as a true "new text incoming"
+   cue rather than spinning for the whole 8s silence window. */
 .dot.working,
 .dot.activity {
   position: relative;
+  background: var(--term-color, var(--green));
+}
+.dot.working.streaming,
+.dot.activity.streaming {
   background: transparent;
 }
-.dot.working::after,
-.dot.activity::after {
+/* A faint full ring with one brighter arc rotating reads as in-progress at a glance,
+   in the terminal's own identity hue. */
+.dot.working.streaming::after,
+.dot.activity.streaming::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -59,10 +67,12 @@
   background: var(--yellow, #e3b341);
   animation: dot-breathe 2.4s ease-in-out infinite;
 }
-.dot.blocked {
-  /* Waiting on you — the loudest state, same pulse the bell uses. */
+.dot.awaiting {
+  /* At rest — the agent's come to rest and it's your move (the headline state). Steady
+     amber once seen; the `unseen` pulse below adds the "come look" nudge until you open
+     it. The loud part of this state is the working→awaiting edge (onAwait), not a
+     forever-pulsing dot. */
   background: var(--orange);
-  animation: dot-pulse 1s ease-in-out infinite;
 }
 .dot.done {
   background: var(--green);
@@ -73,9 +83,12 @@
 .dot.idle {
   background: var(--text-faint);
 }
-/* A settled pane (done/error) you haven't opened since it settled keeps a soft
-   "come look" pulse; focusing it (clearFlags drops .unseen) lets it go calm.
-   `blocked` already pulses on its own, so it needs no unseen treatment. */
+/* A settled pane you haven't opened since it settled keeps a soft "come look" pulse;
+   focusing it (clearFlags drops .unseen) lets it go calm. `awaiting` is the one you're
+   actually waiting for, so it pulses a touch more insistently than done/error. */
+.dot.unseen.awaiting {
+  animation: dot-pulse 1s ease-in-out infinite;
+}
 .dot.unseen.done,
 .dot.unseen.error {
   animation: dot-pulse 1.4s ease-in-out infinite;
@@ -191,10 +204,17 @@
 }
 #term-panes.stack .term-stub.on {
   display: flex;
+  /* The stub fills the active terminal's whole rail slot (so the tint below marks
+     which pane is maximized), but its title must sit at the TOP — level with the
+     live rail tiles' headers — not floating in the slot's vertical middle. Wrap +
+     align-content pins the title line to the top; align-items keeps the dot/label
+     centred within that line just like a real cell-header. */
+  flex-wrap: wrap;
+  align-content: flex-start;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 0 10px;
+  padding: 4px 10px 0;
   cursor: default;
   background: var(--bg-panel);
   border-left: 2px solid var(--term-color, var(--accent));

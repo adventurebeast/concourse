@@ -57,10 +57,10 @@ export function createStatusBar({ onOpenScm } = {}) {
 
   // ---- fleet --------------------------------------------------------------
   // Buckets in priority order: the states you most want surfaced come first so
-  // a quick left-to-right scan lands on "waiting" before "done". Each bucket
+  // a quick left-to-right scan lands on "awaiting" before "done". Each bucket
   // reuses the pane dot's hue (see terminals.css) for instant visual rhyme.
   const BUCKETS = [
-    { key: 'blocked', label: 'waiting on you' },
+    { key: 'awaiting', label: 'awaiting input' },
     { key: 'error', label: 'errored' },
     { key: 'working', label: 'working' },
     { key: 'quiet', label: 'quiet' },
@@ -82,14 +82,14 @@ export function createStatusBar({ onOpenScm } = {}) {
       const n = counts[b.key] || 0
       if (!n) continue
       const stat = document.createElement('span')
-      // 'blocked' is the one bucket that means "go intervene" — emphasise it so a
+      // 'awaiting' is the one bucket that means "your move" — emphasise it so a
       // glance across the bar lands on it, and spell the word out, not a bare count.
-      stat.className = 'fleet-stat' + (b.key === 'blocked' ? ' needs-you' : '')
+      stat.className = 'fleet-stat' + (b.key === 'awaiting' ? ' needs-you' : '')
       const dot = document.createElement('i')
       dot.className = 'fleet-dot ' + b.key
       stat.appendChild(dot)
       stat.appendChild(document.createTextNode(String(n)))
-      if (b.key === 'blocked') stat.appendChild(document.createTextNode(' waiting'))
+      if (b.key === 'awaiting') stat.appendChild(document.createTextNode(' awaiting'))
       fleetEl.appendChild(stat)
       tipParts.push(`${n} ${b.label}`)
     }

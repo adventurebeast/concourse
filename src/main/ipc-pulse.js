@@ -1,8 +1,8 @@
 import { ipcMain } from 'electron'
 
 // Pulse · Layer B — turn a pane's recent visible output into a compact
-// { state, summary, question } verdict, so the UI can tell "blocked waiting for
-// you" from "still working" from "done" without you reading the scrollback.
+// { state, summary, question } verdict, so the UI can tell "awaiting your input"
+// from "still working" from "done" without you reading the scrollback.
 //
 // Provider-pluggable (the ecosystem is multi-LLM). Two backends ship today, chosen
 // by environment at startup:
@@ -21,7 +21,7 @@ const DEFAULT_CLAUDE_MODEL = 'claude-haiku-4-5'
 const DEFAULT_LOCAL_MODEL = 'llama3.2:3b'
 const DEFAULT_LOCAL_BASE_URL = 'http://localhost:11434/v1'
 
-const STATES = ['working', 'blocked', 'done', 'error', 'idle']
+const STATES = ['working', 'awaiting', 'done', 'error', 'idle']
 
 // Structured-output schema (used by the Claude backend; OpenAI-compatible servers
 // vary in json_schema support, so the local backend uses json_object + the prompt).
@@ -43,17 +43,22 @@ const SYSTEM = [
   'read at a glance. Judge only from the output shown — do not invent activity.',
   '',
   'state — pick exactly one:',
-  '  working — actively producing output, mid-task, or a spinner/progress is running',
-  '  blocked — stopped, waiting on the human: a y/n prompt, a question, a confirmation,',
-  '            a password/auth step, a "continue?" — nothing proceeds until they answer',
-  '  done    — a task or command finished successfully; back at an idle prompt',
-  '  error   — stopped on an error, failure, traceback, or non-zero exit',
-  '  idle    — an empty shell prompt, nothing happening, nothing pending',
+  '  working  — actively producing output, mid-task, or a spinner/progress is running',
+  '  awaiting — at REST, waiting on the human (an agent\'s normal resting state). Covers',
+  '             BOTH: (a) mid-task — a y/n, confirmation, password/auth, "continue?" it',
+  '             needs answered to proceed; AND (b) end-of-turn — it FINISHED its turn and',
+  '             is parked at its input box waiting for your next instruction. If a coding',
+  '             agent (e.g. Claude Code) is sitting at its prompt with nothing running,',
+  '             that is awaiting, NOT done and NOT idle.',
+  '  done     — a one-shot SHELL command finished successfully and returned to the shell',
+  '             prompt (e.g. a build/test run). Use only for plain commands, not agents.',
+  '  error    — stopped on an error, failure, traceback, or non-zero exit',
+  '  idle     — a bare, empty shell prompt that has not been used; nothing pending',
   '',
   'summary — at most 8 words, present tense, concrete (filenames, counts, command).',
   '          No fluff, no "the agent", no trailing period.',
-  'question — only when state is blocked: the exact thing it waits on, <=12 words.',
-  '           Otherwise an empty string.',
+  'question — when state is awaiting: what it needs from you next, <=12 words (the exact',
+  '           prompt if mid-task, else the next step it expects). Otherwise empty string.',
   '',
   'Respond with ONLY a JSON object of the form',
   '{"state": "...", "summary": "...", "question": "..."} — no prose, no code fence.'

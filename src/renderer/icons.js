@@ -1,5 +1,13 @@
 // Lucide-style mono outlined icons. Stroke = currentColor so they inherit text color.
 const PATHS = {
+  // Brand mark: a road/runway in deep one-point perspective. Two rails recede and
+  // stop short while the centerline — filled dots that taper as they go — carries
+  // past them to the vanishing point, so the lines read as converging at infinity
+  // rather than closing into a triangle. The "concourse" leading you out to
+  // takeoff. Source of truth for the app logo. Dots are filled (no stroke); the
+  // rails inherit the icon stroke.
+  runway:
+    '<path d="M2.5 23 11 6.5" stroke-width="1" stroke-linecap="butt"/><path d="M21.5 23 13 6.5" stroke-width="1" stroke-linecap="butt"/><circle cx="12" cy="20.5" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="17" r=".82" fill="currentColor" stroke="none"/><circle cx="12" cy="13.8" r=".64" fill="currentColor" stroke="none"/><circle cx="12" cy="11" r=".48" fill="currentColor" stroke="none"/><circle cx="12" cy="8.6" r=".36" fill="currentColor" stroke="none"/><circle cx="12" cy="6.7" r=".26" fill="currentColor" stroke="none"/>',
   box:
     '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
   files:

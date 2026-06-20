@@ -9,9 +9,14 @@ import { registerSession } from './ipc-session.js'
 import { registerPty } from './ipc-pty.js'
 import { registerPulse } from './ipc-pulse.js'
 import { registerShell } from './ipc-shell.js'
+import { createWatchers } from './watcher.js'
 import { installAppMenu } from './menu.js'
 
 const ctx = createContext()
+// Recursive fs watcher per window — keeps the file tree in sync with on-disk
+// changes made outside the app. Started/replaced when a window opens a folder
+// (see ipc-workspace.js) and stopped when the window closes.
+const watchers = createWatchers()
 // Tears down the PTYs owned by one window (set once the PTY layer is registered).
 let killPtysForWindow = null
 
@@ -67,6 +72,7 @@ function createWindow({ fresh = false } = {}) {
     // Tear down only this window's terminals and per-window state; other windows
     // keep running.
     if (killPtysForWindow) killPtysForWindow(wcId)
+    watchers.stop(wcId)
     ctx.forget(wcId)
   })
 
@@ -83,7 +89,7 @@ function createWindow({ fresh = false } = {}) {
 }
 
 app.whenReady().then(() => {
-  registerWorkspace(ctx)
+  registerWorkspace(ctx, watchers)
   registerFs(ctx)
   registerGit(ctx)
   registerSearch(ctx)

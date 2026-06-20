@@ -22,7 +22,7 @@ const TERM_COLORS = [
 
 // Tabbed + grid terminal multiplexer. Each session is an independent PTY shell;
 // run a CLI coding agent in each and watch them all at once in grid view.
-export function createTerminals({ getRoot, onFleet }) {
+export function createTerminals({ getRoot, onFleet, onAwait }) {
   const tabBar = document.getElementById('term-tabs')
   const panesEl = document.getElementById('term-panes')
   const controls = document.querySelector('#terminal-region .panel-controls')
@@ -43,6 +43,39 @@ export function createTerminals({ getRoot, onFleet }) {
   // summariser in main) what actually happened. A long further silence settles to idle.
   const QUIET_MS = 8000
   const IDLE_MS = 60000
+  // The working ring (the spinner) tracks LIVE byte flow, not the semantic state:
+  // it spins only while output is actively streaming and stops this long after the
+  // last byte. Decoupled from QUIET_MS so a finished command's spinner stops within
+  // ~1s, while the pane still stays semantically 'working' for the full 8s window
+  // that drives summarisation. Long enough to bridge the sub-second gaps between an
+  // agent's tokens/tool calls (its animated TUI keeps emitting frames), short enough
+  // that a truly idle pane stops spinning promptly. See onData.
+  const STREAM_IDLE_MS = 1000
+  // ---- awaiting detection (Layer 1, deterministic, free) ----
+  // An agent's resting state — it's come to rest and the ball is in your court. The
+  // tell: a working agent never goes fully byte-silent (its spinner/timer/repaints
+  // keep emitting), so sustained silence + an input affordance ⇒ awaiting. These are
+  // the high-confidence EXPLICIT prompts (a y/N, password, permission, "proceed?")
+  // that we can call the moment output settles; the implicit "agent parked with no
+  // explicit prompt" case waits the full QUIET_MS window (or an alternate-screen TUI
+  // signal) to stay on the "still working" side. Harness-agnostic core; per-agent
+  // matchers can be appended without touching the rest. See docs/pulse-engine.md.
+  const AWAIT_PROMPT_RE = [
+    /\(\s*[yY]\s*\/\s*[nN]\s*\)/, // (y/n) (Y/n)
+    /\[\s*[yY]\s*\/\s*[nN]\s*\]/, // [y/N] [Y/n]
+    /\b[yY]es\s*\/\s*[nN]o\b/, // yes/no
+    /\bpass(?:word|phrase)\b\s*[:?]/i, // Password: / passphrase?
+    /\b(?:proceed|continue|are you sure|do you want to|would you like|overwrite)\b[^?\n]*\?/i,
+    /\bpress\s+(?:enter|return|any key)\b/i,
+    /\bchoose\b[^?\n]*[:?]/i, // "Choose an option:"
+    /❯\s*\d+\.\s/ // a highlighted numbered menu choice (e.g. Claude Code's permission prompt)
+  ]
+  // Read the last few rendered lines and look for an explicit prompt. Cheap and
+  // synchronous — safe to run on every output-settle.
+  function hasAwaitPrompt(s) {
+    const tail = tailOf(s, 8)
+    return !!tail && AWAIT_PROMPT_RE.some((re) => re.test(tail))
+  }
   // When the user submits input (presses Enter) we kick a fresh Layer-B summary for
   // that pane instead of waiting out the QUIET_MS silence window — so the label
   // tracks "what I just asked / what it's now doing" promptly each turn. Debounced
@@ -462,13 +495,13 @@ export function createTerminals({ getRoot, onFleet }) {
 
   // ---- indicator dot ----
   // Maps the richer pulse state onto a dot class. status (running/exited) is the
-  // hard fact; state (working/quiet/blocked/done/error/idle) is the pulse verdict.
+  // hard fact; state (working/quiet/awaiting/done/error/idle) is the pulse verdict.
   // The dot class is the single source of truth for a pane's visible state —
   // used for the three per-pane dots AND the aggregate fleet summary in the
   // status bar, so both always agree.
   function dotClass(s) {
     if (s.status === 'exited') return s.state === 'error' ? 'error' : 'done'
-    if (s.attention || s.state === 'blocked') return 'blocked'
+    if (s.attention || s.state === 'awaiting') return 'awaiting'
     if (s.state === 'error') return 'error'
     if (s.state === 'done') return 'done'
     if (s.state === 'idle') return 'idle'
@@ -478,14 +511,31 @@ export function createTerminals({ getRoot, onFleet }) {
   }
   // Settled states that warrant a look. A pane that *enters* one of these while
   // unfocused gets flagged `unseen`, so its indicator keeps a soft "come look"
-  // nudge until you open it. (blocked already pulses on its own; flagging it too
-  // is harmless and keeps the rule uniform.)
-  const LOOK_STATES = new Set(['blocked', 'done', 'error'])
+  // nudge until you open it. `awaiting` is the headline case — an agent that just
+  // came to rest is the thing you're waiting for.
+  const LOOK_STATES = new Set(['awaiting', 'done', 'error'])
   function flagUnseen(s) {
     if (LOOK_STATES.has(s.state) && s.id !== activeId) s.unseen = true
   }
+  // Central semantic-state setter. Every transition routes through here so the
+  // working→awaiting EDGE — the moment an agent comes to rest — can't be missed: on
+  // entry to `awaiting` while unfocused it flags `unseen` (a soft come-look pulse)
+  // and fires the onAwait hook (the seam a notification/sound/badge subscribes to).
+  function setState(s, next) {
+    if (s.state === next) return false
+    const entering = next === 'awaiting'
+    s.state = next
+    flagUnseen(s)
+    if (entering && s.id !== activeId) onAwait?.(s)
+    return true
+  }
   function updateIndicators(s) {
-    const cls = 'dot ' + dotClass(s) + (s.unseen ? ' unseen' : '')
+    const base = dotClass(s)
+    // The spinner only animates while bytes are actively streaming (s.streaming).
+    // A 'working' pane whose output has paused shows a calm solid dot instead — the
+    // semantic state (and thus the fleet count) is unchanged; only the ring stops.
+    const streaming = s.streaming && (base === 'working' || base === 'activity')
+    const cls = 'dot ' + base + (s.unseen ? ' unseen' : '') + (streaming ? ' streaming' : '')
     s.tabDot.className = cls
     s.cellDot.className = cls
     s.stubDot.className = cls
@@ -514,14 +564,9 @@ export function createTerminals({ getRoot, onFleet }) {
     s.activity = false
     s.attention = false
     s.unseen = false // you're now looking at this pane — it's seen, stop nudging
-    // Focusing a pane that was flagged blocked means you're now dealing with it —
-    // drop the alarm so the dot stops pulsing; Layer A/B re-evaluates once it's
-    // quiet again. (Without this the blocked dot would survive until new output.)
-    if (s.status !== 'exited' && s.state === 'blocked') {
-      s.state = 'working'
-      s.summaryText = null
-      s.lastOutputAt = now() // fresh silence window so it doesn't instantly re-quiet
-    }
+    // Note: focusing an `awaiting` pane does NOT clear the state — it's still waiting
+    // for your input until you actually type. Dropping `unseen` just calms the
+    // come-look pulse to a steady dot; real input → output → `working` clears it.
     updateIndicators(s)
   }
 
@@ -614,11 +659,17 @@ export function createTerminals({ getRoot, onFleet }) {
       id, term, fit, cell, body: cellBody, tabEl, tabDot, tabLabel, cellLabel, cellDot, color,
       stub, stubDot, stubLabel,
       status: 'running', activity: false, attention: false, unseen: false, custom: false,
-      state: 'working', // pulse state: working|quiet|blocked|done|error|idle
-      // unseen: pane *entered* a settled state (blocked/done/error) while you were
+      // pulse state: working|quiet|awaiting|done|error|idle. A pane only starts
+      // "working" when something is genuinely running in it — an agent preset
+      // (command) auto-fires on open. A plain shell just sits at its prompt, so it
+      // starts idle and won't spin until the user actually uses it (see onData).
+      state: command ? 'working' : 'idle',
+      // unseen: pane *entered* a settled state (awaiting/done/error) while you were
       // looking elsewhere and you haven't opened it since — drives the "come look"
       // nudge on its indicator until clearFlags marks it seen.
       lastOutputAt: now(), // timestamp of last PTY output — drives the silence timer
+      streaming: false, // true while bytes are actively arriving — gates the spinner ring
+      streamTimer: null, // debounce handle that clears `streaming` after STREAM_IDLE_MS
       summaryText: null, // last Layer-B label (summary, or the pending question)
       lastSummaryHash: null, // hash of the last tail summarised — skip no-op repeats
       summarizing: false, // a Layer-B request is in flight for this pane
@@ -669,7 +720,7 @@ export function createTerminals({ getRoot, onFleet }) {
     term.onBell(() => {
       // The bell is the strongest "wants you" signal a program can send.
       s.attention = true
-      s.state = 'blocked'
+      setState(s, 'awaiting') // routes the edge (onAwait/unseen) like any other transition
       updateIndicators(s)
     })
     // Auto-title: catch the OSC 0/2 title ANY program emits (a shell with a
@@ -756,6 +807,7 @@ export function createTerminals({ getRoot, onFleet }) {
     if (!s) return
     clearTimeout(s.titleTimer)
     clearTimeout(s.submitTimer)
+    clearTimeout(s.streamTimer)
     resizeObserver.unobserve(s.body)
     dirty.delete(s)
     api.term.kill(id)
@@ -981,8 +1033,13 @@ export function createTerminals({ getRoot, onFleet }) {
     // Output means the pane is alive and working — reset the silence timer and drop
     // any stale pulse verdict so the label tracks live activity again.
     s.lastOutputAt = now()
+    // ...but a fresh, untouched shell only emits startup chrome — its prompt, or an
+    // auto-injected `cd … && clear` from cdInto(). That isn't work, so don't let it
+    // spin the indicator. Only a pane the user has driven (s.used) or an agent
+    // preset (!isShell) flips to working on output; the rest stays idle until used.
+    const startupNoise = s.isShell && !s.used
     let changed = false
-    if (s.state !== 'working') {
+    if (!startupNoise && s.state !== 'working') {
       s.state = 'working'
       s.attention = false
       s.unseen = false // fresh output: no longer a settled pane awaiting a look
@@ -994,6 +1051,30 @@ export function createTerminals({ getRoot, onFleet }) {
       s.activity = true
       changed = true
     }
+    // Drive the spinner off live byte flow: spin while output streams, stop
+    // STREAM_IDLE_MS after the last byte. The pane stays semantically 'working'
+    // (the QUIET_MS state machine is untouched) — only the ring tracks the stream.
+    // Skipped for startup chrome so a fresh shell's prompt never spins.
+    if (!startupNoise) {
+      if (!s.streaming) {
+        s.streaming = true
+        changed = true
+      }
+      clearTimeout(s.streamTimer)
+      s.streamTimer = setTimeout(() => {
+        s.streamTimer = null
+        s.streaming = false
+        // Output just settled — fast path: if an EXPLICIT prompt is on screen (y/N,
+        // password, permission, "proceed?"), call `awaiting` now rather than waiting
+        // out the full QUIET_MS window. Implicit/ambiguous rest is left to the tick.
+        if (s.status !== 'exited' && s.state !== 'awaiting' && hasAwaitPrompt(s)) {
+          setState(s, 'awaiting')
+          applyTitle(s)
+          summarize(s) // let Layer B label exactly what it's waiting on
+        }
+        updateIndicators(s)
+      }, STREAM_IDLE_MS)
+    }
     if (changed) updateIndicators(s)
   })
   api.term.onExit(({ id, exitCode }) => {
@@ -1002,6 +1083,8 @@ export function createTerminals({ getRoot, onFleet }) {
     s.status = 'exited'
     // A non-zero exit code is an error; 0 (or unknown) reads as a clean finish.
     s.state = exitCode ? 'error' : 'done'
+    clearTimeout(s.streamTimer) // an exited pane is settled — never leave it spinning
+    s.streaming = false
     flagUnseen(s) // finished while you may be elsewhere — nudge until you look
     updateIndicators(s)
     s.tabEl.classList.add('exited')
@@ -1056,24 +1139,26 @@ export function createTerminals({ getRoot, onFleet }) {
     if (!res || !res.state) return // failed/empty: leave the hash unset so we retry
     // Only apply if the pane is STILL the candidate we asked about. A stale verdict
     // must not overwrite a pane that has since produced output (working), exited
-    // (done/error), or already settled (idle). quiet and blocked are the awaiting
+    // (done/error), or already settled (idle). quiet and awaiting are the resting
     // states a verdict may refine.
     if (s.status === 'exited') return
-    // Normally only quiet/blocked panes accept a verdict; a user-submit refresh (force)
+    // Normally only quiet/awaiting panes accept a verdict; a user-submit refresh (force)
     // also applies to a 'working' pane so the label updates the moment a new turn starts.
-    if (!force && s.state !== 'quiet' && s.state !== 'blocked') return
+    if (!force && s.state !== 'quiet' && s.state !== 'awaiting') return
     s.lastSummaryHash = h // commit only now that a verdict is actually applied
-    s.state = res.state
-    flagUnseen(s) // a model verdict just settled this pane — nudge if you're away
+    setState(s, res.state) // routes the working→awaiting edge if the model just called rest
     const label = res.question ? `⏳ ${res.question}` : res.summary
     s.summaryText = label && label.trim() ? label.trim() : null
     applyTitle(s)
     updateIndicators(s)
   }
-  // Layer A tick: flip working -> quiet after silence (kicking off a Layer-B
-  // summary); keep refining quiet/blocked candidates as their screen changes; and
-  // settle a long-silent quiet pane to idle. The hash + in-flight guards in
-  // summarize() mean re-calling it every tick only hits the model on a real change.
+  // Layer A tick: a working pane that's gone byte-silent past QUIET_MS has come to
+  // rest — classify it. An explicit prompt or a full-screen TUI (alternate buffer)
+  // ⇒ `awaiting` (the resting state); anything else ⇒ `quiet`, handed to Layer B to
+  // call. Then keep refining quiet/awaiting candidates as their screen changes, and
+  // settle a long-silent *quiet* pane to idle (awaiting stays sticky — it's still
+  // your move). The hash + in-flight guards in summarize() mean re-calling it every
+  // tick only hits the model on a real change.
   setInterval(() => {
     const t = now()
     for (const s of sessions.values()) {
@@ -1081,10 +1166,18 @@ export function createTerminals({ getRoot, onFleet }) {
       const quietFor = t - s.lastOutputAt
       if (quietFor < QUIET_MS) continue
       if (s.state === 'working') {
-        s.state = 'quiet'
+        const atRest = hasAwaitPrompt(s) || s.term.buffer.active.type === 'alternate'
+        setState(s, atRest ? 'awaiting' : 'quiet')
+        applyTitle(s)
         updateIndicators(s)
-        summarize(s)
-      } else if (s.state === 'quiet' || s.state === 'blocked') {
+        summarize(s) // label what it's doing / waiting on
+      } else if (s.state === 'quiet' || s.state === 'awaiting') {
+        // A prompt may have appeared since it went quiet — upgrade to awaiting.
+        if (s.state === 'quiet' && hasAwaitPrompt(s)) {
+          setState(s, 'awaiting')
+          applyTitle(s)
+          updateIndicators(s)
+        }
         summarize(s) // let Layer B refine it (e.g. a completion bell that's really done)
         if (s.state === 'quiet' && quietFor >= IDLE_MS) {
           s.state = 'idle'
