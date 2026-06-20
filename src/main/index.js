@@ -92,6 +92,11 @@ app.whenReady().then(() => {
   registerPulse()
   registerShell()
 
+  // App version — read from the packaged app's manifest. Surfaced in the status
+  // bar so you can confirm at a glance which build is actually running (the
+  // version is auto-bumped by `npm run bump` on every pack/dist build).
+  ipcMain.handle('app:version', () => app.getVersion())
+
   // Open another window. Fresh so it starts at the welcome screen instead of
   // cloning the current folder. Driven by the renderer (titlebar button) and the
   // File ▸ New Window menu item below.

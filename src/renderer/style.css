@@ -763,6 +763,13 @@ body {
   color: var(--text-faint);
 }
 
+/* Build version — quietest item on the bar; just enough to confirm the build. */
+.status-version {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  opacity: 0.7;
+}
+
 /* ---------- Drag bars ---------- */
 .dragbar-v {
   width: 4px;

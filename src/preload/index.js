@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld('api', {
     }
   },
 
+  // App metadata — handler in src/main/index.js. version() resolves the running
+  // build's version string (auto-bumped on every pack/dist build).
+  app: {
+    version: () => ipcRenderer.invoke('app:version')
+  },
+
   // Windows — handler in src/main/index.js. Opens another, independent app window
   // (its own folder, terminals, and session) at the welcome screen.
   window: {

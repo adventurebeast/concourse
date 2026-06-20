@@ -10,6 +10,19 @@ export function createStatusBar({ onOpenScm } = {}) {
   const gitEl = document.getElementById('status-git')
   const fleetEl = document.getElementById('status-fleet')
   const clockEl = document.getElementById('status-clock')
+  const versionEl = document.getElementById('status-version')
+
+  // Build version — a quiet "vX.Y.Z" at the far right so you can confirm at a
+  // glance that the freshly-built app actually loaded (the version is auto-bumped
+  // on every pack/dist build). Resolved once at startup from the main process.
+  if (versionEl && window.api?.app?.version) {
+    window.api.app
+      .version()
+      .then((v) => {
+        if (v) versionEl.textContent = 'v' + v
+      })
+      .catch(() => {})
+  }
 
   // Clicking the git portion jumps to the Source Control view.
   if (onOpenScm) {

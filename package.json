@@ -9,8 +9,10 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "dist": "electron-vite build && electron-builder --mac",
-    "pack": "electron-vite build && electron-builder --mac --dir",
+    "bump": "npm version patch --no-git-tag-version",
+    "clean": "rm -rf out release",
+    "dist": "npm run bump && npm run clean && electron-vite build && electron-builder --mac",
+    "pack": "npm run bump && npm run clean && electron-vite build && electron-builder --mac --dir",
     "postinstall": "electron-rebuild -f -w node-pty"
   },
   "dependencies": {
