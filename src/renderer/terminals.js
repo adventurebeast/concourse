@@ -845,20 +845,22 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       sess.cell.classList.toggle('focused', on)
       sess.tabEl.classList.toggle('active', on)
     }
-    // In master-stack the active session IS the primary pane, so re-flow + refit
-    // every pane whose size just changed (the promoted one and the demoted one).
+    // In master-stack the active session IS the primary pane, so re-flow first so
+    // paneRole sees it as primary when the fit below runs.
     if (layout === 'stack') {
       applyStack()
-      fitAll()
       // The clicked tile just became the primary pane; focus on the next tick
-      // once the reflow/refit has settled so a single click lands the cursor
+      // once the reflow has settled so a single click lands the cursor
       // (same as album flow's centerOn).
       setTimeout(() => s.term.focus(), 0)
     }
     clearFlags(s)
-    s.fit.fit()
+    // Activation changed which pane is primary (and may have flipped one from
+    // hidden→visible). Re-fit whatever is primary once the layout settles; fitPane
+    // leaves previews/hidden panes untouched so their agents keep their width. Focus
+    // stays synchronous so typing lands immediately.
+    fitSoon()
     s.term.focus()
-    api.term.resize(id, s.term.cols, s.term.rows)
   }
 
   // ---- rename ----
@@ -966,20 +968,66 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   }
 
   // ---- fit ----
-  function fitAll() {
-    for (const s of sessions.values()) {
-      try {
-        s.fit.fit()
-        api.term.resize(s.id, s.term.cols, s.term.rows)
-      } catch {
-        /* not visible yet */
-      }
+  // A pane's ROLE in the current layout decides whether it drives its PTY size.
+  // Only a "primary" pane — the surface you actually work in — is fitted and has its
+  // size pushed to the PTY. A "preview" pane (a flow side-preview, a stack rail tile)
+  // is a small glanceable thumbnail: fitting it would SIGWINCH the agent down to ~15
+  // cols and reflow its output into a narrow column — and, worse, leave its scrollback
+  // wrapped narrow even after you promote it (xterm only reflows the live screen, not
+  // history). So previews keep the PTY at its last primary width and simply clip; the
+  // moment one is promoted it re-fits cleanly with its history intact. Hidden panes
+  // aren't measurable. This single rule keeps every layout — and every view we add
+  // later — from ever mangling an agent's display.
+  function paneRole(s) {
+    if (layout === 'tabs') return s.id === activeId ? 'primary' : 'hidden'
+    if (layout === 'grid') return 'primary' // every grid cell is a real working surface
+    if (layout === 'stack') return s.id === activeId ? 'primary' : 'preview'
+    if (layout === 'flow') {
+      if (s.cell.classList.contains('flow-center')) return 'primary'
+      if (s.cell.classList.contains('flow-prev') || s.cell.classList.contains('flow-next')) return 'preview'
+      return 'hidden'
+    }
+    return 'hidden'
+  }
+  // Low-level fit for ONE pane. Fits and pushes the new size to the PTY only when the
+  // pane is primary AND actually measurable (a hidden/0×0 body would push a bogus
+  // 1-row size). Every resize path funnels through here, so the primary-only rule
+  // can't be bypassed and previews are never dragged narrow.
+  function fitPane(s) {
+    if (paneRole(s) !== 'primary') return
+    if (!s.body.isConnected || s.body.clientWidth === 0 || s.body.clientHeight === 0) return
+    try {
+      s.fit.fit()
+      api.term.resize(s.id, s.term.cols, s.term.rows)
+    } catch {
+      /* measured mid-layout; the observer/settle tick will catch the final size */
     }
   }
+  // Fit every primary pane AFTER the browser has settled the new layout. Toggling
+  // layout classes doesn't reach final geometry until the next layout pass, so fitting
+  // synchronously measures a transient box — the root of the "squished into a narrow
+  // column" bug. Deferring one frame measures the settled size. Coalesced so a burst
+  // of layout calls costs a single pass; the per-pane ResizeObserver below is the
+  // continuous net (drags, window/font changes), this is the discrete "I just changed
+  // the layout" nudge.
+  let settleScheduled = false
+  function fitSoon() {
+    if (settleScheduled) return
+    settleScheduled = true
+    requestAnimationFrame(() => {
+      settleScheduled = false
+      for (const s of sessions.values()) fitPane(s)
+    })
+  }
+  // Public API kept stable for the callers in main.js (panel/editor toggles, splitter
+  // drag, restore). Both now mean the same thing — re-fit whatever is primary in the
+  // current layout once it settles. The old tabs-vs-all split is obsolete: paneRole
+  // already scopes the work correctly for every layout.
+  function fitAll() {
+    fitSoon()
+  }
   function fitActive() {
-    if (layout !== 'tabs') return fitAll()
-    const s = sessions.get(activeId)
-    if (s) s.fit.fit()
+    fitSoon()
   }
 
   // ---- auto-fit on ANY size change ----
@@ -989,34 +1037,23 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   // next manual fit. A ResizeObserver on each pane's body removes that whole class of
   // bug: it fires whenever the element's box actually changes — the OS window
   // resizing, either splitter dragging, the sidebar toggling, a layout switch, the
-  // monospace font finishing loading — and we refit + push the new size to the PTY
-  // (which SIGWINCHes the program so Claude repaints). Callbacks are coalesced through
-  // rAF so a drag (a burst of size changes) costs at most one fit per frame per pane.
+  // monospace font finishing loading — and we re-fit the PRIMARY panes (fitPane skips
+  // previews/hidden, so a pane shrinking into a preview slot never drags its agent
+  // narrow). Callbacks are coalesced through rAF so a drag (a burst of size changes)
+  // costs at most one fit per frame per pane.
   const dirty = new Set()
   let fitScheduled = false
   function flushFits() {
     fitScheduled = false
     const batch = [...dirty]
     dirty.clear()
-    for (const s of batch) refit(s)
+    for (const s of batch) fitPane(s)
   }
   function scheduleRefit(s) {
     dirty.add(s)
     if (fitScheduled) return
     fitScheduled = true
     requestAnimationFrame(flushFits)
-  }
-  function refit(s) {
-    // A hidden pane (inactive tab, off-screen flow neighbour, panel toggled off)
-    // reports a 0×0 body; fitting it would push a bogus 1-row size to the PTY. Skip —
-    // activate()/applyLayout() fit it the moment it becomes visible again.
-    if (!s.body.isConnected || s.body.clientWidth === 0 || s.body.clientHeight === 0) return
-    try {
-      s.fit.fit()
-      api.term.resize(s.id, s.term.cols, s.term.rows)
-    } catch {
-      /* measured mid-layout; the next observer tick will catch the settled size */
-    }
   }
   const resizeObserver = new ResizeObserver((entries) => {
     for (const entry of entries) {

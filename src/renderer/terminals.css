@@ -265,7 +265,12 @@
   flex: 0 0 clamp(130px, 17%, 260px);
   opacity: 0.55;
   cursor: pointer;
-  transition: opacity 0.12s ease, flex-basis 0.12s ease;
+  /* Only opacity transitions — NOT flex-basis. Animating the side widths would mean
+     the centre pane's width is still changing for 120ms after the switch, so a fit
+     measured in that window lands on a transient size (the old "squished" bug). With
+     no geometry transition the layout settles in a single frame and the centre fits
+     to its final width at once. */
+  transition: opacity 0.12s ease;
 }
 #term-panes.flow .flow-prev:hover,
 #term-panes.flow .flow-next:hover {

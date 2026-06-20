@@ -1,70 +1,41 @@
 <!doctype html><html><head><meta charset="utf-8"><style>
  body{margin:0;background:#23262e;display:flex;gap:48px;align-items:center;justify-content:center;height:100vh;
       font:13px -apple-system,system-ui,sans-serif;}
- .wrap{display:flex;flex-direction:column;align-items:center;}
- .cap{color:#cfd3da;margin-top:14px;}
+ .wrap{display:flex;flex-direction:column;align-items:center;} .cap{color:#cfd3da;margin-top:14px;}
 </style></head><body>
 <script>
-// One-point-perspective concourse: four faceted walls receding to a glowing
-// opening at infinity, with a tapering runway centerline leading into it.
-// Outer frame (near) corners and inner rect (far / vanishing opening):
 const O={tl:[70,70],tr:[954,70],br:[954,954],bl:[70,954]};
-const I={tl:[452,430],tr:[572,430],br:[572,520],bl:[452,520]};
+const I={tl:[440,438],tr:[584,438],br:[584,524],bl:[440,524]};
 const P=a=>a.join(',');
-function art(id, pal){
+function art(id,pal){
  const g=(gid,x1,y1,x2,y2,c0,c1)=>`<linearGradient id="${gid}${id}" gradientUnits="userSpaceOnUse" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"><stop offset="0" stop-color="${c0}"/><stop offset="1" stop-color="${c1}"/></linearGradient>`;
- // dashes up the centerline (x=512), big->small toward the opening
- const dashes=[[884,46,40],[804,37,31],[736,29,24],[678,22,18],[632,16,13],[596,12,10],[566,9,7]]
-   .map(([y,w,h])=>`<rect x="${512-w/2}" y="${y}" width="${w}" height="${h}" rx="${Math.max(2,h*0.28)}" fill="${pal.dash}"/>`).join('');
+ const dashes=[[884,46,40],[806,36,30],[742,28,23],[688,21,17],[644,15,12],[610,11,9]]
+   .map(([y,w,h])=>`<rect x="${512-w/2}" y="${y}" width="${w}" height="${h}" fill="${pal.dash}"/>`).join('');
+ const L=`stroke="${pal.line}" stroke-width="5" stroke-linejoin="round"`;
  return `
 <svg viewBox="0 0 1024 1024" width="232" height="232" xmlns="http://www.w3.org/2000/svg">
  <defs>
    <clipPath id="sq${id}"><rect x="40" y="40" width="944" height="944" rx="212"/></clipPath>
-   ${g('cei',512,70,512,430, pal.cei0,pal.cei1)}
-   ${g('flo',512,954,512,520, pal.flo0,pal.flo1)}
-   ${g('lft',70,512,452,512, pal.lft0,pal.lft1)}
-   ${g('rgt',954,512,572,512, pal.rgt0,pal.rgt1)}
-   <radialGradient id="open${id}" cx=".5" cy=".45" r=".75">
-     <stop offset="0" stop-color="${pal.open0}"/><stop offset="1" stop-color="${pal.open1}"/></radialGradient>
-   <radialGradient id="glow${id}" cx=".5" cy=".5" r=".5">
-     <stop offset="0" stop-color="${pal.glow}" stop-opacity=".9"/><stop offset="1" stop-color="${pal.glow}" stop-opacity="0"/></radialGradient>
-   <filter id="ds${id}" x="-30%" y="-30%" width="160%" height="160%">
-     <feDropShadow dx="0" dy="14" stdDeviation="22" flood-color="#000" flood-opacity=".55"/></filter>
+   ${g('cei',512,70,512,438,pal.cei0,pal.cei1)}
+   ${g('flo',512,954,512,524,pal.flo0,pal.flo1)}
+   ${g('lft',70,512,440,512,pal.lft0,pal.lft1)}
+   ${g('rgt',954,512,584,512,pal.rgt0,pal.rgt1)}
  </defs>
- <g filter="url(#ds${id})"><rect x="40" y="40" width="944" height="944" rx="212" fill="${pal.tile}"/></g>
  <g clip-path="url(#sq${id})">
    <rect x="40" y="40" width="944" height="944" fill="${pal.tile}"/>
-   <!-- ceiling / floor / walls -->
-   <polygon points="${P(O.tl)} ${P(O.tr)} ${P(I.tr)} ${P(I.tl)}" fill="url(#cei${id})"/>
-   <polygon points="${P(O.bl)} ${P(O.br)} ${P(I.br)} ${P(I.bl)}" fill="url(#flo${id})"/>
-   <polygon points="${P(O.tl)} ${P(I.tl)} ${P(I.bl)} ${P(O.bl)}" fill="url(#lft${id})"/>
-   <polygon points="${P(O.tr)} ${P(I.tr)} ${P(I.br)} ${P(O.br)}" fill="url(#rgt${id})"/>
-   <!-- soft glow pooling at the opening -->
-   <ellipse cx="512" cy="468" rx="240" ry="170" fill="url(#glow${id})"/>
-   <!-- centerline leading in -->
+   <polygon points="${P(O.tl)} ${P(O.tr)} ${P(I.tr)} ${P(I.tl)}" fill="url(#cei${id})" ${L}/>
+   <polygon points="${P(O.bl)} ${P(O.br)} ${P(I.br)} ${P(I.bl)}" fill="url(#flo${id})" ${L}/>
+   <polygon points="${P(O.tl)} ${P(I.tl)} ${P(I.bl)} ${P(O.bl)}" fill="url(#lft${id})" ${L}/>
+   <polygon points="${P(O.tr)} ${P(I.tr)} ${P(I.br)} ${P(O.br)}" fill="url(#rgt${id})" ${L}/>
    ${dashes}
-   <!-- the bright opening at infinity -->
-   <rect x="452" y="430" width="120" height="90" rx="10" fill="url(#open${id})"/>
-   <!-- crisp facet seams -->
-   <g stroke="${pal.seam}" stroke-width="2.5" fill="none" opacity=".5">
-     <line x1="${O.tl[0]}" y1="${O.tl[1]}" x2="${I.tl[0]}" y2="${I.tl[1]}"/>
-     <line x1="${O.tr[0]}" y1="${O.tr[1]}" x2="${I.tr[0]}" y2="${I.tr[1]}"/>
-     <line x1="${O.bl[0]}" y1="${O.bl[1]}" x2="${I.bl[0]}" y2="${I.bl[1]}"/>
-     <line x1="${O.br[0]}" y1="${O.br[1]}" x2="${I.br[0]}" y2="${I.br[1]}"/>
-   </g>
-   <!-- top inner highlight -->
-   <rect x="40" y="40" width="944" height="6" fill="#fff" opacity=".10"/>
+   <rect x="${I.tl[0]}" y="${I.tl[1]}" width="${I.tr[0]-I.tl[0]}" height="${I.bl[1]-I.tl[1]}" fill="${pal.open}" ${L}/>
  </g>
 </svg>`;}
-const GRAPHITE={tile:'#181818',cei0:'#cfcfcf',cei1:'#a6a6a6',flo0:'#6c6c6c',flo1:'#9a9a9a',
-  lft0:'#7c7c7c',lft1:'#a0a0a0',rgt0:'#525252',rgt1:'#767676',open0:'#fbfbfb',open1:'#c4c4c4',
-  glow:'#ffffff',dash:'#f4f4f4',seam:'#000000'};
-const GRAPHITE_BLUE={tile:'#161616',cei0:'#c7c7c7',cei1:'#9c9c9c',flo0:'#646464',flo1:'#8f8f8f',
-  lft0:'#737373',lft1:'#969696',rgt0:'#4c4c4c',rgt1:'#6e6e6e',open0:'#eaf4ff',open1:'#5aa0f0',
-  glow:'#bcdcff',dash:'#f4f4f4',seam:'#000000'};
-const BLUE={tile:'#0e1726',cei0:'#5f93dc',cei1:'#3a6bb6',flo0:'#163a68',flo1:'#2b5f9e',
-  lft0:'#27518c',lft1:'#3a6bb0',rgt0:'#102b50',rgt1:'#1d406f',open0:'#f4faff',open1:'#9cc6f5',
-  glow:'#dcebff',dash:'#ffffff',seam:'#06101f'};
+// flatter facets (less gradient range) so the borders carry the isometric read
+const DARK={tile:'#181818',cei0:'#c4c4c4',cei1:'#aeaeae',flo0:'#7a7a7a',flo1:'#8c8c8c',
+  lft0:'#8e8e8e',lft1:'#9c9c9c',rgt0:'#5e5e5e',rgt1:'#6c6c6c',open:'#efefef',dash:'#f4f4f4',line:'#141414'};
+const LIGHT={tile:'#181818',cei0:'#c4c4c4',cei1:'#aeaeae',flo0:'#7a7a7a',flo1:'#8c8c8c',
+  lft0:'#8e8e8e',lft1:'#9c9c9c',rgt0:'#5e5e5e',rgt1:'#6c6c6c',open:'#efefef',dash:'#f4f4f4',line:'#e9e9e9'};
 function tile(id,label,p){return `<div class="wrap">${art(id,p)}<div class="cap">${label}</div></div>`;}
-document.write(tile('g','Graphite',GRAPHITE)+tile('gb','Graphite · blue gate',GRAPHITE_BLUE)+tile('b','Blue',BLUE));
+document.write(tile('d','Dark borders',DARK)+tile('l','Light borders',LIGHT));
 </script></body></html>
