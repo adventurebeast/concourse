@@ -1,4 +1,4 @@
-import { app, shell, ipcMain, BrowserWindow } from 'electron'
+import { app, shell, ipcMain, BrowserWindow, screen } from 'electron'
 import { join } from 'path'
 import { createContext } from './context.js'
 import { registerWorkspace } from './ipc-workspace.js'
@@ -13,7 +13,7 @@ import { registerSettings } from './ipc-settings.js'
 import { initSettings, getRaw } from './settings.js'
 import { createWatchers } from './watcher.js'
 import { installAppMenu } from './menu.js'
-import { flushSync } from './store-io.js'
+import { flushSync, readJson, writeJsonAtomic, enqueue, trackPending } from './store-io.js'
 
 const ctx = createContext()
 // Recursive fs watcher per window — keeps the file tree in sync with on-disk
@@ -23,6 +23,43 @@ const watchers = createWatchers()
 // Tears down the PTYs owned by one window (set once the PTY layer is registered).
 let killPtysForWindow = null
 
+// ---- Window bounds persistence --------------------------------------------
+// Remember the window size/position across launches (it reset to 1400x900 every
+// time). Stored in its own small file via the same crash-safe store as session;
+// restored only when still visible on a connected display (so unplugging an
+// external monitor can't strand the window off-screen).
+function windowStatePath() {
+  return join(app.getPath('userData'), 'window-state.json')
+}
+let savedBounds = null
+async function loadWindowState() {
+  const data = await readJson(windowStatePath(), null)
+  if (data && Number.isFinite(data.width) && Number.isFinite(data.height)) savedBounds = data
+}
+function boundsVisible(b) {
+  if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return false
+  return screen.getAllDisplays().some((d) => {
+    const w = d.workArea
+    return b.x < w.x + w.width && b.x + b.width > w.x && b.y < w.y + w.height && b.y + b.height > w.y
+  })
+}
+let boundsSaveTimer = null
+function persistBounds(win) {
+  if (win.isDestroyed() || win.isMinimized() || win.isFullScreen()) return
+  const data = { ...win.getBounds() }
+  trackPending(windowStatePath(), data) // so a quit before the async write still flushes
+  enqueue(() => writeJsonAtomic(windowStatePath(), data))
+}
+function trackWindowBounds(win) {
+  const schedule = () => {
+    if (boundsSaveTimer) clearTimeout(boundsSaveTimer)
+    boundsSaveTimer = setTimeout(() => persistBounds(win), 400)
+  }
+  win.on('resize', schedule)
+  win.on('move', schedule)
+  win.on('close', () => persistBounds(win))
+}
+
 // Create a window. `fresh` opens a blank window (straight to the welcome screen);
 // otherwise the renderer reopens the last session's folder. So "New Window" starts
 // empty (pick any folder), while the launch / dock-activate window restores where
@@ -30,9 +67,13 @@ let killPtysForWindow = null
 // scope themselves to the calling window via event.sender — so every window here
 // gets its own workspace root and its own terminals automatically.
 function createWindow({ fresh = false } = {}) {
+  // Restore the last window's size/position when it's still on a connected display;
+  // otherwise fall back to a centered 1400x900 (also the genuine first-run default).
+  const restore = !fresh && boundsVisible(savedBounds) ? savedBounds : null
   const win = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    width: restore ? restore.width : 1400,
+    height: restore ? restore.height : 900,
+    ...(restore ? { x: restore.x, y: restore.y } : {}),
     minWidth: 820,
     minHeight: 520,
     show: false,
@@ -43,6 +84,7 @@ function createWindow({ fresh = false } = {}) {
       sandbox: false
     }
   })
+  trackWindowBounds(win)
   // Capture the id now — after 'closed' the WebContents is gone.
   const wcId = win.webContents.id
 
@@ -142,6 +184,8 @@ app.whenReady().then(async () => {
   // synchronous getters (getRaw) and the new Settings window's background colour
   // reflect the persisted values from the first frame.
   await initSettings()
+  // Load the persisted window bounds before the first window is created.
+  await loadWindowState()
 
   registerWorkspace(ctx, watchers)
   registerFs(ctx)

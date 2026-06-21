@@ -1,3 +1,5 @@
+import { showToast } from './toast.js'
+
 // Bottom status bar: a single glanceable strip that ties together the three
 // things you otherwise have to go hunting for — the git state of the workspace
 // (left), the live pulse of the whole terminal fleet (right), and the time.
@@ -97,6 +99,10 @@ export function createStatusBar({ onOpenScm } = {}) {
   // There's no push event for provider state, so we poll pulse:status (which
   // re-resolves the backend on a short TTL, so a server started/stopped after
   // launch shows up here within a poll or two — the visible proof of auto-detect).
+  // Fire the "unreachable" toast only on the live→down edge, once per outage, so
+  // the 10s poll can't spam it. Reset when Pulse recovers or is turned off.
+  let pulseDownNotified = false
+
   function setPulse(s) {
     if (!pulseEl) return
     pulseEl.innerHTML = ''
@@ -104,6 +110,7 @@ export function createStatusBar({ onOpenScm } = {}) {
     // No provider resolved → Layer B is off. Say so quietly, so a user who
     // expected their local model can tell it isn't connected (vs. just silence).
     if (!s || !s.enabled) {
+      pulseDownNotified = false
       dot.className = 'pulse-dot off'
       pulseEl.appendChild(dot)
       pulseEl.appendChild(document.createTextNode('Pulse off'))
@@ -114,6 +121,16 @@ export function createStatusBar({ onOpenScm } = {}) {
     }
     const provider = s.provider || 'model'
     const live = !!s.reachable
+    // A configured provider that just went unreachable: notify once + offer Settings.
+    if (!live && !pulseDownNotified) {
+      pulseDownNotified = true
+      showToast(`Pulse can't reach ${provider} — using basic pane detection until it's back.`, {
+        kind: 'warn',
+        action: { label: 'Settings', onClick: () => window.api?.window?.openSettings?.() }
+      })
+    } else if (live) {
+      pulseDownNotified = false
+    }
     dot.className = 'pulse-dot ' + (live ? 'on' : 'warn')
     pulseEl.appendChild(dot)
     // provider · model when reachable; provider · "offline" when configured but down.

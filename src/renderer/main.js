@@ -10,6 +10,7 @@ import { createCommandPalette } from './commandPalette.js'
 import { createBeginnerHud } from './beginnerHud.js'
 import { createStatusBar } from './statusbar.js'
 import { icon } from './icons.js'
+import { showToastOnce } from './toast.js'
 
 const api = window.api
 
@@ -95,6 +96,27 @@ api.fs.onChanged(() => {
   git.refresh()
 })
 
+// Watcher health: if the recursive fs watcher degrades (an OS file-handle limit, a
+// transient error), live updates can stall. Tell the user once and offer a manual
+// Refresh; recovery to 'watching' is silent. (Was exposed in preload but unconsumed.)
+api.fs.onWatchStatus?.((status) => {
+  if (status === 'degraded') {
+    showToastOnce(
+      'File changes may not update automatically. Use Refresh if the tree looks stale.',
+      {
+        kind: 'warn',
+        action: {
+          label: 'Refresh',
+          onClick: () => {
+            fileTree.refresh()
+            git.refresh()
+          }
+        }
+      }
+    )
+  }
+})
+
 const search = createSearch({
   getRoot: () => currentRoot,
   // Open the file and jump to the matched line/column.
@@ -133,6 +155,22 @@ keys.register('mod+shift+right', () => terminals.stepActive(1))
 // stepping forward, so it reads spatially like prev/next.
 keys.register('mod+;', () => terminals.stepActive(-1))
 keys.register("mod+'", () => terminals.stepActive(1))
+// Cmd/Ctrl+[ / ] are a second alias for the same cycle, matching the
+// back/forward muscle memory the bracket keys carry across macOS ([ = back,
+// ] = forward). They defer to Monaco when an editor is focused so it keeps its
+// native outdent/indent (Cmd+[ / Cmd+]); everywhere else (terminals, panes)
+// they switch tabs. The .monaco-host guard is deliberately narrow: xterm holds
+// focus in its own helper <textarea>, so a generic input/textarea check would
+// wrongly disable switching while you're inside a terminal.
+const inEditor = () => !!document.activeElement?.closest('.monaco-host')
+keys.register('mod+[', () => {
+  if (inEditor()) return false
+  terminals.stepActive(-1)
+})
+keys.register('mod+]', () => {
+  if (inEditor()) return false
+  terminals.stepActive(1)
+})
 // Cmd/Ctrl+1..9 jump straight to the Nth terminal tab.
 for (let n = 1; n <= 9; n++) {
   keys.register(`mod+${n}`, () => terminals.activateIndex(n - 1))

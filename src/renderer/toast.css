@@ -1,0 +1,95 @@
+/* App-wide toast surface (see toast.js). Stacked bottom-right, above the status
+   bar, never blocking interaction. */
+#toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 38px;
+  z-index: 9000;
+  display: flex;
+  flex-direction: column-reverse; /* newest nearest the bottom */
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+  pointer-events: none; /* host is transparent to clicks; toasts re-enable below */
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #333);
+  background: var(--panel, #252526);
+  color: var(--text, #ddd);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.4);
+  font-size: 12.5px;
+  line-height: 1.4;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.toast.toast-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+.toast.toast-out {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+/* A colored left edge encodes severity without relying on color alone (an icon
+   glyph could be added later). */
+.toast-error {
+  border-left: 3px solid var(--red, #f14c4c);
+}
+.toast-warn {
+  border-left: 3px solid var(--orange, #cca700);
+}
+.toast-success {
+  border-left: 3px solid var(--green, #89d185);
+}
+.toast-info {
+  border-left: 3px solid var(--accent, #4daafc);
+}
+
+.toast-msg {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.toast-action {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--border, #444);
+  color: var(--accent, #4daafc);
+  border-radius: 5px;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.toast-action:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.toast-close {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--text-dim, #888);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  margin-left: 2px;
+  cursor: pointer;
+}
+.toast-close:hover {
+  color: var(--text, #ddd);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    transition: none;
+  }
+}
