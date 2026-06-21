@@ -12,7 +12,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 24 ships npm 11, matching the npm that generates package-lock.json
+          # locally. Node 20's npm 10 resolves vitest/vite's esbuild differently and
+          # rejects the npm-11 lock ("Missing @esbuild/* from lock file") under npm ci.
+          node-version: 24
           cache: npm
       # Skip the postinstall electron-rebuild: the unit tests cover the pure-Node
       # modules (store-io, paths, search-worker) and don't need the node-pty native
