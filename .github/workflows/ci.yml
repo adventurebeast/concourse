@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      # Skip the postinstall electron-rebuild: the unit tests cover the pure-Node
+      # modules (store-io, paths, search-worker) and don't need the node-pty native
+      # binary, so a native toolchain on the runner isn't required.
+      - name: Install
+        run: npm ci --ignore-scripts
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test
+
+# Build / sign / notarize / publish run on tagged releases and live in the
+# distribution epic (they need the Apple Developer cert + a macOS runner); this
+# workflow is the fast PR gate: lint + the unit-test safety net.
