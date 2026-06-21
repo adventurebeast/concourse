@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 ships npm 11, matching the npm that generates package-lock.json
+          # locally. Node 20's npm 10 resolves vitest/vite's esbuild differently and
+          # rejects the npm-11 lock ("Missing @esbuild/* from lock file") under npm ci.
+          node-version: 24
+          cache: npm
+      # Skip the postinstall electron-rebuild: the unit tests cover the pure-Node
+      # modules (store-io, paths, search-worker) and don't need the node-pty native
+      # binary, so a native toolchain on the runner isn't required.
+      - name: Install
+        run: npm ci --ignore-scripts
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test
+
+# Build / sign / notarize / publish run on tagged releases and live in the
+# distribution epic (they need the Apple Developer cert + a macOS runner); this
+# workflow is the fast PR gate: lint + the unit-test safety net.

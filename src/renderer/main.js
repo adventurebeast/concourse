@@ -10,6 +10,7 @@ import { createCommandPalette } from './commandPalette.js'
 import { createBeginnerHud } from './beginnerHud.js'
 import { createStatusBar } from './statusbar.js'
 import { icon } from './icons.js'
+import { showToastOnce } from './toast.js'
 
 const api = window.api
 
@@ -95,6 +96,27 @@ api.fs.onChanged(() => {
   git.refresh()
 })
 
+// Watcher health: if the recursive fs watcher degrades (an OS file-handle limit, a
+// transient error), live updates can stall. Tell the user once and offer a manual
+// Refresh; recovery to 'watching' is silent. (Was exposed in preload but unconsumed.)
+api.fs.onWatchStatus?.((status) => {
+  if (status === 'degraded') {
+    showToastOnce(
+      'File changes may not update automatically. Use Refresh if the tree looks stale.',
+      {
+        kind: 'warn',
+        action: {
+          label: 'Refresh',
+          onClick: () => {
+            fileTree.refresh()
+            git.refresh()
+          }
+        }
+      }
+    )
+  }
+})
+
 const search = createSearch({
   getRoot: () => currentRoot,
   // Open the file and jump to the matched line/column.
@@ -122,8 +144,9 @@ const keys = createKeybindings()
 // Cmd/Ctrl+R is also vetoed in the main process (menu accelerators fire first),
 // but keep a renderer veto too so the keystroke never leaks into a terminal.
 keys.register('mod+r', () => {})
-// Cmd/Ctrl+T opens a fresh terminal tab.
-keys.register('mod+t', () => terminals.create({}))
+// Cmd/Ctrl+T opens a fresh terminal tab. In beginner mode this offers the agent
+// launcher menu (Claude / Codex / plain shell); in expert it spawns a bare shell.
+keys.register('mod+t', () => terminals.newTab())
 // Shift+Cmd/Ctrl+Left / Right cycle the active terminal tab. A modifier is
 // required so plain arrow keys still reach the shell inside a terminal.
 keys.register('mod+shift+left', () => terminals.stepActive(-1))
@@ -133,6 +156,22 @@ keys.register('mod+shift+right', () => terminals.stepActive(1))
 // stepping forward, so it reads spatially like prev/next.
 keys.register('mod+;', () => terminals.stepActive(-1))
 keys.register("mod+'", () => terminals.stepActive(1))
+// Cmd/Ctrl+[ / ] are a second alias for the same cycle, matching the
+// back/forward muscle memory the bracket keys carry across macOS ([ = back,
+// ] = forward). They defer to Monaco when an editor is focused so it keeps its
+// native outdent/indent (Cmd+[ / Cmd+]); everywhere else (terminals, panes)
+// they switch tabs. The .monaco-host guard is deliberately narrow: xterm holds
+// focus in its own helper <textarea>, so a generic input/textarea check would
+// wrongly disable switching while you're inside a terminal.
+const inEditor = () => !!document.activeElement?.closest('.monaco-host')
+keys.register('mod+[', () => {
+  if (inEditor()) return false
+  terminals.stepActive(-1)
+})
+keys.register('mod+]', () => {
+  if (inEditor()) return false
+  terminals.stepActive(1)
+})
 // Cmd/Ctrl+1..9 jump straight to the Nth terminal tab.
 for (let n = 1; n <= 9; n++) {
   keys.register(`mod+${n}`, () => terminals.activateIndex(n - 1))
@@ -140,12 +179,15 @@ for (let n = 1; n <= 9; n++) {
 // Cmd/Ctrl+W closes the active terminal (routes through the confirm dialog).
 keys.register('mod+w', () => terminals.closeActive())
 keys.register('mod+k', () => palette.toggle())
-// Layout modes: a single cycler plus direct keys. tabs/grid/stack/flow sit on
-// the adjacent U I O P keys; Cmd+Shift+L taps through them in order.
+// Layout modes: a single cycler plus direct keys. tabs/grid/flow sit on the
+// adjacent U I P keys; Cmd+Shift+L taps through them in order. Stack uses
+// Cmd+Shift+O, not Cmd+O: the menu's "Open Folder…" claims Cmd+O, and menu
+// accelerators fire before the renderer ever sees the keystroke, so a plain
+// mod+o binding here would be permanently dead.
 keys.register('mod+shift+l', () => terminals.cycleLayout(1))
 keys.register('mod+u', () => terminals.setLayout('tabs'))
 keys.register('mod+i', () => terminals.setLayout('grid'))
-keys.register('mod+o', () => terminals.setLayout('stack'))
+keys.register('mod+shift+o', () => terminals.setLayout('stack'))
 keys.register('mod+p', () => terminals.setLayout('flow'))
 // Workbench toggles (VS Code conventions). These drive the existing toolbar
 // buttons so the .active states and resizers stay in sync.
@@ -519,6 +561,10 @@ const isFreshWindow = new URLSearchParams(location.search).get('fresh') === '1'
     if (root) {
       currentRoot = root
       setTitle(root)
+      // Mirror setWorkspace(): the boot/restore path must also seed the beginner
+      // HUD, or its render() early-returns (null root) and the heads-up line stays
+      // blank for a returning user — the default launch path in the default mode.
+      hud.setRoot(root)
       await fileTree.load(root)
       git.refresh()
       let blob = null

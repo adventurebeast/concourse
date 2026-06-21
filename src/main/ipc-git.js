@@ -2,7 +2,7 @@ import { ipcMain, shell } from 'electron'
 import { join } from 'path'
 import { promises as fs } from 'fs'
 import { simpleGit } from 'simple-git'
-import { confine, confineRel } from './paths.js'
+import { confineRel } from './paths.js'
 
 // Source-control IPC. A fresh simpleGit instance is created per call so the
 // workspace root can change at runtime. Every handler is wrapped so an
@@ -212,7 +212,10 @@ export function registerGit(ctx) {
       try {
         if (untracked.has(p)) {
           // Untracked: move to the system trash so the discard is recoverable.
-          await shell.trashItem(confine(root, p))
+          // `p` is repo-relative, so resolve it against `root` (confineRel) —
+          // confine() alone would path.resolve() it against process.cwd(), which
+          // in a packaged app is never the workspace (no-op or wrong-file trash).
+          await shell.trashItem(confineRel(root, p))
         } else {
           // Tracked: restore working tree to HEAD/index.
           await git.checkout(['--', p])

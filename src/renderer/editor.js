@@ -1,4 +1,5 @@
 import './editor.css'
+import { showToast } from './toast.js'
 import * as monaco from 'monaco-editor'
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker'
@@ -376,6 +377,17 @@ export function createEditor() {
       readOnly = true
     }
 
+    // A concurrent openFile(path) for the same not-yet-open path (fast double-click,
+    // or a reveal racing session-restore) may have created the tab while we awaited
+    // the read. Re-check before allocating a Monaco model — otherwise the second
+    // call leaks a model and orphans a duplicate, uncloseable tab.
+    const raced = tabs.get(key)
+    if (raced) {
+      activate(key)
+      if (opts.line) revealLine(opts.line, opts.column, opts.endColumn)
+      return
+    }
+
     // Read-only previews are plain text; only real text buffers get syntax lang.
     const model = monaco.editor.createModel(content, readOnly ? 'plaintext' : langForPath(path))
 
@@ -465,6 +477,10 @@ export function createEditor() {
     try {
       await api.fs.writeFile(tab.path, value)
     } catch (err) {
+      // Keep the tab dirty (the change is NOT on disk) and tell the user, instead
+      // of silently swallowing the failure.
+      const reason = (err && err.message) ? err.message : String(err)
+      showToast('Could not save ' + baseName(tab.path) + ': ' + reason, { kind: 'error' })
       return
     }
     setDirty(tab, false)

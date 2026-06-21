@@ -3,6 +3,13 @@ import './terminals.css'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { icon } from './icons.js'
+import { coachOnce } from './toast.js'
+
+// The one-time beginner coach mark that explains Pulse the first time a dot spins.
+// Fired from every path that starts an agent (launcher reuse, '+' preset, or a
+// user-driven shell going active) — coachOnce makes it once-ever regardless.
+const PULSE_COACH =
+  'That spinning dot is Pulse — it means the agent is working. It calms when the agent is done or waiting on you.'
 
 const api = window.api
 
@@ -54,7 +61,7 @@ export function createTerminals({ getRoot, onFleet }) {
   // agent's tokens/tool calls (its animated TUI keeps emitting frames) so it doesn't
   // flicker mid-turn, short enough that a finished command settles to a calm dot
   // promptly. See the PTY onData handler. Tune here if it feels twitchy/laggy.
-  const IDLE_AFTER_MS = 2000
+  const IDLE_AFTER_MS = 800
   // Layer B only runs when a provider is configured in main AND reachable (an
   // Anthropic key, or a live local OpenAI-compatible endpoint); without it the
   // deterministic Layer A still works. Queried once at startup — restart to pick up a
@@ -93,9 +100,9 @@ export function createTerminals({ getRoot, onFleet }) {
   const newTabBtn = document.createElement('button')
   newTabBtn.className = 'term-tab-add'
   newTabBtn.innerHTML = icon('plus', 14)
-  newTabBtn.title = 'New Terminal'
-  newTabBtn.dataset.tip = 'New Terminal'
-  newTabBtn.addEventListener('click', () => create({}))
+  newTabBtn.title = 'New terminal (⌘T)'
+  newTabBtn.dataset.tip = 'New terminal (⌘T)'
+  newTabBtn.addEventListener('click', () => newTab())
   tabBar.appendChild(newTabBtn)
 
   // ---- drag-to-reorder ----
@@ -254,6 +261,119 @@ export function createTerminals({ getRoot, onFleet }) {
       if (!menu.contains(e.target)) menu.remove()
     }
     setTimeout(() => document.addEventListener('mousedown', dismiss, { once: true }), 0)
+  }
+
+  // The new-tab affordance ('+' button and Cmd+T). In beginner mode it offers
+  // AGENTS, not a bare shell — so after the first agent the natural next move is a
+  // second one and the fleet actually forms. Expert mode is untouched: '+' spawns a
+  // plain shell exactly as before. Reuses the .term-menu floating-menu styling and
+  // the right-click menu's outside-click dismissal idiom.
+  function newTab() {
+    if (document.documentElement.dataset.mode === 'expert') return create({})
+    openNewTabMenu(newTabBtn)
+  }
+  function openNewTabMenu(anchorEl) {
+    const existing = document.getElementById('term-new-menu')
+    if (existing) {
+      existing.__close() // a second click on '+' toggles the menu shut
+      return
+    }
+    const menu = document.createElement('div')
+    menu.className = 'term-menu'
+    menu.id = 'term-new-menu'
+    // Persistent outside-click listener (not {once}) so clicking the menu's own
+    // padding doesn't consume it and leave the menu un-dismissable; cleaned up on close.
+    const onDown = (e) => {
+      if (!menu.contains(e.target) && e.target !== anchorEl) close()
+    }
+    const close = () => {
+      document.removeEventListener('mousedown', onDown, true)
+      document.removeEventListener('keydown', onKey, true)
+      menu.remove()
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') close()
+    }
+    menu.__close = close
+    // Claude is the anchor agent; Codex secondary; a plain shell is always one click
+    // away. The list is intentionally short and NOT a closed whitelist — anything
+    // you can type in a shell still works in the "Plain shell" option.
+    const items = [
+      { label: 'Run Claude Code', glyph: 'wand', run: () => create({ name: 'Claude', command: 'claude' }) },
+      { label: 'Run Codex', glyph: 'code', run: () => create({ name: 'Codex', command: 'codex' }) },
+      { label: 'Plain shell', glyph: 'terminal', run: () => create({ bare: true }) }
+    ]
+    for (const it of items) {
+      const row = document.createElement('div')
+      row.className = 'term-menu-item'
+      row.innerHTML = `<span class="tmi-icon">${icon(it.glyph, 13)}</span>${it.label}`
+      row.addEventListener('click', () => {
+        close()
+        it.run()
+      })
+      menu.append(row)
+    }
+    document.body.appendChild(menu)
+    const r = anchorEl.getBoundingClientRect()
+    menu.style.left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 8) + 'px'
+    menu.style.top = r.bottom + 4 + 'px'
+    setTimeout(() => {
+      document.addEventListener('mousedown', onDown, true)
+      document.addEventListener('keydown', onKey, true)
+    }, 0)
+  }
+
+  // ---- empty-pane agent launcher (beginner mode) ----
+  // A fresh, unused shell in beginner mode is a dead end for a newcomer: a mute
+  // prompt with no hint that the whole point is to run an agent here. This overlay
+  // turns that first pane into the moment they learn the core move — by doing it.
+  // Shown only on the FIRST pane (sessions.size 0 → 1), never on restored panes,
+  // never in expert. Dismissed the instant the user acts (a button, or typing into
+  // the pane); crucially NOT on PTY output, so the cd-into-folder chrome can't make
+  // it vanish before the user has chosen.
+  function mountPaneLauncher(s) {
+    const el = document.createElement('div')
+    el.className = 'pane-launcher'
+    const agentBtn = (glyph, label, command, primary) =>
+      `<button class="pl-btn${primary ? ' primary' : ''}" data-command="${command}">` +
+      `<span class="pl-btn-icon">${icon(glyph, 15)}</span>${label}</button>`
+    el.innerHTML =
+      `<div class="pane-launcher-card">` +
+      `<div class="pl-title">Launch an agent here</div>` +
+      `<div class="pl-sub">Concourse runs your CLI coding agents side by side. Start one in this pane:</div>` +
+      `<div class="pl-actions">` +
+      agentBtn('wand', 'Run Claude Code', 'claude', true) +
+      agentBtn('code', 'Run Codex', 'codex', false) +
+      `</div>` +
+      `<button class="pl-link" data-shell="1">Just open a shell</button>` +
+      `</div>`
+    el.querySelectorAll('.pl-btn').forEach((btn) => {
+      btn.addEventListener('click', () => launchAgentInPane(s, btn.dataset.command))
+    })
+    el.querySelector('.pl-link').addEventListener('click', () => {
+      dismissPaneLauncher(s)
+      s.term.focus()
+    })
+    s.body.appendChild(el)
+    s.launcher = el
+  }
+  function dismissPaneLauncher(s) {
+    if (!s.launcher) return
+    s.launcher.remove()
+    s.launcher = null
+  }
+  // Run an agent in an existing (empty) pane — the launcher's reuse path. Mirrors the
+  // create({command}) preset seam: mark used, spin the dot immediately for instant
+  // feedback, then send the command. A missing binary just prints "command not
+  // found" harmlessly, which is why the copy never promises success.
+  function launchAgentInPane(s, command) {
+    dismissPaneLauncher(s)
+    s.used = true
+    s.state = 'working'
+    updateIndicators(s) // spin the dot the instant they click — immediate feedback
+    if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
+    api.term.input(s.id, command + '\r')
+    s.term.focus()
   }
 
   // ---- confirmation before terminating a shell (no window.confirm) ----
@@ -517,6 +637,17 @@ export function createTerminals({ getRoot, onFleet }) {
     s.tabDot.className = cls
     s.cellDot.className = cls
     s.stubDot.className = cls
+    // A just-in-time reminder of what the dot means, on the pane's own dot — beginner
+    // only, so Expert stays a bare shell. The status-bar fleet count carries the full
+    // Pulse legend; this is just the hover gloss.
+    if (document.documentElement.dataset.mode !== 'expert') {
+      const tip = s.state === 'working' ? 'Working' : 'Waiting'
+      s.cellDot.dataset.tip = tip
+      s.tabDot.dataset.tip = tip
+    } else {
+      delete s.cellDot.dataset.tip
+      delete s.tabDot.dataset.tip
+    }
     emitFleet()
   }
 
@@ -537,8 +668,12 @@ export function createTerminals({ getRoot, onFleet }) {
   }
 
   // ---- create / destroy ----
-  function create({ name, command, label } = {}) {
+  function create({ name, command, label, bare, restored } = {}) {
     const id = 'term-' + ++counter
+    // Is this the first pane in an otherwise-empty workbench? Gates the one-time
+    // beginner launcher overlay so it only greets a genuinely fresh start, not every
+    // '+'-spawned shell.
+    const firstPane = sessions.size === 0
     // Beginner mode uses the plainest possible default ("Tab 1"); expert mode
     // keeps the conventional "shell N". A preset name (e.g. an agent) wins either way.
     // `label` is used verbatim (session restore) — it skips the counter suffix.
@@ -656,6 +791,20 @@ export function createTerminals({ getRoot, onFleet }) {
     resizeObserver.observe(cellBody)
     updateIndicators(s) // paint the initial working/idle dot
 
+    // Beginner-only empty-pane launcher: greet a brand-new user's first pane with
+    // "Launch an agent here" instead of a mute prompt. Never on restored panes
+    // (returning users), never on a preset (it's already running an agent), never
+    // when the user explicitly asked for a plain shell, never in expert.
+    if (
+      firstPane &&
+      !command &&
+      !bare &&
+      !restored &&
+      document.documentElement.dataset.mode !== 'expert'
+    ) {
+      mountPaneLauncher(s)
+    }
+
     // Beginner mode gets the calmer, friendlier shell prompt; expert mode is left bare.
     const friendlyPrompt = document.documentElement.dataset.mode !== 'expert'
     api.term.create(id, getRoot(), { friendlyPrompt })
@@ -675,6 +824,7 @@ export function createTerminals({ getRoot, onFleet }) {
     term.onData((data) => {
       s.used = true
       s.follow = true // typing means "show me what I'm typing" — re-engage sticky-bottom
+      if (s.launcher) dismissPaneLauncher(s) // typing into the pane = "I'll drive it myself"
       if (s.isShell) captureCommand(s, data)
       api.term.input(id, data)
     })
@@ -741,9 +891,25 @@ export function createTerminals({ getRoot, onFleet }) {
     else activate(id)
     refreshBranch() // warm the git-branch cache for the last-command heuristic
 
+    // Just-in-time layout teaching: the moment a beginner has TWO agents and is still
+    // in the single-pane tabs view, point them at Grid so they can watch both at once.
+    // Fires once ever (coachOnce persists across launches) — never nags, never expert,
+    // and never during a session restore (which recreates panes with restored:true).
+    if (
+      !restored &&
+      document.documentElement.dataset.mode !== 'expert' &&
+      sessions.size === 2 &&
+      layout === 'tabs'
+    ) {
+      coachOnce('grid', 'You have two agents now — press ⌘I to watch them side by side (Grid).')
+    }
+
     // Fire the preset command once the shell has settled (this counts as "used").
     if (command) {
       s.used = true
+      // A preset pane starts in the 'working' state, so it never crosses the
+      // idle→working edge that fires the Pulse coach in onData — explain it here too.
+      if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
       setTimeout(() => api.term.input(id, command + '\r'), 500)
     }
     return id
@@ -762,7 +928,7 @@ export function createTerminals({ getRoot, onFleet }) {
   // Recreate terminals from a snapshot. Returns true if anything was restored.
   function restore(state) {
     if (!state || !Array.isArray(state.tabs) || state.tabs.length === 0) return false
-    for (const t of state.tabs) create({ label: t && t.label })
+    for (const t of state.tabs) create({ label: t && t.label, restored: true })
     if (state.layout) setLayout(state.layout)
     if (Number.isInteger(state.active)) activateIndex(state.active)
     return true
@@ -1127,6 +1293,9 @@ export function createTerminals({ getRoot, onFleet }) {
       s.summaryText = null // live activity: drop the stale resting label
       applyTitle(s)
       updateIndicators(s)
+      // The first time a beginner ever sees a dot start spinning, explain it — Pulse
+      // finally names itself at the exact moment it has meaning. Once ever, never expert.
+      if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
     }
     clearTimeout(s.idleTimer)
     s.idleTimer = setTimeout(() => {
@@ -1311,5 +1480,5 @@ export function createTerminals({ getRoot, onFleet }) {
     }
   }
 
-  return { create, fitActive, fitAll, setLayout, setTheme, applySettings, cdInto, typeIntoActive, stepActive, activateIndex, cycleLayout, closeActive, getState, restore, dispose }
+  return { create, newTab, fitActive, fitAll, setLayout, setTheme, applySettings, cdInto, typeIntoActive, stepActive, activateIndex, cycleLayout, closeActive, getState, restore, dispose }
 }

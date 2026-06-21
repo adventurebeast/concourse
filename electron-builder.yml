@@ -9,9 +9,11 @@ files:
   - out/**/*
   - package.json
 # node-pty is a native module: it must live outside the asar archive so the
-# compiled .node binary can be dlopen'd at runtime.
+# compiled .node binary can be dlopen'd at runtime. The search worker is unpacked
+# too so worker_threads can load it as a plain file (no in-asar Worker quirks).
 asarUnpack:
   - "**/node_modules/node-pty/**"
+  - "out/main/search-worker.js"
 mac:
   category: public.app-category.developer-tools
   target:

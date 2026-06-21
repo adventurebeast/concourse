@@ -44,6 +44,36 @@
   color: var(--text-faint);
 }
 
+/* Static "how it works" — the three-step fleet loop, so a first-time visitor
+   knows what Concourse is for before they even open a folder. Plain text by
+   design (no carousel/animation) to stay on-brand. */
+.welcome-how {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 0 4px;
+}
+.welcome-how-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.welcome-how-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--hover);
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .welcome-section {
   display: flex;
   flex-direction: column;

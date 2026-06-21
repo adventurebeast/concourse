@@ -1,4 +1,7 @@
-import { Menu, BrowserWindow } from 'electron'
+import { Menu, BrowserWindow, shell } from 'electron'
+
+// Project links for the Help menu (derived from the git remote).
+const REPO_URL = 'https://github.com/adventurebeast/concourse'
 
 // Forward a command to a window's renderer — the menu item's own window, falling
 // back to the focused one. The renderer maps it onto the SAME action as the
@@ -100,12 +103,27 @@ export function installAppMenu({ onNewWindow, onOpenSettings }) {
     ]
   }
 
+  // Help menu — the standard slot a Mac/Windows user looks in. External links open
+  // in the browser (setWindowOpenHandler already routes external URLs). No
+  // Check-for-Updates yet: a dead updater button is worse than none, so it lands
+  // with the auto-update epic, not before.
+  const helpMenu = {
+    role: 'help',
+    submenu: [
+      { label: 'Documentation', click: () => shell.openExternal(REPO_URL + '#readme') },
+      { label: 'Report an Issue…', click: () => shell.openExternal(REPO_URL + '/issues/new') },
+      { type: 'separator' },
+      { label: 'View Source on GitHub', click: () => shell.openExternal(REPO_URL) }
+    ]
+  }
+
   const template = [
     ...(isMac ? [appMenu] : []),
     fileMenu,
     { role: 'editMenu' },
     viewMenu,
-    windowMenu
+    windowMenu,
+    helpMenu
   ]
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))

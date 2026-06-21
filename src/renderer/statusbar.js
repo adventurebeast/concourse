@@ -1,3 +1,5 @@
+import { showToast } from './toast.js'
+
 // Bottom status bar: a single glanceable strip that ties together the three
 // things you otherwise have to go hunting for — the git state of the workspace
 // (left), the live pulse of the whole terminal fleet (right), and the time.
@@ -88,8 +90,53 @@ export function createStatusBar({ onOpenScm } = {}) {
     }
     fleetEl.title =
       `${total} terminal${total === 1 ? '' : 's'}` +
-      (tipParts.length ? ' · ' + tipParts.join(', ') : '')
+      (tipParts.length ? ' · ' + tipParts.join(', ') : '') +
+      ' · click for legend'
   }
+
+  // ---- Pulse legend (click the fleet count) -------------------------------
+  // The fleet count is the one always-visible Pulse surface; clicking it explains
+  // what the dots, colours, and one-line labels mean — a canonical, pull-not-push
+  // reference the just-in-time coach marks point back to. Click-only; never auto-pops.
+  let legendEl = null
+  function closeLegend() {
+    if (!legendEl) return
+    legendEl.remove()
+    legendEl = null
+    document.removeEventListener('mousedown', onDocDown, true)
+    document.removeEventListener('keydown', onKey, true)
+  }
+  function onDocDown(e) {
+    if (legendEl && !legendEl.contains(e.target) && !fleetEl.contains(e.target)) closeLegend()
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') closeLegend()
+  }
+  function toggleLegend() {
+    if (legendEl) return closeLegend()
+    legendEl = document.createElement('div')
+    legendEl.className = 'pulse-legend'
+    legendEl.innerHTML =
+      '<div class="pulse-legend-title">Pulse</div>' +
+      '<div class="leg-row"><i class="fleet-dot working"></i><span>Spinning ring — the agent is working</span></div>' +
+      '<div class="leg-row"><i class="fleet-dot idle"></i><span>Calm dot — quiet, or waiting on you</span></div>' +
+      '<div class="leg-row"><span class="leg-swatch"></span><span>Each colour marks one agent — across every layout</span></div>' +
+      '<div class="leg-row"><span class="leg-chip">abc</span><span>Labels summarise what a pane is doing (needs a model backend)</span></div>'
+    document.body.appendChild(legendEl)
+    const r = fleetEl.getBoundingClientRect()
+    const bar = document.getElementById('status-bar').getBoundingClientRect()
+    legendEl.style.left =
+      Math.max(8, Math.min(r.left, window.innerWidth - legendEl.offsetWidth - 8)) + 'px'
+    legendEl.style.bottom = window.innerHeight - bar.top + 6 + 'px'
+    // Defer so this same click doesn't immediately close it via the doc listener.
+    setTimeout(() => {
+      document.addEventListener('mousedown', onDocDown, true)
+      document.addEventListener('keydown', onKey, true)
+    }, 0)
+  }
+  fleetEl.classList.add('status-action')
+  fleetEl.style.cursor = 'pointer'
+  fleetEl.addEventListener('click', toggleLegend)
 
   // ---- pulse (Layer B summariser) -----------------------------------------
   // A quiet chip showing which model backend is turning quiet panes into
@@ -97,6 +144,10 @@ export function createStatusBar({ onOpenScm } = {}) {
   // There's no push event for provider state, so we poll pulse:status (which
   // re-resolves the backend on a short TTL, so a server started/stopped after
   // launch shows up here within a poll or two — the visible proof of auto-detect).
+  // Fire the "unreachable" toast only on the live→down edge, once per outage, so
+  // the 10s poll can't spam it. Reset when Pulse recovers or is turned off.
+  let pulseDownNotified = false
+
   function setPulse(s) {
     if (!pulseEl) return
     pulseEl.innerHTML = ''
@@ -104,6 +155,7 @@ export function createStatusBar({ onOpenScm } = {}) {
     // No provider resolved → Layer B is off. Say so quietly, so a user who
     // expected their local model can tell it isn't connected (vs. just silence).
     if (!s || !s.enabled) {
+      pulseDownNotified = false
       dot.className = 'pulse-dot off'
       pulseEl.appendChild(dot)
       pulseEl.appendChild(document.createTextNode('Pulse off'))
@@ -114,6 +166,16 @@ export function createStatusBar({ onOpenScm } = {}) {
     }
     const provider = s.provider || 'model'
     const live = !!s.reachable
+    // A configured provider that just went unreachable: notify once + offer Settings.
+    if (!live && !pulseDownNotified) {
+      pulseDownNotified = true
+      showToast(`Pulse can't reach ${provider} — using basic pane detection until it's back.`, {
+        kind: 'warn',
+        action: { label: 'Settings', onClick: () => window.api?.window?.openSettings?.() }
+      })
+    } else if (live) {
+      pulseDownNotified = false
+    }
     dot.className = 'pulse-dot ' + (live ? 'on' : 'warn')
     pulseEl.appendChild(dot)
     // provider · model when reachable; provider · "offline" when configured but down.

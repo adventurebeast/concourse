@@ -10,9 +10,29 @@ import { confine } from './paths.js'
 // under userData (not the world-readable os.tmpdir()) with 0o700 so another local
 // user can't read or pre-create our init files, and we use randomUUID filenames
 // so the paths aren't predictable/guessable.
+let rcCleaned = false
 function rcDir() {
   const dir = path.join(app.getPath('userData'), 'pty-rc')
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  // One-time purge of rc/init files left by previous app runs. The memo map that
+  // tracks "already generated this run" (promptSetupByShell) is process-scoped and
+  // empty at startup, so nothing in THIS process needs the old files yet — this
+  // runs before the first rc file is written. Without it pty-rc grows by a file/dir
+  // per launch forever.
+  if (!rcCleaned) {
+    rcCleaned = true
+    try {
+      for (const name of fs.readdirSync(dir)) {
+        try {
+          fs.rmSync(path.join(dir, name), { recursive: true, force: true })
+        } catch {
+          // ignore an entry we can't remove
+        }
+      }
+    } catch {
+      // ignore — dir just created / unreadable
+    }
+  }
   return dir
 }
 

@@ -1,5 +1,39 @@
 # Concourse Audit — RESUME HERE
 
+> ### ⏩ 2026-06-21 update — SUPERSEDES the "Where we are" section below
+>
+> The tree has moved well past the 2026-06-20 checkpoint. Two things changed:
+>
+> **1. The settings layer is BUILT (PR-A is essentially done).** `src/main/{settings.js,settings-schema.js,
+> ipc-settings.js}` + `src/renderer/{settings.js,settings.html,settings.css}` exist and are wired
+> (`initSettings()` awaited in `index.js`; Settings is a **separate BrowserWindow** loading `settings.html`,
+> not the in-app overlay the plan suggested). The "Wave 1/2 applied, uncommitted" framing below is stale —
+> all of it plus the settings layer is COMMITTED (commit `8ad1182`).
+>
+> **2. Phase 1 "debug & de-risk" ran 2026-06-21 (build+launch granted) and is COMPLETE.** Two bounded
+> adversarial bug-hunt waves (Wave A = 40 changed files + IPC contract, 19 agents; Wave B = untouched files +
+> integration, 11 agents; each finding refuted by skeptics) surfaced **11 confirmed bugs, all now fixed and
+> verified.** The app builds clean and boots clean (3 boot tests). Three pure-Node test harnesses pass (24
+> assertions): `docs/audit/.store-io-check.mjs` (8), `.paths-check.mjs` (11), `.search-worker-check.mjs` (5).
+>
+> | # | Severity | File | Fix |
+> |---|----------|------|-----|
+> | 1 | data-loss | `store-io.js`+`session.js`+`ipc-session.js` | `saveSync` now writes synchronously to disk (`writeJsonSync`), not staged into a map nothing drains after `before-quit` |
+> | 2 | security | `settings.js` | API keys encrypted at rest via `safeStorage`; cache stays plaintext for the resolver, disk gets `{enc}`; legacy plaintext auto-upgrades |
+> | 3 | correctness | `ipc-git.js` | `git:discard` of untracked file uses `confineRel` (resolves vs root, not `process.cwd()`) |
+> | 4 | leak | `ipc-pty.js` | stale pty-rc files purged once per process at startup |
+> | 5 | leak | `editor.js` | `openFile` re-checks for an existing tab after the async read |
+> | 6 | data-loss | `git.js` | commit message kept + error shown on failed commit (was wiped silently) |
+> | 7 | security | `ipc-search.js`+`search-worker.js` (NEW) | user regex runs in a **kill-on-timeout worker_threads Worker** — ReDoS can no longer freeze the app |
+> | 8 | correctness | `git.js` | stage/unstage/discard/init failures surfaced inline (were silent no-ops) |
+> | 9 | correctness | `main.js` | stack-layout hotkey moved `Cmd+O`→`Cmd+Shift+O` (Cmd+O was shadowed by the Open-Folder menu accelerator) |
+> | 10 | correctness | `main.js` | boot/restore path now calls `hud.setRoot()` so the beginner HUD isn't blank for returning users |
+> | 11 | minor | `settings.js` | `trackPending` hoisted out of the enqueued task so a quit mid-write still flushes |
+>
+> Build wiring also changed: `search-worker.js` is a 2nd main entry in `electron.vite.config.mjs` and
+> `asarUnpack`'d in `electron-builder.yml`. **Next:** Phase 2 (product surface — PR-C/D/E/F) then Phase 3
+> (CI/CD + fold the 3 harnesses into Vitest). Tree is uncommitted pending review.
+
 > Checkpoint saved 2026-06-20. Read this first to continue the audit-driven fix work.
 > Companion docs in this folder: `00-EXECUTIVE-SUMMARY.md`, reports `01`–`05`, `PLAN.md` (engineering
 > hardening — the sequenced fix plan with file:line targets), and `PRODUCTION-READINESS.md` (the road to a
