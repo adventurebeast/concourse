@@ -20,10 +20,12 @@ contextBridge.exposeInMainWorld('api', {
     version: () => ipcRenderer.invoke('app:version')
   },
 
-  // Windows — handler in src/main/index.js. Opens another, independent app window
-  // (its own folder, terminals, and session) at the welcome screen.
+  // Windows — handlers in src/main/index.js. open() spawns another independent app
+  // window (its own folder, terminals, and session) at the welcome screen;
+  // openSettings() opens (or focuses) the shared Settings window.
   window: {
-    open: () => ipcRenderer.send('window:open')
+    open: () => ipcRenderer.send('window:open'),
+    openSettings: () => ipcRenderer.send('window:openSettings')
   },
 
   // Application-menu commands (File ▸ New File / New Folder / Open Folder). The
@@ -53,7 +55,12 @@ contextBridge.exposeInMainWorld('api', {
     delete: (p) => ipcRenderer.invoke('fs:delete', p),
     // Write the bytes of a dropped, pathless item (e.g. an image dragged from a
     // web page) to a temp file and return its absolute path. See ipc-fs.js.
-    saveDrop: (name, type, bytes) => ipcRenderer.invoke('fs:saveDrop', name, type, bytes)
+    saveDrop: (name, type, bytes) => ipcRenderer.invoke('fs:saveDrop', name, type, bytes),
+    // The workspace watcher fired — something changed on disk outside the app.
+    // The renderer responds by refreshing the file tree. See src/main/watcher.js.
+    onChanged: (cb) => ipcRenderer.on('fs:changed', () => cb()),
+    // Watcher health ('watching' | 'degraded') so the UI can flag a stalled watcher.
+    onWatchStatus: (cb) => ipcRenderer.on('fs:watch-status', (_e, status) => cb(status))
   },
 
   // Git — handlers implemented in src/main/ipc-git.js (uses simple-git over the workspace root)
@@ -72,7 +79,11 @@ contextBridge.exposeInMainWorld('api', {
   session: {
     lastRoot: () => ipcRenderer.invoke('session:lastRoot'),
     load: (root) => ipcRenderer.invoke('session:load', root),
-    save: (root, blob) => ipcRenderer.invoke('session:save', root, blob)
+    save: (root, blob) => ipcRenderer.invoke('session:save', root, blob),
+    // Synchronous save for the beforeunload path: an async invoke can't be relied
+    // on to complete during unload, so this stages the blob for `root` in the main
+    // process (drained by the before-quit flush). Returns synchronously.
+    saveSync: (root, blob) => ipcRenderer.sendSync('session:saveSync', { root, blob })
   },
 
   // Text search — handler implemented in src/main/ipc-search.js (walks the workspace root)
@@ -102,5 +113,19 @@ contextBridge.exposeInMainWorld('api', {
   pulse: {
     status: () => ipcRenderer.invoke('pulse:status'),
     summarize: (payload) => ipcRenderer.invoke('pulse:summarize', payload)
+  },
+
+  // Settings — central user preferences, handlers in src/main/ipc-settings.js.
+  // schema() returns the grouped registry that drives the Settings UI; getAll()
+  // returns current values with secrets redacted (plus a secretsSet map); set()
+  // writes one key; reset() resets one key (or all when called with no key).
+  // onChanged() fires (in every window) whenever any setting changes, carrying the
+  // redacted snapshot so the workbench can re-theme / re-font itself live.
+  settings: {
+    schema: () => ipcRenderer.invoke('settings:schema'),
+    getAll: () => ipcRenderer.invoke('settings:getAll'),
+    set: (key, value) => ipcRenderer.invoke('settings:set', key, value),
+    reset: (key) => ipcRenderer.invoke('settings:reset', key),
+    onChanged: (cb) => ipcRenderer.on('settings:changed', (_e, payload) => cb(payload))
   }
 })

@@ -202,8 +202,12 @@ body {
 /* Minimized with documents open: collapse the editor down to just its tab strip
    so the tabs stay visible and clickable at the bottom. Clicking a tab activates
    it, which restores the editor via the onTabsChange wiring in main.js. */
+/* height needs !important: dragging the divider / restoring the session pins an
+   inline height on #editor-region, which would otherwise beat this rule and keep
+   the region full-size (showing an empty panel) instead of collapsing. The
+   inline height stays on the element, so un-minimizing restores it. */
 #main.terminals-only #editor-region {
-  height: auto;
+  height: auto !important;
   min-height: 0;
   flex: 0 0 auto;
 }
@@ -732,12 +736,6 @@ body {
   gap: 4px;
   font-variant-numeric: tabular-nums;
 }
-/* The "awaiting input" bucket — bold and in the alarm hue so it reads as the one
-   thing in the bar asking for action (see .fleet-dot.awaiting). */
-.fleet-stat.needs-you {
-  font-weight: 600;
-  color: var(--orange);
-}
 .fleet-dot {
   width: 7px;
   height: 7px;
@@ -748,23 +746,33 @@ body {
 .fleet-dot.working {
   background: var(--green);
 }
-.fleet-dot.quiet {
-  background: var(--yellow, #e3b341);
-}
-.fleet-dot.awaiting {
-  /* Steady amber: with a fleet, several panes can be awaiting at once — a pulsing bar
-     would be noise. The bold count + label (.needs-you) carry the emphasis instead. */
-  background: var(--orange);
-}
-.fleet-dot.done {
-  background: var(--green);
-  opacity: 0.65;
-}
-.fleet-dot.error {
-  background: var(--red);
-}
 .fleet-dot.idle {
   background: var(--text-faint);
+}
+
+/* Pulse — which model backend is producing Layer B pane summaries. Quiet meta:
+   a dot + provider·model. Green when connected, amber when configured-but-down,
+   faint when off. Mirrors the fleet-dot sizing for visual rhyme on the bar. */
+#status-pulse {
+  gap: 5px;
+  color: var(--text-faint);
+}
+.pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-faint);
+}
+.pulse-dot.on {
+  background: var(--green);
+}
+.pulse-dot.warn {
+  background: var(--orange);
+}
+.pulse-dot.off {
+  background: var(--text-faint);
+  opacity: 0.6;
 }
 
 #status-clock {

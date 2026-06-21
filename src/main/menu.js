@@ -23,9 +23,37 @@ function toRenderer(win, command) {
 //     a per-webContents guard also veto ⌘R).
 // The standard Edit roles are kept so cut/copy/paste/undo work in the search box,
 // rename field, and commit message on macOS.
-export function installAppMenu({ onNewWindow }) {
+export function installAppMenu({ onNewWindow, onOpenSettings }) {
   const isMac = process.platform === 'darwin'
   const isDev = !!process.env.ELECTRON_RENDERER_URL
+
+  // Settings… on the conventional ⌘, — opens (or focuses) the Settings window.
+  // On macOS it lives in the app menu (where "Preferences" belongs); on Windows /
+  // Linux it sits in the File menu.
+  const settingsItem = {
+    label: isMac ? 'Settings…' : 'Settings',
+    accelerator: 'CmdOrCtrl+,',
+    click: () => onOpenSettings && onOpenSettings()
+  }
+
+  // macOS app menu, customised so Settings… appears under "Concourse" alongside
+  // About / Quit (the default { role: 'appMenu' } has no Preferences entry).
+  const appMenu = {
+    label: 'Concourse',
+    submenu: [
+      { role: 'about' },
+      { type: 'separator' },
+      settingsItem,
+      { type: 'separator' },
+      { role: 'services' },
+      { type: 'separator' },
+      { role: 'hide' },
+      { role: 'hideOthers' },
+      { role: 'unhide' },
+      { type: 'separator' },
+      { role: 'quit' }
+    ]
+  }
 
   const fileMenu = {
     label: 'File',
@@ -36,6 +64,8 @@ export function installAppMenu({ onNewWindow }) {
       { label: 'New Folder', click: (_i, win) => toRenderer(win, 'new-folder') },
       { type: 'separator' },
       { label: 'Open Folder…', accelerator: 'CmdOrCtrl+O', click: (_i, win) => toRenderer(win, 'open-folder') },
+      // Non-mac: Settings lives here (no app menu to host it).
+      ...(isMac ? [] : [{ type: 'separator' }, settingsItem]),
       { type: 'separator' },
       // Close the window, but off ⌘W so the renderer keeps that for closing a terminal.
       { role: 'close', accelerator: 'CmdOrCtrl+Shift+W' },
@@ -46,6 +76,15 @@ export function installAppMenu({ onNewWindow }) {
   const viewMenu = {
     label: 'View',
     submenu: [
+      // Zoom the whole UI. These roles were lost when this custom menu replaced
+      // Electron's default View menu, which is why ⌘+/⌘-/⌘0 stopped working.
+      // The visible Zoom In sits on ⌘+ (Shift+=); the hidden twin also accepts
+      // ⌘= without Shift, so the bare +/= key zooms in like it does in a browser.
+      { role: 'resetZoom' },
+      { role: 'zoomIn' },
+      { role: 'zoomIn', accelerator: 'CmdOrCtrl+=', visible: false },
+      { role: 'zoomOut' },
+      { type: 'separator' },
       { role: 'togglefullscreen' },
       ...(isDev ? [{ type: 'separator' }, { role: 'toggleDevTools' }] : [])
     ]
@@ -62,7 +101,7 @@ export function installAppMenu({ onNewWindow }) {
   }
 
   const template = [
-    ...(isMac ? [{ role: 'appMenu' }] : []),
+    ...(isMac ? [appMenu] : []),
     fileMenu,
     { role: 'editMenu' },
     viewMenu,

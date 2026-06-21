@@ -1,7 +1,8 @@
-import { ipcMain } from 'electron'
+import { ipcMain, shell } from 'electron'
 import { join } from 'path'
 import { promises as fs } from 'fs'
 import { simpleGit } from 'simple-git'
+import { confine, confineRel } from './paths.js'
 
 // Source-control IPC. A fresh simpleGit instance is created per call so the
 // workspace root can change at runtime. Every handler is wrapped so an
@@ -84,6 +85,17 @@ export function registerGit(ctx) {
   // ---- diff -----------------------------------------------------------------
   ipcMain.handle('git:diff', async (e, relPath, staged = false) => {
     const root = ctx.getRoot(e.sender)
+    // No folder open — don't fall back to the process cwd.
+    if (!root) return { original: '', modified: '' }
+
+    // Confine the renderer-supplied path to the workspace before touching disk.
+    let safe
+    try {
+      safe = confineRel(root, relPath)
+    } catch {
+      return { original: '', modified: '' }
+    }
+
     const git = simpleGit(root)
 
     // original = HEAD blob
@@ -104,7 +116,7 @@ export function registerGit(ctx) {
       }
     } else {
       try {
-        modified = await fs.readFile(join(root, relPath), 'utf8')
+        modified = await fs.readFile(safe, 'utf8')
       } catch {
         modified = ''
       }
@@ -116,8 +128,20 @@ export function registerGit(ctx) {
   // ---- stage ----------------------------------------------------------------
   ipcMain.handle('git:stage', async (e, paths) => {
     try {
-      const git = simpleGit(ctx.getRoot(e.sender))
-      const list = Array.isArray(paths) ? paths : [paths]
+      const root = ctx.getRoot(e.sender)
+      // No folder open — don't fall back to the process cwd.
+      if (!root) return false
+      const git = simpleGit(root)
+      const raw = Array.isArray(paths) ? paths : [paths]
+      // Drop any path that escapes the workspace.
+      const list = raw.filter((p) => {
+        try {
+          confineRel(root, p)
+          return true
+        } catch {
+          return false
+        }
+      })
       if (list.length === 0) return false
       await git.add(list)
       return true
@@ -129,8 +153,20 @@ export function registerGit(ctx) {
   // ---- unstage --------------------------------------------------------------
   ipcMain.handle('git:unstage', async (e, paths) => {
     try {
-      const git = simpleGit(ctx.getRoot(e.sender))
-      const list = Array.isArray(paths) ? paths : [paths]
+      const root = ctx.getRoot(e.sender)
+      // No folder open — don't fall back to the process cwd.
+      if (!root) return false
+      const git = simpleGit(root)
+      const raw = Array.isArray(paths) ? paths : [paths]
+      // Drop any path that escapes the workspace.
+      const list = raw.filter((p) => {
+        try {
+          confineRel(root, p)
+          return true
+        } catch {
+          return false
+        }
+      })
       if (list.length === 0) return false
       try {
         await git.raw(['restore', '--staged', ...list])
@@ -147,10 +183,22 @@ export function registerGit(ctx) {
   // ---- discard --------------------------------------------------------------
   ipcMain.handle('git:discard', async (e, paths) => {
     const root = ctx.getRoot(e.sender)
+    // No folder open — don't fall back to the process cwd.
+    if (!root) return false
     const git = simpleGit(root)
-    const list = Array.isArray(paths) ? paths : [paths]
+    const raw = Array.isArray(paths) ? paths : [paths]
+    // Drop any path that escapes the workspace.
+    const list = raw.filter((p) => {
+      try {
+        confineRel(root, p)
+        return true
+      } catch {
+        return false
+      }
+    })
 
-    // Determine which paths are tracked vs untracked so we know how to discard.
+    // Re-derive the untracked set from a fresh status so we never act on a stale
+    // snapshot (a path could have been staged/committed since the renderer asked).
     let untracked = new Set()
     try {
       const s = await git.status()
@@ -159,26 +207,31 @@ export function registerGit(ctx) {
       untracked = new Set()
     }
 
+    let acted = false
     for (const p of list) {
       try {
         if (untracked.has(p)) {
-          // Untracked: simply remove from disk.
-          await fs.rm(join(root, p), { force: true })
+          // Untracked: move to the system trash so the discard is recoverable.
+          await shell.trashItem(confine(root, p))
         } else {
           // Tracked: restore working tree to HEAD/index.
           await git.checkout(['--', p])
         }
+        acted = true
       } catch {
         // Best effort per path — keep going.
       }
     }
-    return true
+    return acted
   })
 
   // ---- commit ---------------------------------------------------------------
   ipcMain.handle('git:commit', async (e, message) => {
     try {
-      const git = simpleGit(ctx.getRoot(e.sender))
+      const root = ctx.getRoot(e.sender)
+      // No folder open — don't fall back to the process cwd.
+      if (!root) return { error: 'No folder open' }
+      const git = simpleGit(root)
       const result = await git.commit(message)
       return result
     } catch (err) {
@@ -189,7 +242,10 @@ export function registerGit(ctx) {
   // ---- init -----------------------------------------------------------------
   ipcMain.handle('git:init', async (e) => {
     try {
-      const git = simpleGit(ctx.getRoot(e.sender))
+      const root = ctx.getRoot(e.sender)
+      // No folder open — don't fall back to the process cwd.
+      if (!root) return false
+      const git = simpleGit(root)
       await git.init()
       return true
     } catch {

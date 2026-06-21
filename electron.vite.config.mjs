@@ -22,7 +22,11 @@ export default defineConfig({
     root: 'src/renderer',
     build: {
       rollupOptions: {
-        input: { index: resolve('src/renderer/index.html') }
+        // Two HTML entry points: the workbench and the standalone Settings window.
+        input: {
+          index: resolve('src/renderer/index.html'),
+          settings: resolve('src/renderer/settings.html')
+        }
       }
     }
   }

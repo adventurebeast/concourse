@@ -68,10 +68,11 @@ Cycle layouts with `⌘⇧L`. Jump to any pane with `⌘1`–`⌘9`, cycle with 
 Watching ten scrollbacks is impossible. Pulse does it for you, in two layers:
 
 - **Layer A (free, instant):** a deterministic activity model running in the renderer. Status dots tell you at a glance — **working**, **quiet**, **blocked** (awaiting input, pulsing orange), **done** (green), **error** (red), **idle**. Zero cost, no network.
-- **Layer B (optional, model-powered):** when a pane goes quiet, Concourse summarizes its last screen into a one-line, human-readable label — *"running tests, 2 failing"* or *"waiting: overwrite config.json?"*. Bring your own provider:
-  - **Anthropic** — set `ANTHROPIC_API_KEY` (defaults to `claude-haiku-4-5`).
-  - **Local / OpenAI-compatible** — set `CONCOURSE_PULSE_BASE_URL` (Ollama, LM Studio, llama.cpp). Fully offline, no key.
-  - **Neither set?** Layer A still runs. Pulse never blocks, never crashes the app, and the API key never touches the renderer.
+- **Layer B (optional, model-powered):** when a pane goes quiet, Concourse summarizes its last screen into a one-line, human-readable label — *"running tests, 2 failing"* or *"waiting: overwrite config.json?"*. Pick a provider:
+  - **Local (zero-config, recommended)** — just run a local server and Pulse auto-detects it. `ollama serve` + `ollama pull llama3.2:3b` is all it takes — fully offline, no key, no env var, and it works for a double-clicked app too. Auto-detect looks for an OpenAI-compatible server at `http://localhost:11434/v1`.
+  - **Local on a custom endpoint** — point Pulse anywhere (a different port, LM Studio, llama.cpp, a remote box) with `CONCOURSE_PULSE_BASE_URL`. This always wins over auto-detect and the Anthropic key.
+  - **Anthropic** — set `ANTHROPIC_API_KEY` (defaults to `claude-haiku-4-5`). Used only when no local server is reachable; a running local server is preferred.
+  - **None available?** Layer A still runs. Pulse never blocks, never crashes the app, and the API key never touches the renderer.
 
 Override the model with `CONCOURSE_PULSE_MODEL`.
 

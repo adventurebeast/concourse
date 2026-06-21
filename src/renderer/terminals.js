@@ -22,12 +22,23 @@ const TERM_COLORS = [
 
 // Tabbed + grid terminal multiplexer. Each session is an independent PTY shell;
 // run a CLI coding agent in each and watch them all at once in grid view.
-export function createTerminals({ getRoot, onFleet, onAwait }) {
+export function createTerminals({ getRoot, onFleet }) {
   const tabBar = document.getElementById('term-tabs')
   const panesEl = document.getElementById('term-panes')
   const controls = document.querySelector('#terminal-region .panel-controls')
 
   const sessions = new Map() // id -> session
+
+  // Live terminal preferences (from the Settings window). create() reads these for
+  // every new pane; applySettings() updates them and pushes the change to existing
+  // panes. Defaults match the historical hardcoded values. `scrollback` here is the
+  // PRIMARY-pane budget; preview/hidden panes are tiered below it (see scrollbackFor).
+  const termSettings = {
+    fontSize: 12.5,
+    fontFamily: 'Menlo, Monaco, "SF Mono", "Courier New", monospace',
+    cursorBlink: true,
+    scrollback: 10000
+  }
   let activeId = null
   let counter = 0
   let layout = 'tabs' // 'tabs' | 'grid' | 'stack' | 'flow'
@@ -36,51 +47,14 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   panesEl.classList.add('tabs')
 
   // ---- pulse ----
-  // Monotonic clock for the silence timers.
-  const now = () => performance.now()
-  // Layer A (deterministic, free): a pane that has produced no output for QUIET_MS
-  // after being active becomes a "quiet" candidate — we then ask Layer B (the model
-  // summariser in main) what actually happened. A long further silence settles to idle.
-  const QUIET_MS = 8000
-  const IDLE_MS = 60000
-  // The working ring (the spinner) tracks LIVE byte flow, not the semantic state:
-  // it spins only while output is actively streaming and stops this long after the
-  // last byte. Decoupled from QUIET_MS so a finished command's spinner stops within
-  // ~1s, while the pane still stays semantically 'working' for the full 8s window
-  // that drives summarisation. Long enough to bridge the sub-second gaps between an
-  // agent's tokens/tool calls (its animated TUI keeps emitting frames), short enough
-  // that a truly idle pane stops spinning promptly. See onData.
-  const STREAM_IDLE_MS = 1000
-  // ---- awaiting detection (Layer 1, deterministic, free) ----
-  // An agent's resting state — it's come to rest and the ball is in your court. The
-  // tell: a working agent never goes fully byte-silent (its spinner/timer/repaints
-  // keep emitting), so sustained silence + an input affordance ⇒ awaiting. These are
-  // the high-confidence EXPLICIT prompts (a y/N, password, permission, "proceed?")
-  // that we can call the moment output settles; the implicit "agent parked with no
-  // explicit prompt" case waits the full QUIET_MS window (or an alternate-screen TUI
-  // signal) to stay on the "still working" side. Harness-agnostic core; per-agent
-  // matchers can be appended without touching the rest. See docs/pulse-engine.md.
-  const AWAIT_PROMPT_RE = [
-    /\(\s*[yY]\s*\/\s*[nN]\s*\)/, // (y/n) (Y/n)
-    /\[\s*[yY]\s*\/\s*[nN]\s*\]/, // [y/N] [Y/n]
-    /\b[yY]es\s*\/\s*[nN]o\b/, // yes/no
-    /\bpass(?:word|phrase)\b\s*[:?]/i, // Password: / passphrase?
-    /\b(?:proceed|continue|are you sure|do you want to|would you like|overwrite)\b[^?\n]*\?/i,
-    /\bpress\s+(?:enter|return|any key)\b/i,
-    /\bchoose\b[^?\n]*[:?]/i, // "Choose an option:"
-    /❯\s*\d+\.\s/ // a highlighted numbered menu choice (e.g. Claude Code's permission prompt)
-  ]
-  // Read the last few rendered lines and look for an explicit prompt. Cheap and
-  // synchronous — safe to run on every output-settle.
-  function hasAwaitPrompt(s) {
-    const tail = tailOf(s, 8)
-    return !!tail && AWAIT_PROMPT_RE.some((re) => re.test(tail))
-  }
-  // When the user submits input (presses Enter) we kick a fresh Layer-B summary for
-  // that pane instead of waiting out the QUIET_MS silence window — so the label
-  // tracks "what I just asked / what it's now doing" promptly each turn. Debounced
-  // by this much so the new turn has actually started echoing before we read it.
-  const SUBMIT_DELAY_MS = 1200
+  // Two states, full stop: a pane is `working` while output is flowing and `idle`
+  // once it goes quiet. There is no semantic state machine beyond that — the spinner
+  // IS the working state. One threshold: bytes ⇒ working; IDLE_AFTER_MS of silence
+  // after the last byte ⇒ idle. Long enough to bridge the sub-second gaps between an
+  // agent's tokens/tool calls (its animated TUI keeps emitting frames) so it doesn't
+  // flicker mid-turn, short enough that a finished command settles to a calm dot
+  // promptly. See the PTY onData handler. Tune here if it feels twitchy/laggy.
+  const IDLE_AFTER_MS = 2000
   // Layer B only runs when a provider is configured in main AND reachable (an
   // Anthropic key, or a live local OpenAI-compatible endpoint); without it the
   // deterministic Layer A still works. Queried once at startup — restart to pick up a
@@ -149,11 +123,29 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       tabBar.insertBefore(dragging.tabEl, after ? tabEl.nextSibling : tabEl)
     })
   }
-  // Rebuild the sessions Map in the current tab DOM order.
+  // Rebuild the sessions Map in the current tab DOM order. Each tab carries its
+  // session id in dataset.id, so we look the session up by id rather than by a
+  // best-effort element match. Before mutating the Map we assert the reordered
+  // list is a faithful permutation of the existing sessions — same count, and
+  // every live session id accounted for. If anything is off (a tab is missing
+  // its dataset.id, or a session vanished from the DOM), clearing + rebuilding
+  // would DROP that session and orphan its live PTY, so we BAIL with a warning
+  // and re-apply from the untouched Map instead.
   function reorderFromDom() {
-    const ordered = [...tabBar.querySelectorAll('.term-tab')]
-      .map((el) => [...sessions.values()].find((s) => s.tabEl === el))
-      .filter(Boolean)
+    const ordered = []
+    for (const el of tabBar.querySelectorAll('.term-tab')) {
+      const s = sessions.get(el.dataset.id)
+      if (s) ordered.push(s)
+    }
+    const intact =
+      ordered.length === sessions.size &&
+      [...sessions.values()].every((s) => ordered.includes(s))
+    if (!intact) {
+      console.warn('reorderFromDom: tab/session mismatch — leaving sessions Map intact')
+      applyLayout()
+      fitAll()
+      return
+    }
     sessions.clear()
     for (const s of ordered) sessions.set(s.id, s)
     applyLayout()
@@ -265,15 +257,32 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   }
 
   // ---- confirmation before terminating a shell (no window.confirm) ----
+  // Only one dialog at a time. A second confirmClose() while one is open would
+  // stack a second overlay AND install a second global keydown listener (the
+  // first one would leak — finish() only removes its own), and a stray Enter
+  // could route through both and double-enter destroy(). The closure-level guard
+  // re-focuses the open dialog and returns instead.
+  let confirmOverlay = null
   function confirmClose(s) {
+    if (confirmOverlay) {
+      confirmOverlay.querySelector('.tc-danger')?.focus()
+      return
+    }
     const overlay = document.createElement('div')
     overlay.className = 'term-confirm-overlay'
     const box = document.createElement('div')
     box.className = 'term-confirm'
     const name = s.tabLabel.textContent
-    box.innerHTML =
-      `<div class="tc-title">Close “${name}”?</div>` +
-      `<div class="tc-msg">The shell and any running agent will be terminated.</div>`
+    // The tab label is agent-influenced (an OSC title / heuristic), so it must never be
+    // interpolated into innerHTML — a label like `<img onerror=...>` would execute. Build
+    // the title with textContent so the name renders as literal text.
+    const title = document.createElement('div')
+    title.className = 'tc-title'
+    title.textContent = `Close “${name}”?`
+    const msg = document.createElement('div')
+    msg.className = 'tc-msg'
+    msg.textContent = 'The shell and any running agent will be terminated.'
+    box.append(title, msg)
     const actions = document.createElement('div')
     actions.className = 'tc-actions'
     const cancel = document.createElement('button')
@@ -286,11 +295,17 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     box.appendChild(actions)
     overlay.appendChild(box)
     document.body.appendChild(overlay)
+    confirmOverlay = overlay
     // Focus the destructive action so Return confirms the closure immediately —
     // Escape (or clicking away / Cancel) backs out.
     ok.focus()
 
+    // Idempotent: overlay-click, Cancel, Escape and Enter all route here, but only
+    // the first call tears down (removes the overlay + the one global listener and
+    // clears the guard); later calls are no-ops so the listener can't leak.
     const finish = () => {
+      if (confirmOverlay !== overlay) return
+      confirmOverlay = null
       overlay.remove()
       document.removeEventListener('keydown', onKey, true)
     }
@@ -494,58 +509,20 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   }
 
   // ---- indicator dot ----
-  // Maps the richer pulse state onto a dot class. status (running/exited) is the
-  // hard fact; state (working/quiet/awaiting/done/error/idle) is the pulse verdict.
-  // The dot class is the single source of truth for a pane's visible state —
-  // used for the three per-pane dots AND the aggregate fleet summary in the
-  // status bar, so both always agree.
-  function dotClass(s) {
-    if (s.status === 'exited') return s.state === 'error' ? 'error' : 'done'
-    if (s.attention || s.state === 'awaiting') return 'awaiting'
-    if (s.state === 'error') return 'error'
-    if (s.state === 'done') return 'done'
-    if (s.state === 'idle') return 'idle'
-    if (s.state === 'quiet') return 'quiet'
-    if (s.activity) return 'activity'
-    return 'working'
-  }
-  // Settled states that warrant a look. A pane that *enters* one of these while
-  // unfocused gets flagged `unseen`, so its indicator keeps a soft "come look"
-  // nudge until you open it. `awaiting` is the headline case — an agent that just
-  // came to rest is the thing you're waiting for.
-  const LOOK_STATES = new Set(['awaiting', 'done', 'error'])
-  function flagUnseen(s) {
-    if (LOOK_STATES.has(s.state) && s.id !== activeId) s.unseen = true
-  }
-  // Central semantic-state setter. Every transition routes through here so the
-  // working→awaiting EDGE — the moment an agent comes to rest — can't be missed: on
-  // entry to `awaiting` while unfocused it flags `unseen` (a soft come-look pulse)
-  // and fires the onAwait hook (the seam a notification/sound/badge subscribes to).
-  function setState(s, next) {
-    if (s.state === next) return false
-    const entering = next === 'awaiting'
-    s.state = next
-    flagUnseen(s)
-    if (entering && s.id !== activeId) onAwait?.(s)
-    return true
-  }
+  // Two states, and the dot class IS the state: `working` (a spinning ring — output
+  // is flowing) or `idle` (a calm dot — gone quiet). The same class drives the three
+  // per-pane dots AND the aggregate fleet summary, so they always agree.
   function updateIndicators(s) {
-    const base = dotClass(s)
-    // The spinner only animates while bytes are actively streaming (s.streaming).
-    // A 'working' pane whose output has paused shows a calm solid dot instead — the
-    // semantic state (and thus the fleet count) is unchanged; only the ring stops.
-    const streaming = s.streaming && (base === 'working' || base === 'activity')
-    const cls = 'dot ' + base + (s.unseen ? ' unseen' : '') + (streaming ? ' streaming' : '')
+    const cls = 'dot ' + s.state
     s.tabDot.className = cls
     s.cellDot.className = cls
     s.stubDot.className = cls
     emitFleet()
   }
 
-  // Aggregate every pane's dot class into bucket counts for the status bar.
+  // Aggregate every pane's state into working/idle counts for the status bar.
   // Coalesced through rAF so a burst of output (many updateIndicators calls)
-  // produces at most one summary per frame. 'activity' folds into 'working' —
-  // both just mean "actively producing output".
+  // produces at most one summary per frame.
   let fleetRaf = 0
   function emitFleet() {
     if (!onFleet || fleetRaf) return
@@ -553,21 +530,10 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       fleetRaf = 0
       const counts = {}
       for (const s of sessions.values()) {
-        let cls = dotClass(s)
-        if (cls === 'activity') cls = 'working'
-        counts[cls] = (counts[cls] || 0) + 1
+        counts[s.state] = (counts[s.state] || 0) + 1
       }
       onFleet({ total: sessions.size, counts })
     })
-  }
-  function clearFlags(s) {
-    s.activity = false
-    s.attention = false
-    s.unseen = false // you're now looking at this pane — it's seen, stop nudging
-    // Note: focusing an `awaiting` pane does NOT clear the state — it's still waiting
-    // for your input until you actually type. Dropping `unseen` just calms the
-    // come-look pulse to a steady dot; real input → output → `working` clears it.
-    updateIndicators(s)
   }
 
   // ---- create / destroy ----
@@ -585,9 +551,10 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     const tabEl = document.createElement('button')
     tabEl.className = 'term-tab'
     tabEl.draggable = true
+    tabEl.dataset.id = id // reorderFromDom() maps DOM order back to sessions by id
     tabEl.style.setProperty('--term-color', color)
     const tabDot = document.createElement('span')
-    tabDot.className = 'dot running'
+    tabDot.className = 'dot idle'
     const tabLabel = document.createElement('span')
     tabLabel.className = 'term-tab-label'
     tabLabel.textContent = displayName
@@ -605,7 +572,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     const cellHeader = document.createElement('div')
     cellHeader.className = 'cell-header'
     const cellDot = document.createElement('span')
-    cellDot.className = 'dot running'
+    cellDot.className = 'dot idle'
     const cellLabel = document.createElement('span')
     cellLabel.className = 'cell-label'
     cellLabel.textContent = displayName
@@ -631,7 +598,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     stub.className = 'term-stub'
     stub.style.setProperty('--term-color', color)
     const stubDot = document.createElement('span')
-    stubDot.className = 'dot running'
+    stubDot.className = 'dot idle'
     const stubLabel = document.createElement('span')
     stubLabel.className = 'stub-label'
     stubLabel.textContent = displayName
@@ -643,11 +610,11 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     panesEl.appendChild(stub)
 
     const term = new Terminal({
-      fontFamily: 'Menlo, Monaco, "SF Mono", "Courier New", monospace',
-      fontSize: 12.5,
+      fontFamily: termSettings.fontFamily,
+      fontSize: termSettings.fontSize,
       theme: TERM_THEMES[themeName],
-      cursorBlink: true,
-      scrollback: 10000,
+      cursorBlink: termSettings.cursorBlink,
+      scrollback: termSettings.scrollback,
       allowProposedApi: true
     })
     const fit = new FitAddon()
@@ -658,18 +625,19 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     const s = {
       id, term, fit, cell, body: cellBody, tabEl, tabDot, tabLabel, cellLabel, cellDot, color,
       stub, stubDot, stubLabel,
-      status: 'running', activity: false, attention: false, unseen: false, custom: false,
-      // pulse state: working|quiet|awaiting|done|error|idle. A pane only starts
-      // "working" when something is genuinely running in it — an agent preset
-      // (command) auto-fires on open. A plain shell just sits at its prompt, so it
-      // starts idle and won't spin until the user actually uses it (see onData).
+      status: 'running', custom: false,
+      // Two states only: `working` (output flowing — spinner) or `idle` (gone quiet).
+      // An agent preset (command) auto-fires on open, so it starts working. A plain
+      // shell just sits at its prompt, so it starts idle and won't spin until the
+      // user actually drives it (see the PTY onData handler).
       state: command ? 'working' : 'idle',
-      // unseen: pane *entered* a settled state (awaiting/done/error) while you were
-      // looking elsewhere and you haven't opened it since — drives the "come look"
-      // nudge on its indicator until clearFlags marks it seen.
-      lastOutputAt: now(), // timestamp of last PTY output — drives the silence timer
-      streaming: false, // true while bytes are actively arriving — gates the spinner ring
-      streamTimer: null, // debounce handle that clears `streaming` after STREAM_IDLE_MS
+      idleTimer: null, // debounce handle: flips the pane to idle after IDLE_AFTER_MS of silence
+      follow: true, // sticky-bottom intent: keep the newest line (prompt / agent input box)
+      //              visible. True until the user scrolls up to read history (see onScroll),
+      //              re-armed the instant they type. Every write/fit re-asserts the bottom
+      //              while it's set — fixing "the prompt sits below the fold until I hit Enter".
+      pinning: false, // guard: true only while WE scroll programmatically, so the onScroll
+      //               below never mistakes our own re-pin (or a reflow) for a user scroll-up.
       summaryText: null, // last Layer-B label (summary, or the pending question)
       lastSummaryHash: null, // hash of the last tail summarised — skip no-op repeats
       summarizing: false, // a Layer-B request is in flight for this pane
@@ -679,14 +647,14 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       baseName: displayName, // fallback label shown when nothing better is known
       oscTitle: null, // last OSC 0/2 title the program emitted (Layer 0)
       heurTitle: null, // last heuristic label (last command + branch)
-      titleTimer: null, // debounce handle for onTitleChange
-      submitTimer: null // debounce handle for the on-submit pulse refresh
+      titleTimer: null // debounce handle for onTitleChange
     }
     sessions.set(id, s)
     // Watch this pane's body so it refits itself on any size change (see the
     // ResizeObserver above). Tag the element so the observer can find the session.
     cellBody.__session = s
     resizeObserver.observe(cellBody)
+    updateIndicators(s) // paint the initial working/idle dot
 
     // Beginner mode gets the calmer, friendlier shell prompt; expert mode is left bare.
     const friendlyPrompt = document.documentElement.dataset.mode !== 'expert'
@@ -706,22 +674,20 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     })
     term.onData((data) => {
       s.used = true
+      s.follow = true // typing means "show me what I'm typing" — re-engage sticky-bottom
       if (s.isShell) captureCommand(s, data)
-      // Any pane (agent or shell): pressing Enter is a fresh user turn — refresh the
-      // pulse label promptly rather than waiting out the silence timer. Debounced so a
-      // burst of submits (or a paste with newlines) only schedules one refresh.
-      if (data.includes('\r') || data.includes('\n')) {
-        clearTimeout(s.submitTimer)
-        s.submitTimer = setTimeout(() => summarize(s, { force: true }), SUBMIT_DELAY_MS)
-      }
       api.term.input(id, data)
     })
     term.onResize(({ cols, rows }) => api.term.resize(id, cols, rows))
-    term.onBell(() => {
-      // The bell is the strongest "wants you" signal a program can send.
-      s.attention = true
-      setState(s, 'awaiting') // routes the edge (onAwait/unseen) like any other transition
-      updateIndicators(s)
+    // Track the user's scroll intent so sticky-bottom never fights them. Every scroll —
+    // wheel, scrollbar drag, Shift+PageUp — fires onScroll; if they've parked the view
+    // above the buffer bottom they're reading history, so stop following. Back at the
+    // bottom re-engages it. Our own re-pins set s.pinning first, so a programmatic scroll
+    // (or the transient one a reflow emits) is ignored here and can't flip the intent.
+    term.onScroll(() => {
+      if (s.pinning) return
+      const buf = s.term.buffer.active
+      s.follow = buf.viewportY >= buf.baseY
     })
     // Auto-title: catch the OSC 0/2 title ANY program emits (a shell with a
     // titled prompt, vim, ssh, or an agent that reports its task) and route it
@@ -806,8 +772,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     const s = sessions.get(id)
     if (!s) return
     clearTimeout(s.titleTimer)
-    clearTimeout(s.submitTimer)
-    clearTimeout(s.streamTimer)
+    clearTimeout(s.idleTimer)
     resizeObserver.unobserve(s.body)
     dirty.delete(s)
     api.term.kill(id)
@@ -854,7 +819,15 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       // (same as album flow's centerOn).
       setTimeout(() => s.term.focus(), 0)
     }
-    clearFlags(s)
+    // Switching to a pane means "show me what's happening here" — and agents stream
+    // output into background panes constantly. Re-engage sticky-bottom so the fit
+    // below (and every subsequent write) snaps to the live line. Without this, a pane
+    // whose follow was dropped while it sat as a hidden/preview tile — its off-screen
+    // reflow or an alt-screen transition parks the viewport above baseY, and onScroll
+    // reads that as a user scroll-up — would open stranded above the fold, invisible
+    // until you typed a key. fitPane/pinBottom both gate their scrollToBottom on
+    // s.follow, so resetting it here is what makes the switch land at the bottom.
+    s.follow = true
     // Activation changed which pane is primary (and may have flipped one from
     // hidden→visible). Re-fit whatever is primary once the layout settles; fitPane
     // leaves previews/hidden panes untouched so their agents keep their width. Focus
@@ -989,27 +962,72 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     }
     return 'hidden'
   }
+  // Scrollback is the single biggest per-pane memory cost (each retained row is a full
+  // line buffer). A preview/hidden pane doesn't need the full history — you can't
+  // scroll it — so we tier it by role off the user's primary budget (termSettings
+  // .scrollback): primary gets the full budget, preview/hidden are capped below it,
+  // and the larger value is restored the moment a pane is promoted back to primary.
+  // xterm keeps existing rows when scrollback shrinks (it only trims as new output
+  // arrives), so a promotion never loses history that's already there. Called from
+  // fitSoon so every layout/role change re-tiers in one pass.
+  function scrollbackFor(role) {
+    const base = termSettings.scrollback
+    if (role === 'primary') return base
+    if (role === 'preview') return Math.min(2000, base)
+    return Math.min(1000, base)
+  }
+  function applyScrollbackTiers() {
+    if (sessions.size > 12) {
+      console.warn(`[terminals] ${sessions.size} panes open — high memory footprint`)
+    }
+    for (const s of sessions.values()) {
+      const want = scrollbackFor(paneRole(s))
+      if (s.term.options.scrollback !== want) s.term.options.scrollback = want
+    }
+  }
   // Low-level fit for ONE pane. Fits and pushes the new size to the PTY only when the
   // pane is primary AND actually measurable (a hidden/0×0 body would push a bogus
   // 1-row size). Every resize path funnels through here, so the primary-only rule
   // can't be bypassed and previews are never dragged narrow.
   function fitPane(s) {
-    if (paneRole(s) !== 'primary') return
-    if (!s.body.isConnected || s.body.clientWidth === 0 || s.body.clientHeight === 0) return
+    if (paneRole(s) !== 'primary') return 'skip' // previews/hidden keep their PTY width
+    // A primary pane whose box hasn't reached its final geometry yet (clientHeight 0 — a
+    // tab/panel un-hidden this very frame, a CSS transition mid-flight, the monospace font
+    // still loading) can't be measured; fitting it would push a bogus 1-row size. Report
+    // it as 'deferred' so fitSoon retries next frame rather than silently dropping BOTH the
+    // fit and the re-pin — otherwise a quiescent pane that then settles to an already-
+    // observed size (no ResizeObserver callback, no output to pin) opens stranded above
+    // the bottom: the original "stuck until a keypress" symptom.
+    if (!s.body.isConnected || s.body.clientWidth === 0 || s.body.clientHeight === 0) return 'deferred'
     try {
-      // Was the view pinned to the latest output before we reflow? A resize reflows
-      // the buffer and can leave the viewport a row or two above the bottom — so the
-      // newest line (an agent's input box / prompt) renders just below the fold and you
-      // can't see it until a keypress scrolls down. Capture "at bottom" first, then
-      // re-pin after the fit so a refit never strands the bottom of the pane off-screen.
-      const buf = s.term.buffer.active
-      const wasAtBottom = buf.viewportY >= buf.baseY
+      // A resize reflows the buffer and can leave the viewport a row or two above the
+      // bottom — so the newest line (an agent's input box / prompt) renders just below
+      // the fold, invisible until a keypress scrolls down. Re-pin after the fit whenever
+      // the user is following the bottom (s.follow). The pinning guard wraps the whole
+      // fit so the transient onScroll the reflow emits can't be read as a user scroll-up.
+      s.pinning = true
       s.fit.fit()
       api.term.resize(s.id, s.term.cols, s.term.rows)
-      if (wasAtBottom) s.term.scrollToBottom()
+      if (s.follow) s.term.scrollToBottom()
+      return 'fitted'
     } catch {
-      /* measured mid-layout; the observer/settle tick will catch the final size */
+      /* measured mid-layout; retry next frame via the deferred path */
+      return 'deferred'
+    } finally {
+      s.pinning = false
     }
+  }
+  // Re-assert the bottom after output, guarded so onScroll ignores it. xterm only
+  // auto-scrolls on write when the viewport is ALREADY at the bottom — but a reflow,
+  // an alt-screen exit, or the async SIGWINCH repaint that follows a resize can park
+  // it one row high, and from there xterm stops following and the prompt stays hidden
+  // until you type. Called from each write's parse-complete callback so following panes
+  // snap back to the live line on the next frame, not the next keypress.
+  function pinBottom(s) {
+    if (!s.follow) return
+    s.pinning = true
+    s.term.scrollToBottom()
+    s.pinning = false
   }
   // Fit every primary pane AFTER the browser has settled the new layout. Toggling
   // layout classes doesn't reach final geometry until the next layout pass, so fitting
@@ -1019,12 +1037,33 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   // continuous net (drags, window/font changes), this is the discrete "I just changed
   // the layout" nudge.
   let settleScheduled = false
+  let settleRetries = 0
+  // ~10 frames (~160ms) of retrying is plenty for a box to reach final geometry; the
+  // bound stops a permanently-0-size primary (e.g. the terminal panel collapsed) from
+  // spinning the rAF loop forever.
+  const MAX_SETTLE_RETRIES = 10
   function fitSoon() {
     if (settleScheduled) return
     settleScheduled = true
     requestAnimationFrame(() => {
       settleScheduled = false
-      for (const s of sessions.values()) fitPane(s)
+      applyScrollbackTiers() // re-tier history to each pane's new role before fitting
+      let deferred = false
+      for (const s of sessions.values()) {
+        if (fitPane(s) === 'deferred') deferred = true
+      }
+      // A primary pane skipped because its box wasn't measurable yet lost both its fit
+      // and its scroll-to-bottom this frame. The ResizeObserver only recovers it if the
+      // box LATER changes size, so a pane that settles to an already-reported size would
+      // stay stranded above the bottom. Re-arm for the next frame (bounded) so the fit
+      // and re-pin retry until the geometry is real — closing the switch-while-quiescent
+      // stranding the single-rAF settle used to leave behind.
+      if (deferred && settleRetries < MAX_SETTLE_RETRIES) {
+        settleRetries++
+        fitSoon()
+      } else {
+        settleRetries = 0
+      }
     })
   }
   // Public API kept stable for the callers in main.js (panel/editor toggles, splitter
@@ -1070,67 +1109,41 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     }
   })
 
-  // ---- pty output -> terminal, with activity/attention tracking ----
+  // ---- pty output -> terminal: drives the two-state (working/idle) indicator ----
   api.term.onData(({ id, data }) => {
     const s = sessions.get(id)
     if (!s) return
-    s.term.write(data)
-    // Output means the pane is alive and working — reset the silence timer and drop
-    // any stale pulse verdict so the label tracks live activity again.
-    s.lastOutputAt = now()
-    // ...but a fresh, untouched shell only emits startup chrome — its prompt, or an
+    s.term.write(data, () => pinBottom(s))
+    // A fresh, untouched shell only emits startup chrome — its prompt, or an
     // auto-injected `cd … && clear` from cdInto(). That isn't work, so don't let it
-    // spin the indicator. Only a pane the user has driven (s.used) or an agent
-    // preset (!isShell) flips to working on output; the rest stays idle until used.
-    const startupNoise = s.isShell && !s.used
-    let changed = false
-    if (!startupNoise && s.state !== 'working') {
+    // spin the indicator. Only a pane the user has driven (s.used) or an agent preset
+    // (!isShell) counts as working; an unused shell stays idle until used.
+    if (s.isShell && !s.used) return
+    // Output ⇒ working (spinner). Each byte resets the idle debounce, so the pane
+    // stays working across the sub-second gaps in a turn and only settles to idle
+    // IDLE_AFTER_MS after output truly stops.
+    if (s.state !== 'working') {
       s.state = 'working'
-      s.attention = false
-      s.unseen = false // fresh output: no longer a settled pane awaiting a look
-      s.summaryText = null
+      s.summaryText = null // live activity: drop the stale resting label
       applyTitle(s)
-      changed = true
+      updateIndicators(s)
     }
-    if (id !== activeId && !s.activity && !s.attention) {
-      s.activity = true
-      changed = true
-    }
-    // Drive the spinner off live byte flow: spin while output streams, stop
-    // STREAM_IDLE_MS after the last byte. The pane stays semantically 'working'
-    // (the QUIET_MS state machine is untouched) — only the ring tracks the stream.
-    // Skipped for startup chrome so a fresh shell's prompt never spins.
-    if (!startupNoise) {
-      if (!s.streaming) {
-        s.streaming = true
-        changed = true
-      }
-      clearTimeout(s.streamTimer)
-      s.streamTimer = setTimeout(() => {
-        s.streamTimer = null
-        s.streaming = false
-        // Output just settled — fast path: if an EXPLICIT prompt is on screen (y/N,
-        // password, permission, "proceed?"), call `awaiting` now rather than waiting
-        // out the full QUIET_MS window. Implicit/ambiguous rest is left to the tick.
-        if (s.status !== 'exited' && s.state !== 'awaiting' && hasAwaitPrompt(s)) {
-          setState(s, 'awaiting')
-          applyTitle(s)
-          summarize(s) // let Layer B label exactly what it's waiting on
-        }
-        updateIndicators(s)
-      }, STREAM_IDLE_MS)
-    }
-    if (changed) updateIndicators(s)
+    clearTimeout(s.idleTimer)
+    s.idleTimer = setTimeout(() => {
+      s.idleTimer = null
+      if (s.status === 'exited') return // the exit handler owns the final state
+      s.state = 'idle'
+      updateIndicators(s)
+      summarize(s) // it just came to rest — label what it did / is waiting on
+    }, IDLE_AFTER_MS)
   })
-  api.term.onExit(({ id, exitCode }) => {
+  api.term.onExit(({ id }) => {
     const s = sessions.get(id)
     if (!s) return
     s.status = 'exited'
-    // A non-zero exit code is an error; 0 (or unknown) reads as a clean finish.
-    s.state = exitCode ? 'error' : 'done'
-    clearTimeout(s.streamTimer) // an exited pane is settled — never leave it spinning
-    s.streaming = false
-    flagUnseen(s) // finished while you may be elsewhere — nudge until you look
+    s.state = 'idle' // a finished process isn't working; the faded .exited tab marks that it ended
+    clearTimeout(s.idleTimer) // settled — never leave it spinning
+    s.idleTimer = null
     updateIndicators(s)
     s.tabEl.classList.add('exited')
     // Clear any stale OSC title (programs may leave one set on exit); the resolver
@@ -1144,8 +1157,13 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   // Read the last lines the pane shows (clean text straight from the xterm buffer,
   // no ANSI), hashed so we never re-ask about an unchanged screen. The model call
   // itself lives in main (the key never touches the renderer); we just send the tail.
-  function tailOf(s, maxLines = 40) {
+  function tailOf(s, maxLines) {
     const buf = s.term.buffer.active
+    // Default tail: 24 lines is plenty for a settled shell verdict and keeps the model
+    // payload small. A full-screen TUI on the alternate buffer (vim, a dashboard, an
+    // agent's alt-screen UI) packs meaning across the whole screen, so give it a larger
+    // window (~40) or its verdict degrades.
+    if (maxLines == null) maxLines = buf.type === 'alternate' ? 40 : 24
     const end = buf.baseY + buf.cursorY
     const lines = []
     for (let i = end; i >= 0 && lines.length < maxLines; i--) {
@@ -1159,13 +1177,16 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0
     return h
   }
-  async function summarize(s, { force = false } = {}) {
+  // Called once each time a pane comes to rest (the working→idle edge). Sends the
+  // visible tail to the model and writes back a one-line label — and ONLY a label.
+  // It never touches the working/idle dot; the spinner is driven purely by byte flow.
+  async function summarize(s) {
     if (!pulseEnabled || !api.pulse?.summarize) return
     if (s.summarizing) return // one request per pane at a time
     const tail = tailOf(s)
     if (!tail) return
     const h = hashStr(tail)
-    if (h === s.lastSummaryHash) return // this exact screen already has a verdict
+    if (h === s.lastSummaryHash) return // this exact screen already has a label
     s.summarizing = true
     let res = null
     try {
@@ -1181,58 +1202,15 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     } finally {
       s.summarizing = false
     }
-    if (!res || !res.state) return // failed/empty: leave the hash unset so we retry
-    // Only apply if the pane is STILL the candidate we asked about. A stale verdict
-    // must not overwrite a pane that has since produced output (working), exited
-    // (done/error), or already settled (idle). quiet and awaiting are the resting
-    // states a verdict may refine.
-    if (s.status === 'exited') return
-    // Normally only quiet/awaiting panes accept a verdict; a user-submit refresh (force)
-    // also applies to a 'working' pane so the label updates the moment a new turn starts.
-    if (!force && s.state !== 'quiet' && s.state !== 'awaiting') return
-    s.lastSummaryHash = h // commit only now that a verdict is actually applied
-    setState(s, res.state) // routes the working→awaiting edge if the model just called rest
+    if (!res) return // failed/empty: leave the hash unset so we retry next rest
+    // If the pane has resumed working while we waited (new output flipped it back and
+    // cleared its label), don't paint a stale resting summary over a live pane.
+    if (s.state !== 'idle') return
+    s.lastSummaryHash = h
     const label = res.question ? `⏳ ${res.question}` : res.summary
     s.summaryText = label && label.trim() ? label.trim() : null
     applyTitle(s)
-    updateIndicators(s)
   }
-  // Layer A tick: a working pane that's gone byte-silent past QUIET_MS has come to
-  // rest — classify it. An explicit prompt or a full-screen TUI (alternate buffer)
-  // ⇒ `awaiting` (the resting state); anything else ⇒ `quiet`, handed to Layer B to
-  // call. Then keep refining quiet/awaiting candidates as their screen changes, and
-  // settle a long-silent *quiet* pane to idle (awaiting stays sticky — it's still
-  // your move). The hash + in-flight guards in summarize() mean re-calling it every
-  // tick only hits the model on a real change.
-  setInterval(() => {
-    const t = now()
-    for (const s of sessions.values()) {
-      if (s.status === 'exited') continue
-      const quietFor = t - s.lastOutputAt
-      if (quietFor < QUIET_MS) continue
-      if (s.state === 'working') {
-        const atRest = hasAwaitPrompt(s) || s.term.buffer.active.type === 'alternate'
-        setState(s, atRest ? 'awaiting' : 'quiet')
-        applyTitle(s)
-        updateIndicators(s)
-        summarize(s) // label what it's doing / waiting on
-      } else if (s.state === 'quiet' || s.state === 'awaiting') {
-        // A prompt may have appeared since it went quiet — upgrade to awaiting.
-        if (s.state === 'quiet' && hasAwaitPrompt(s)) {
-          setState(s, 'awaiting')
-          applyTitle(s)
-          updateIndicators(s)
-        }
-        summarize(s) // let Layer B refine it (e.g. a completion bell that's really done)
-        if (s.state === 'quiet' && quietFor >= IDLE_MS) {
-          s.state = 'idle'
-          s.summaryText = null
-          applyTitle(s)
-          updateIndicators(s)
-        }
-      }
-    }
-  }, 2000)
 
   // OS window resizes need no special handling: shrinking/growing the window
   // changes every visible pane's body size, which the per-pane ResizeObserver above
@@ -1268,6 +1246,33 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     for (const s of sessions.values()) s.term.options.theme = TERM_THEMES[themeName]
   }
 
+  // Apply central terminal preferences (from the Settings window). Updates the
+  // defaults future panes inherit and pushes the change to every live pane. A font
+  // change alters cell metrics, so we re-fit (and re-push the PTY size) afterwards;
+  // scrollback re-tiers through the role-aware path so previews stay capped.
+  function applySettings(opts = {}) {
+    let fontChanged = false
+    if (typeof opts.fontSize === 'number' && opts.fontSize !== termSettings.fontSize) {
+      termSettings.fontSize = opts.fontSize
+      fontChanged = true
+    }
+    if (typeof opts.fontFamily === 'string' && opts.fontFamily.trim() && opts.fontFamily !== termSettings.fontFamily) {
+      termSettings.fontFamily = opts.fontFamily
+      fontChanged = true
+    }
+    if (typeof opts.cursorBlink === 'boolean') termSettings.cursorBlink = opts.cursorBlink
+    if (typeof opts.scrollback === 'number') termSettings.scrollback = opts.scrollback
+    for (const s of sessions.values()) {
+      if (fontChanged) {
+        s.term.options.fontSize = termSettings.fontSize
+        s.term.options.fontFamily = termSettings.fontFamily
+      }
+      s.term.options.cursorBlink = termSettings.cursorBlink
+    }
+    applyScrollbackTiers()
+    if (fontChanged) fitAll()
+  }
+
   // cd fresh shells into a newly-opened folder (skip terminals already in use,
   // e.g. running an agent — we don't want to type `cd` into them).
   function cdInto(path) {
@@ -1294,5 +1299,17 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     return true
   }
 
-  return { create, fitActive, fitAll, setLayout, setTheme, cdInto, typeIntoActive, stepActive, activateIndex, setLayout, cycleLayout, closeActive, getState, restore }
+  // Tear down every per-pane timer this module owns (the idle-debounce and title
+  // debounce handles) so a backgrounded/recreated view leaves nothing running.
+  // clearTimeout on an already-fired/null handle is a no-op, so this is safe to call
+  // regardless of state.
+  function dispose() {
+    for (const s of sessions.values()) {
+      clearTimeout(s.idleTimer)
+      clearTimeout(s.titleTimer)
+      s.idleTimer = s.titleTimer = null
+    }
+  }
+
+  return { create, fitActive, fitAll, setLayout, setTheme, applySettings, cdInto, typeIntoActive, stepActive, activateIndex, cycleLayout, closeActive, getState, restore, dispose }
 }

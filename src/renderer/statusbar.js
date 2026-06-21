@@ -3,12 +3,13 @@
 // (left), the live pulse of the whole terminal fleet (right), and the time.
 //
 // The fleet summary is the point of this app: no matter which pane you're
-// focused on, the right side tells you how many agents are working, waiting on
-// you, finished, or errored — so you can leave a pane and still feel the room.
+// focused on, the right side tells you how many panes are working vs idle, so you
+// can leave a pane and still feel the room.
 export function createStatusBar({ onOpenScm } = {}) {
   const branchEl = document.getElementById('status-branch')
   const gitEl = document.getElementById('status-git')
   const fleetEl = document.getElementById('status-fleet')
+  const pulseEl = document.getElementById('status-pulse')
   const clockEl = document.getElementById('status-clock')
   const versionEl = document.getElementById('status-version')
 
@@ -56,15 +57,10 @@ export function createStatusBar({ onOpenScm } = {}) {
   }
 
   // ---- fleet --------------------------------------------------------------
-  // Buckets in priority order: the states you most want surfaced come first so
-  // a quick left-to-right scan lands on "awaiting" before "done". Each bucket
-  // reuses the pane dot's hue (see terminals.css) for instant visual rhyme.
+  // Two buckets, mirroring the pane dots: working (spinner) and idle (at rest).
+  // Each reuses the pane dot's hue (see terminals.css) for instant visual rhyme.
   const BUCKETS = [
-    { key: 'awaiting', label: 'awaiting input' },
-    { key: 'error', label: 'errored' },
     { key: 'working', label: 'working' },
-    { key: 'quiet', label: 'quiet' },
-    { key: 'done', label: 'done' },
     { key: 'idle', label: 'idle' }
   ]
 
@@ -82,14 +78,11 @@ export function createStatusBar({ onOpenScm } = {}) {
       const n = counts[b.key] || 0
       if (!n) continue
       const stat = document.createElement('span')
-      // 'awaiting' is the one bucket that means "your move" — emphasise it so a
-      // glance across the bar lands on it, and spell the word out, not a bare count.
-      stat.className = 'fleet-stat' + (b.key === 'awaiting' ? ' needs-you' : '')
+      stat.className = 'fleet-stat'
       const dot = document.createElement('i')
       dot.className = 'fleet-dot ' + b.key
       stat.appendChild(dot)
       stat.appendChild(document.createTextNode(String(n)))
-      if (b.key === 'awaiting') stat.appendChild(document.createTextNode(' awaiting'))
       fleetEl.appendChild(stat)
       tipParts.push(`${n} ${b.label}`)
     }
@@ -97,6 +90,50 @@ export function createStatusBar({ onOpenScm } = {}) {
       `${total} terminal${total === 1 ? '' : 's'}` +
       (tipParts.length ? ' · ' + tipParts.join(', ') : '')
   }
+
+  // ---- pulse (Layer B summariser) -----------------------------------------
+  // A quiet chip showing which model backend is turning quiet panes into
+  // one-line labels — provider + model when live, a dim hint when it's off.
+  // There's no push event for provider state, so we poll pulse:status (which
+  // re-resolves the backend on a short TTL, so a server started/stopped after
+  // launch shows up here within a poll or two — the visible proof of auto-detect).
+  function setPulse(s) {
+    if (!pulseEl) return
+    pulseEl.innerHTML = ''
+    const dot = document.createElement('i')
+    // No provider resolved → Layer B is off. Say so quietly, so a user who
+    // expected their local model can tell it isn't connected (vs. just silence).
+    if (!s || !s.enabled) {
+      dot.className = 'pulse-dot off'
+      pulseEl.appendChild(dot)
+      pulseEl.appendChild(document.createTextNode('Pulse off'))
+      pulseEl.title =
+        'Pulse summaries off — no model backend. Run a local server (e.g. `ollama serve`) ' +
+        'or set ANTHROPIC_API_KEY to get one-line pane labels.'
+      return
+    }
+    const provider = s.provider || 'model'
+    const live = !!s.reachable
+    dot.className = 'pulse-dot ' + (live ? 'on' : 'warn')
+    pulseEl.appendChild(dot)
+    // provider · model when reachable; provider · "offline" when configured but down.
+    const tail = s.model ? ' · ' + (live ? s.model : 'offline') : ''
+    pulseEl.appendChild(document.createTextNode(provider + tail))
+    pulseEl.title = live
+      ? `Pulse summaries · ${provider} · model ${s.model || '—'} · connected`
+      : `Pulse summaries · ${provider} · model ${s.model || '—'} · not reachable (is the server running?)`
+  }
+
+  async function refreshPulse() {
+    if (!window.api?.pulse?.status) return
+    try {
+      setPulse(await window.api.pulse.status())
+    } catch {
+      // Leave the last-known chip rather than flickering to empty on a hiccup.
+    }
+  }
+  refreshPulse()
+  setInterval(refreshPulse, 10000)
 
   // ---- clock --------------------------------------------------------------
   function tick() {

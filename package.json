@@ -1,6 +1,6 @@
 {
   "name": "concourse",
-  "version": "0.0.3",
+  "version": "0.0.8",
   "description": "A stupidly simple IDE built for driving AI coding agents.",
   "main": "./out/main/index.js",
   "type": "module",

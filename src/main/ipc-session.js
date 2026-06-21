@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { getLastRoot, getSession, setSession } from './session.js'
+import { getLastRoot, getSession, setSession, stageSession } from './session.js'
 
 export function registerSession() {
   // Root that was open when the app last closed (for auto-reopen on launch).
@@ -10,5 +10,13 @@ export function registerSession() {
   ipcMain.handle('session:save', async (_e, root, blob) => {
     await setSession(root, blob)
     return true
+  })
+
+  // Synchronous save on window unload. The async save above can't be trusted to
+  // finish during unload, so stage the blob into store-io's pending map; the
+  // before-quit flush (src/main/index.js) drains it synchronously on quit.
+  ipcMain.on('session:saveSync', (e, { root, blob } = {}) => {
+    stageSession(root, blob)
+    e.returnValue = true
   })
 }

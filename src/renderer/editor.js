@@ -70,6 +70,24 @@ function baseName(p) {
   return (p.split(/[\\/]/).pop() || p)
 }
 
+// Cheap renderer-side guard: decide whether a string we just read looks like
+// non-text (binary) content rather than utf8 text. A NUL byte is a strong
+// binary tell, and a high ratio of U+FFFD replacement chars means the bytes
+// were mangled when decoded as utf8 (i.e. they were not valid utf8 text).
+// Only scans the first ~8KB so it stays cheap on large files.
+function looksBinary(text) {
+  if (!text) return false
+  const sample = text.length > 8192 ? text.slice(0, 8192) : text
+  let replacements = 0
+  for (let i = 0; i < sample.length; i++) {
+    const c = sample.charCodeAt(i)
+    if (c === 0) return true // NUL — definitely not text
+    if (c === 0xfffd) replacements++ // U+FFFD replacement char
+  }
+  // More than ~10% replacement chars => almost certainly mangled binary.
+  return replacements > sample.length * 0.1
+}
+
 export function createEditor() {
   const tabBar = document.getElementById('editor-tabs')
   const editorRoot = document.getElementById('editor')
@@ -106,6 +124,11 @@ export function createEditor() {
     ...editorOptions,
     model: null
   })
+
+  // Monaco's resolved default font family. The Font Family setting reverts to this
+  // when cleared — passing undefined to updateOptions means "no change", so we need
+  // the concrete default to actually revert an earlier override.
+  const DEFAULT_FONT_FAMILY = fileEditor.getOption(monaco.editor.EditorOption.fontFamily)
 
   // Diff editor is created lazily on first diff tab.
   let diffEditor = null
@@ -184,6 +207,9 @@ export function createEditor() {
     if (tab.kind === 'file') {
       showHost('file')
       fileEditor.setModel(tab.model)
+      // Read-only tabs (read errors / binary previews) must never be editable;
+      // the shared fileEditor toggles per-tab so a save can't clobber the file.
+      fileEditor.updateOptions({ readOnly: !!tab.readOnly })
       if (tab.viewState) fileEditor.restoreViewState(tab.viewState)
       fileEditor.focus()
     } else {
@@ -320,15 +346,38 @@ export function createEditor() {
       return
     }
 
-    let content = ''
+    // readError / binary => open the tab READ-ONLY so a stray Cmd+S can never
+    // overwrite the real file with an empty or mangled buffer. The normal utf8
+    // text path below is kept byte-identical to preserve file-tree / search /
+    // session-restore behaviour.
+    let content = null
+    let readError = null
     try {
       content = await api.fs.readFile(path)
     } catch (err) {
-      content = ''
+      readError = err
     }
-    if (content == null) content = ''
 
-    const model = monaco.editor.createModel(content, langForPath(path))
+    let readOnly = false
+    if (readError != null) {
+      const msg = (readError && readError.message) ? readError.message : String(readError)
+      content =
+        '// This file could not be read and is shown read-only to avoid\n' +
+        '// accidentally overwriting it.\n' +
+        '//\n' +
+        '// ' + msg + '\n'
+      readOnly = true
+    } else if (content == null) {
+      content = ''
+    } else if (looksBinary(content)) {
+      content =
+        '// Binary file — shown read-only.\n' +
+        '// Editing and saving have been disabled to avoid corrupting it.\n'
+      readOnly = true
+    }
+
+    // Read-only previews are plain text; only real text buffers get syntax lang.
+    const model = monaco.editor.createModel(content, readOnly ? 'plaintext' : langForPath(path))
 
     const { el, dotEl, closeEl, labelEl } = buildTabEl({
       label: baseName(path),
@@ -341,6 +390,7 @@ export function createEditor() {
       key,
       path,
       model,
+      readOnly,
       viewState: null,
       dirty: false,
       tabEl: el,
@@ -408,6 +458,9 @@ export function createEditor() {
     if (!activeKey) return
     const tab = tabs.get(activeKey)
     if (!tab || tab.kind !== 'file') return
+    // Never write back read-only tabs (read-error / binary previews); their
+    // model holds a placeholder notice, not the real file contents.
+    if (tab.readOnly) return
     const value = tab.model.getValue()
     try {
       await api.fs.writeFile(tab.path, value)
@@ -439,6 +492,21 @@ export function createEditor() {
     monaco.editor.setTheme(name)
   }
 
+  // Apply central editor preferences (from the Settings window), live, to the file
+  // editor and the diff editor if it exists. A blank font family reverts to Monaco's
+  // default rather than leaving a stale override in place.
+  function applySettings(opts = {}) {
+    const o = {}
+    if (typeof opts.fontSize === 'number') o.fontSize = opts.fontSize
+    if (typeof opts.fontFamily === 'string') o.fontFamily = opts.fontFamily.trim() || DEFAULT_FONT_FAMILY
+    if (typeof opts.minimap === 'boolean') o.minimap = { enabled: opts.minimap }
+    if (typeof opts.smoothScrolling === 'boolean') o.smoothScrolling = opts.smoothScrolling
+    if (typeof opts.scrollBeyondLastLine === 'boolean') o.scrollBeyondLastLine = opts.scrollBeyondLastLine
+    if (Object.keys(o).length === 0) return
+    fileEditor.updateOptions(o)
+    if (diffEditor) diffEditor.updateOptions(o)
+  }
+
   // Snapshot of open *file* tabs for session restore (diffs are transient and skipped).
   // Returns { files: [{ path, line, active }] } in tab order.
   function listOpenFiles() {
@@ -465,5 +533,5 @@ export function createEditor() {
 
   syncWelcome()
 
-  return { openFile, openDiff, save, onSave, onTabsChange, setTheme, listOpenFiles }
+  return { openFile, openDiff, save, onSave, onTabsChange, setTheme, applySettings, listOpenFiles }
 }

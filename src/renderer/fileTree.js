@@ -170,9 +170,16 @@ export function createFileTree({ onOpenFile }) {
     for (const row of container.querySelectorAll('.ft-row[data-path]')) decorateRow(row)
   }
 
-  // Rebuild the status maps from an SCM status object ({ staged, changes }) and
-  // repaint visible rows without disturbing expansion or an in-progress rename.
-  function applyGitStatus(status) {
+  // Snapshot of the status maps that the DOM currently reflects, so a subsequent
+  // applyGitStatus can repaint only the rows whose letter/dot actually changed
+  // (PR-4.10 diff-and-patch) instead of touching every visible row.
+  let paintedFileStatus = new Map()
+  let paintedDirStatus = new Map()
+
+  // Compute the fresh fileStatus/dirStatus maps from an SCM status object
+  // ({ staged, changes }) into the live maps. Returns true on success, false if
+  // the incoming shape is unusable (caller then leaves the maps as built).
+  function rebuildStatusMaps(status) {
     fileStatus.clear()
     dirStatus.clear()
     if (root && status && status.isRepo) {
@@ -197,7 +204,51 @@ export function createFileTree({ onOpenFile }) {
         }
       }
     }
-    decorateAll()
+    return true
+  }
+
+  // Re-decorate only the rows whose status changed between the painted snapshot
+  // and the freshly built maps. Paths in either snapshot that differ get their
+  // row touched; rows that don't currently exist in the DOM are skipped (they'll
+  // pick up the right badge from decorateRow when they're next rendered). Returns
+  // false to signal the caller it should fall back to a full repaint.
+  function patchChangedRows() {
+    const touched = new Set()
+    const collect = (path, oldMap, newMap) => {
+      if (touched.has(path)) return
+      if ((oldMap.get(path) || '') !== (newMap.get(path) || '')) touched.add(path)
+    }
+    for (const p of paintedFileStatus.keys()) collect(p, paintedFileStatus, fileStatus)
+    for (const p of fileStatus.keys()) collect(p, paintedFileStatus, fileStatus)
+    for (const p of paintedDirStatus.keys()) collect(p, paintedDirStatus, dirStatus)
+    for (const p of dirStatus.keys()) collect(p, paintedDirStatus, dirStatus)
+
+    for (const path of touched) {
+      const row = container.querySelector(`.ft-row[data-path="${cssEscape(path)}"]`)
+      if (row && !row.classList.contains('ft-inline')) decorateRow(row)
+    }
+    return true
+  }
+
+  // Rebuild the status maps from an SCM status object ({ staged, changes }) and
+  // repaint visible rows without disturbing expansion or an in-progress rename.
+  // PR-4.10: when we already hold a painted snapshot we patch only the rows whose
+  // status changed; on the first status (no snapshot) or on any unexpected shape
+  // we fall back to decorateAll() so the tree can never end up half-painted.
+  function applyGitStatus(status) {
+    const hadSnapshot = paintedFileStatus.size > 0 || paintedDirStatus.size > 0
+    let ok = false
+    try {
+      if (rebuildStatusMaps(status)) {
+        ok = hadSnapshot ? patchChangedRows() : false
+      }
+    } catch {
+      ok = false
+    }
+    if (!ok) decorateAll()
+    // Record what the DOM now reflects so the next call can diff against it.
+    paintedFileStatus = new Map(fileStatus)
+    paintedDirStatus = new Map(dirStatus)
   }
 
   async function loadChildren(dirPath) {
@@ -317,6 +368,10 @@ export function createFileTree({ onOpenFile }) {
     expanded.clear()
     childrenCache.clear()
     selected = null
+    // Root changed — drop the painted snapshot so the next applyGitStatus takes
+    // the full decorateAll() fallback rather than diffing against stale paths.
+    paintedFileStatus = new Map()
+    paintedDirStatus = new Map()
     const nameEl = document.getElementById('workspace-name')
 
     // No folder open — show a call-to-action instead of a tree.
@@ -714,10 +769,20 @@ export function createFileTree({ onOpenFile }) {
   })
   bind('ft-new-file', () => startCreate('file'))
   bind('ft-new-folder', () => startCreate('folder'))
+  // Manual re-read of the tree (also the fallback when the fs watcher is degraded).
+  bind('ft-refresh', () => refresh())
   // Reveal the workspace root in Finder (selected files use the context menu).
   bind('ft-reveal', () => {
     if (root) api.shell.showItemInFolder(root)
   })
+
+  // Flag the explorer panel when the fs watcher stalls, so manual Refresh stands out.
+  if (api.fs && api.fs.onWatchStatus) {
+    const panel = document.getElementById('explorer-panel')
+    api.fs.onWatchStatus((status) => {
+      if (panel) panel.classList.toggle('degraded', status === 'degraded')
+    })
+  }
 
   // Click on empty tree area deselects.
   container.addEventListener('click', () => {

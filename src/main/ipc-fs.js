@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import fs from 'fs/promises'
 import path from 'path'
 import os from 'os'
+import { confine } from './paths.js'
 
 // Entries we never surface in the explorer.
 const HIDDEN = new Set(['.git', '.DS_Store'])
@@ -22,6 +23,7 @@ const MIME_EXT = {
 // renderer is responsible for surfacing any failures.
 export function registerFs(ctx) {
   ipcMain.handle('fs:readDir', async (_e, dirPath) => {
+    dirPath = confine(ctx.getRoot(_e.sender), dirPath)
     const dirents = await fs.readdir(dirPath, { withFileTypes: true })
     const entries = []
     for (const d of dirents) {
@@ -41,31 +43,39 @@ export function registerFs(ctx) {
   })
 
   ipcMain.handle('fs:readFile', async (_e, filePath) => {
+    filePath = confine(ctx.getRoot(_e.sender), filePath)
     return fs.readFile(filePath, 'utf8')
   })
 
   ipcMain.handle('fs:writeFile', async (_e, filePath, content) => {
+    filePath = confine(ctx.getRoot(_e.sender), filePath)
     await fs.writeFile(filePath, content)
     return true
   })
 
   ipcMain.handle('fs:createFile', async (_e, filePath) => {
+    filePath = confine(ctx.getRoot(_e.sender), filePath)
     // 'wx' throws if the file already exists.
     await fs.writeFile(filePath, '', { flag: 'wx' })
     return true
   })
 
   ipcMain.handle('fs:createDir', async (_e, dirPath) => {
+    dirPath = confine(ctx.getRoot(_e.sender), dirPath)
     await fs.mkdir(dirPath, { recursive: true })
     return true
   })
 
   ipcMain.handle('fs:rename', async (_e, oldPath, newPath) => {
+    const root = ctx.getRoot(_e.sender)
+    oldPath = confine(root, oldPath)
+    newPath = confine(root, newPath)
     await fs.rename(oldPath, newPath)
     return true
   })
 
   ipcMain.handle('fs:delete', async (_e, p) => {
+    p = confine(ctx.getRoot(_e.sender), p)
     await fs.rm(p, { recursive: true, force: true })
     return true
   })

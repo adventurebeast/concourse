@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; script-src 'self'"
+    />
+    <title>Settings</title>
+  </head>
+  <body class="settings-body">
+    <div id="settings-app">
+      <header id="settings-titlebar">
+        <span class="settings-title">Settings</span>
+      </header>
+
+      <div id="settings-toolbar">
+        <input
+          id="settings-search"
+          type="search"
+          class="settings-search-input"
+          placeholder="Search settings"
+          spellcheck="false"
+          autofocus
+        />
+        <button id="settings-reset-all" class="settings-link" title="Reset every setting to its default">
+          Reset All
+        </button>
+      </div>
+
+      <div id="settings-main">
+        <nav id="settings-nav"></nav>
+        <div id="settings-content"></div>
+      </div>
+    </div>
+    <script type="module" src="./settings.js"></script>
+  </body>
+</html>

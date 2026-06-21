@@ -86,6 +86,15 @@ const fileTree = createFileTree({
   onOpenFile: (path) => editor.openFile(path)
 })
 
+// Live tree: re-read on out-of-app changes (an agent, terminal, or external editor
+// touching files). refresh() preserves expansion + selection; git.refresh() re-reads
+// status so the explorer's per-file M/A/U/D badges — plus the status bar and beginner
+// HUD — track the change in real time, not just on save or when SCM is opened.
+api.fs.onChanged(() => {
+  fileTree.refresh()
+  git.refresh()
+})
+
 const search = createSearch({
   getRoot: () => currentRoot,
   // Open the file and jump to the matched line/column.
@@ -205,6 +214,16 @@ document.getElementById('toggle-terminals').addEventListener('click', () => {
 // editor.onTabsChange below).
 document.getElementById('editor-minimize').addEventListener('click', () => setTerminalsOnly(true))
 
+// Clicking an open document tab while minimized expands the editor back out.
+// onTabsChange only fires when the tab COUNT changes, so a plain tab click (no
+// open/close) wouldn't otherwise restore the editor. The minimize button isn't
+// an .etab so it's naturally excluded; skip the close affordance so closing a
+// tab doesn't expand the editor. setTerminalsOnly is a no-op when not minimized.
+document.getElementById('editor-tabs').addEventListener('click', (e) => {
+  if (!e.target.closest('.etab') || e.target.closest('.etab-close')) return
+  setTerminalsOnly(false)
+})
+
 // Document viewer follows the open documents: showing the editor when a document
 // is open, and reverting to terminals-only mode once every document is closed.
 editor.onTabsChange((count) => setTerminalsOnly(count === 0))
@@ -223,6 +242,10 @@ function applyTheme(mode) {
   btn.setAttribute('title', tip)
   btn.dataset.tip = tip
   localStorage.setItem(THEME_KEY, theme)
+  // Mirror into the central settings store so the Settings window and any other
+  // window reflect the change. The store only broadcasts on a real change and
+  // applyTheme is a no-op when the value already matches, so this can't loop.
+  Promise.resolve(api.settings?.set?.('appearance.theme', theme)).catch(() => {})
 }
 document.getElementById('toggle-theme').addEventListener('click', () => {
   applyTheme(theme === 'dark' ? 'light' : 'dark')
@@ -252,11 +275,55 @@ function applyMode(next) {
   btn.setAttribute('title', tip)
   btn.dataset.tip = tip
   localStorage.setItem(MODE_KEY, mode)
+  // Mirror into the central settings store (see applyTheme above for why this is loop-safe).
+  Promise.resolve(api.settings?.set?.('appearance.mode', mode)).catch(() => {})
 }
 document.getElementById('toggle-mode').addEventListener('click', () => {
   applyMode(mode === 'expert' ? 'beginner' : 'expert')
 })
 applyMode(mode)
+
+// ---------- Central settings (Settings window) ----------
+// The Settings window writes to a main-process store; every window then receives a
+// settings:changed broadcast. Editor/terminal preferences are applied live here;
+// theme/mode are mirrored INTO the store by applyTheme/applyMode above (so the panel
+// always shows the current state) and applied live when changed from the panel or
+// another window.
+function applyEditorTerminalSettings(v) {
+  if (!v) return
+  editor.applySettings({
+    fontSize: v['editor.fontSize'],
+    fontFamily: v['editor.fontFamily'],
+    minimap: v['editor.minimap'],
+    smoothScrolling: v['editor.smoothScrolling'],
+    scrollBeyondLastLine: v['editor.scrollBeyondLastLine']
+  })
+  terminals.applySettings({
+    fontSize: v['terminal.fontSize'],
+    fontFamily: v['terminal.fontFamily'],
+    cursorBlink: v['terminal.cursorBlink'],
+    scrollback: v['terminal.scrollback']
+  })
+}
+function applyAppearanceSettings(v) {
+  if (!v) return
+  if (v['appearance.theme'] && v['appearance.theme'] !== theme) applyTheme(v['appearance.theme'])
+  if (v['appearance.mode'] && v['appearance.mode'] !== mode) applyMode(v['appearance.mode'])
+}
+// Initial load: localStorage already drove theme/mode (authoritative at boot, no
+// flash), so only reconcile editor/terminal prefs here — this avoids a load-race
+// where a stale store theme could briefly override the user's saved choice.
+Promise.resolve(api.settings?.getAll?.())
+  .then((snap) => applyEditorTerminalSettings(snap?.values))
+  .catch(() => {})
+// Live changes (Settings panel or another window) apply everything.
+api.settings?.onChanged?.((payload) => {
+  applyEditorTerminalSettings(payload?.values)
+  applyAppearanceSettings(payload?.values)
+})
+// Titlebar gear opens (or focuses) the Settings window; the Settings… menu item
+// (⌘,) routes through the same main-process handler.
+document.getElementById('open-settings')?.addEventListener('click', () => api.window?.openSettings?.())
 
 // ---------- Open folder ----------
 async function setWorkspace(root) {
@@ -303,10 +370,15 @@ const welcome = createWelcome({
 // ---------- Session save / restore (Tier A: layout + tabs, fresh shells) ----------
 const $ = (id) => document.getElementById(id)
 
+// Current session-blob schema version. Bumped when the blob shape changes; old
+// blobs are upgraded by migrateSession() on restore.
+const SESSION_VERSION = 1
+
 // Snapshot the restorable workbench state for the current workspace.
 function gatherSession() {
   const activeBtn = document.querySelector('.activity-btn.active')
   return {
+    version: SESSION_VERSION,
     editor: editor.listOpenFiles(),
     terminals: terminals.getState(),
     ui: {
@@ -334,14 +406,44 @@ async function saveSession() {
   }
 }
 // A periodic dirty-check catches every kind of change (layout, resize, tabs,
-// view) without hooking each event; a final best-effort save on unload too.
-setInterval(saveSession, 4000)
-window.addEventListener('beforeunload', () => {
-  if (currentRoot) api.session.save(currentRoot, gatherSession())
+// view) without hooking each event. Paused while the window is hidden — there's
+// nothing the user can change off-screen — and resumed (with an immediate save to
+// catch anything that slipped through) when it becomes visible again. NOTE: this
+// only gates the SAVE timer; the Pulse tick lives in terminals.js and keeps
+// running while hidden by design.
+let saveTimer = setInterval(saveSession, 4000)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    clearInterval(saveTimer)
+    saveTimer = null
+  } else if (!saveTimer) {
+    saveSession()
+    saveTimer = setInterval(saveSession, 4000)
+  }
 })
+// Final save on unload. The async save can't be relied on to complete during
+// unload, so push the blob over the synchronous channel; the main process stages
+// it and the before-quit flush drains it (see ipc-session.js + index.js).
+window.addEventListener('beforeunload', () => {
+  if (currentRoot) api.session.saveSync(currentRoot, gatherSession())
+})
+
+// Upgrade an older session blob to the current schema. A versionless blob is
+// treated as v0; the v0->v1 step is a no-op seam (the shape is unchanged) so old
+// and v1 blobs restore identically — but future shape changes hang off here.
+function migrateSession(blob) {
+  if (!blob || typeof blob !== 'object') return blob
+  const version = blob.version || 0
+  if (version < 1) {
+    // v0 -> v1: no shape change yet; just stamp the version.
+    blob = { ...blob, version: 1 }
+  }
+  return blob
+}
 
 // Rebuild the workbench from a saved blob. Terminals come back as fresh shells.
 async function restoreSession(blob) {
+  blob = migrateSession(blob)
   const ts = blob && blob.terminals
   if (!ts || !terminals.restore(ts)) terminals.create()
 

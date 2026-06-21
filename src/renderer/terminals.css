@@ -1,54 +1,20 @@
-/* ---------- Status dots (activity / attention / exited) ---------- */
+/* ---------- Status dots: two states, working / idle ---------- */
 .dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
   background: var(--text-faint);
-}
-/* The status dot wears the terminal's own identity colour — so the dot on the
-   selected/running terminal matches its hue rather than a generic green/blue. */
-.dot.running {
-  background: var(--term-color, var(--green));
-}
-/* `.dot.activity` (output produced while unfocused) is just "working" seen from
-   another pane — it shares the working spinner defined in the Pulse section below. */
-.dot.attention {
-  background: var(--orange);
-  animation: dot-pulse 1s ease-in-out infinite;
-}
-.dot.exited {
-  background: var(--text-faint);
-}
-@keyframes dot-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.3;
-  }
+  position: relative;
 }
 
-/* ---------- Pulse states (Layer A deterministic + Layer B model verdict) ---------- */
-/* Working: the ring spins ONLY while output is actively streaming (the `.streaming`
-   modifier, driven by live byte flow in terminals.js). A working pane whose output
-   has paused drops to a calm solid dot in its identity hue — still "working", just
-   not visibly producing text — so the spinner reads as a true "new text incoming"
-   cue rather than spinning for the whole 8s silence window. */
-.dot.working,
-.dot.activity {
-  position: relative;
-  background: var(--term-color, var(--green));
-}
-.dot.working.streaming,
-.dot.activity.streaming {
+/* ---------- Pulse: working spins, idle rests ---------- */
+/* Working: a faint full ring in the terminal's identity hue with one brighter arc
+   rotating — reads as "output incoming" at a glance. */
+.dot.working {
   background: transparent;
 }
-/* A faint full ring with one brighter arc rotating reads as in-progress at a glance,
-   in the terminal's own identity hue. */
-.dot.working.streaming::after,
-.dot.activity.streaming::after {
+.dot.working::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -62,45 +28,10 @@
     transform: rotate(360deg);
   }
 }
-.dot.quiet {
-  /* Silent after activity — a candidate the model is about to (or just did) assess. */
-  background: var(--yellow, #e3b341);
-  animation: dot-breathe 2.4s ease-in-out infinite;
-}
-.dot.awaiting {
-  /* At rest — the agent's come to rest and it's your move (the headline state). Steady
-     amber once seen; the `unseen` pulse below adds the "come look" nudge until you open
-     it. The loud part of this state is the working→awaiting edge (onAwait), not a
-     forever-pulsing dot. */
-  background: var(--orange);
-}
-.dot.done {
-  background: var(--green);
-}
-.dot.error {
-  background: var(--red);
-}
+/* Idle: a calm solid dot in the terminal's identity hue. A finished process is also
+   "idle" — the faded `.exited` tab label carries the "ended" cue. */
 .dot.idle {
-  background: var(--text-faint);
-}
-/* A settled pane you haven't opened since it settled keeps a soft "come look" pulse;
-   focusing it (clearFlags drops .unseen) lets it go calm. `awaiting` is the one you're
-   actually waiting for, so it pulses a touch more insistently than done/error. */
-.dot.unseen.awaiting {
-  animation: dot-pulse 1s ease-in-out infinite;
-}
-.dot.unseen.done,
-.dot.unseen.error {
-  animation: dot-pulse 1.4s ease-in-out infinite;
-}
-@keyframes dot-breathe {
-  0%,
-  100% {
-    opacity: 0.9;
-  }
-  50% {
-    opacity: 0.4;
-  }
+  background: var(--term-color, var(--text-faint));
 }
 
 /* Identity colour at a glance: ring each inactive tab's status dot in that

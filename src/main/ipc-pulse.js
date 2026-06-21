@@ -1,25 +1,43 @@
 import { ipcMain } from 'electron'
+import { getRaw } from './settings.js'
 
 // Pulse · Layer B — turn a pane's recent visible output into a compact
 // { state, summary, question } verdict, so the UI can tell "awaiting your input"
 // from "still working" from "done" without you reading the scrollback.
 //
-// Provider-pluggable (the ecosystem is multi-LLM). Two backends ship today, chosen
-// by environment at startup:
-//   CONCOURSE_PULSE_BASE_URL set  -> "local": any OpenAI-compatible HTTP endpoint
-//                                    (Ollama, LM Studio, llama.cpp server, …),
-//                                    default base http://localhost:11434/v1.
-//                                    No key, fully offline, free.
-//   else ANTHROPIC_API_KEY set    -> "claude": Anthropic API + Haiku (the cheap
-//                                    /fast tier for this per-pane microtask).
-//   else                          -> disabled (Layer A still runs).
-// The key / SDK / network access live ONLY in the main process; the renderer just
-// sends a text tail and gets a verdict (or null). Every failure degrades to null —
-// Pulse must never take the app down.
+// Provider-pluggable (the ecosystem is multi-LLM). The backend is chosen at runtime
+// and re-evaluated every few seconds, so a server you start AFTER the app gets picked
+// up. Order of preference:
+//   1. CONCOURSE_PULSE_BASE_URL set -> "local": that exact OpenAI-compatible endpoint,
+//      used unconditionally (explicit opt-in — Ollama, LM Studio, llama.cpp, a remote
+//      box). Default base http://localhost:11434/v1.
+//   2. else a local server answering at http://localhost:11434/v1 -> "local",
+//      AUTO-DETECTED. Zero-config happy path: `ollama serve` and Pulse just turns on.
+//      No env var, no key, fully offline, free — and it works even for a Finder-launched
+//      app, which never sees your shell's exported env vars.
+//   3. else ANTHROPIC_API_KEY set -> "claude": Anthropic API + Haiku (the cheap /fast
+//      tier for this per-pane microtask).
+//   4. else -> disabled (Layer A still runs).
+// A reachable local server is preferred over an Anthropic key when both are present
+// (free / offline / private). The key / SDK / network access live ONLY in the main
+// process; the renderer just sends a text tail and gets a verdict (or null). Every
+// failure degrades to null — Pulse must never take the app down.
 
 const DEFAULT_CLAUDE_MODEL = 'claude-haiku-4-5'
 const DEFAULT_LOCAL_MODEL = 'llama3.2:3b'
 const DEFAULT_LOCAL_BASE_URL = 'http://localhost:11434/v1'
+
+// Configuration precedence for Pulse: a Settings value (set in the Settings
+// window) wins; otherwise the matching environment variable; otherwise the
+// caller's default. Settings beat env because they're an explicit, in-app user
+// choice — while env vars stay as a zero-UI / headless escape hatch. Read fresh on
+// every resolve so a change in the Settings window takes effect within the resolver
+// TTL (a few seconds) without a restart.
+function settingOrEnv(settingKey, envKey) {
+  const fromSetting = (getRaw(settingKey) || '').toString().trim()
+  if (fromSetting) return fromSetting
+  return (process.env[envKey] || '').trim()
+}
 
 const STATES = ['working', 'awaiting', 'done', 'error', 'idle']
 
@@ -66,7 +84,7 @@ const SYSTEM = [
 
 // Cap renderer-supplied strings — the main process must not trust the renderer's own
 // line cap, or a buggy/huge buffer could be shipped to the model.
-const TAIL_MAX = 8000
+const TAIL_MAX = 2500
 const FIELD_MAX = 200
 const cap = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '')
 
@@ -121,7 +139,7 @@ async function fetchWithTimeout(url, opts, ms) {
 // Claude (Anthropic API + Haiku). Lazy-loads the SDK so a missing install or bad key
 // degrades to disabled rather than crashing the app at startup.
 function claudeProvider(apiKey) {
-  const model = (process.env.CONCOURSE_PULSE_MODEL || '').trim() || DEFAULT_CLAUDE_MODEL
+  const model = settingOrEnv('pulse.model', 'CONCOURSE_PULSE_MODEL') || DEFAULT_CLAUDE_MODEL
   let clientPromise = null
   const getClient = () => {
     if (!clientPromise) {
@@ -144,13 +162,30 @@ function claudeProvider(apiKey) {
     async summarize(payload) {
       const client = await getClient()
       if (!client) return null
-      const resp = await client.messages.create({
+      // Prompt-cache the stable SYSTEM block so the 2nd+ consecutive Haiku call
+      // reads it from cache (usage.cache_read_input_tokens > 0) instead of
+      // reprocessing it. NOTE: SYSTEM must clear Haiku's ~4K-token minimum
+      // cacheable prefix to actually cache — below that the API silently skips
+      // the cache (cache_creation_input_tokens stays 0). Token-count to verify;
+      // not a blocker here. The user text (volatile) stays uncached after it.
+      const base = {
         model,
         max_tokens: 200,
-        system: SYSTEM,
         messages: [{ role: 'user', content: buildUserText(payload) }],
         output_config: { format: { type: 'json_schema', schema: SCHEMA } }
-      })
+      }
+      let resp
+      try {
+        resp = await client.messages.create({
+          ...base,
+          system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }]
+        })
+      } catch (err) {
+        // Fall back to the plain-string system if the SDK rejects the
+        // array + cache_control shape — output must be unchanged either way.
+        console.log('[pulse] cache_control system rejected, retrying plain:', err?.message || err)
+        resp = await client.messages.create({ ...base, system: SYSTEM })
+      }
       return (resp.content || [])
         .filter((b) => b.type === 'text')
         .map((b) => b.text)
@@ -164,9 +199,9 @@ function claudeProvider(apiKey) {
 // configurable base URL: no SDK, no native build, no key required (localhost runtimes
 // ignore Authorization; a key is sent only if CONCOURSE_PULSE_API_KEY is set).
 function openAICompatibleProvider() {
-  const baseUrl = ((process.env.CONCOURSE_PULSE_BASE_URL || '').trim() || DEFAULT_LOCAL_BASE_URL).replace(/\/+$/, '')
-  const model = (process.env.CONCOURSE_PULSE_MODEL || '').trim() || DEFAULT_LOCAL_MODEL
-  const key = (process.env.CONCOURSE_PULSE_API_KEY || '').trim()
+  const baseUrl = (settingOrEnv('pulse.baseUrl', 'CONCOURSE_PULSE_BASE_URL') || DEFAULT_LOCAL_BASE_URL).replace(/\/+$/, '')
+  const model = settingOrEnv('pulse.model', 'CONCOURSE_PULSE_MODEL') || DEFAULT_LOCAL_MODEL
+  const key = settingOrEnv('pulse.localApiKey', 'CONCOURSE_PULSE_API_KEY')
   const headers = { 'content-type': 'application/json', ...(key && { authorization: `Bearer ${key}` }) }
   return {
     name: 'local',
@@ -204,21 +239,113 @@ function openAICompatibleProvider() {
   }
 }
 
-// Pick a backend from the environment: a base URL wins (explicit opt-in to local),
-// else an Anthropic key, else nothing.
-function createProvider() {
-  if ((process.env.CONCOURSE_PULSE_BASE_URL || '').trim()) return openAICompatibleProvider()
-  if ((process.env.ANTHROPIC_API_KEY || '').trim()) return claudeProvider(process.env.ANTHROPIC_API_KEY.trim())
-  return null
+// Resolve a backend at runtime (see the header for the full precedence list). This is
+// async because auto-detect may probe the local server, and the result is cached for a
+// few seconds so we don't probe on every call — while still noticing a server that
+// starts or stops mid-session.
+function createResolver() {
+  async function resolve() {
+    // The Settings window can force a provider or turn Pulse off; default is
+    // auto-detect. Read fresh each resolve so a change applies within the TTL.
+    const mode = (getRaw('pulse.provider') || 'auto').toString()
+    if (mode === 'off') return null
+
+    const anthropicKey = settingOrEnv('pulse.anthropicApiKey', 'ANTHROPIC_API_KEY')
+    // Both candidates are cheap to construct (no network until used; the Anthropic SDK
+    // is lazy-imported on first summarize), so build them per-resolve to pick up live
+    // Settings changes (model, base URL, keys) without a restart.
+    const local = openAICompatibleProvider()
+    const claude = anthropicKey ? claudeProvider(anthropicKey) : null
+
+    // Explicit choice: trust it. (For 'local' we don't gate on a probe — a briefly-down
+    // server should still report its configured provider and recover on its own; for
+    // 'claude' a missing key leaves Pulse off until one is set.)
+    if (mode === 'local') return local
+    if (mode === 'claude') return claude
+
+    // Auto-detect (default). Precedence:
+    // 1. Explicit endpoint (Settings base URL or env): trust the operator, no probe.
+    const explicitLocal = !!settingOrEnv('pulse.baseUrl', 'CONCOURSE_PULSE_BASE_URL')
+    if (explicitLocal) return local
+    // 2. A reachable local server wins (free, offline, private). A refused connection
+    //    fails fast, so this adds no real latency when nothing is running.
+    if (await local.reachable()) return local
+    // 3. Fall back to Anthropic when a key is present.
+    if (claude) return claude
+    // 4. Nothing usable — Layer A still carries the UI.
+    return null
+  }
+
+  const TTL_MS = 5000
+  let cache = { provider: undefined, expires: 0 }
+  return async function getProvider() {
+    const now = Date.now()
+    if (cache.provider !== undefined && now < cache.expires) return cache.provider
+    const provider = await resolve()
+    cache = { provider, expires: now + TTL_MS }
+    return provider
+  }
+}
+
+// Global concurrency cap across ALL panes/windows: with 8+ panes pulsing at
+// once we'd otherwise fire 8 model calls in parallel. Run at most MAX_CONCURRENT
+// and FIFO-queue the rest. Queued requests carry their pane key so a newer
+// request for the same pane can supersede (stale-drop) an older queued one —
+// we don't want to spend a call on a summary the UI has already moved past.
+const MAX_CONCURRENT = 3
+
+function createSemaphore(max) {
+  let active = 0
+  const queue = [] // { key, superseded, resolve }
+
+  function release() {
+    active--
+    // Drain to the next live (non-superseded) waiter.
+    while (queue.length) {
+      const item = queue.shift()
+      if (item.superseded) {
+        item.resolve(null)
+        continue
+      }
+      active++
+      item.resolve(() => release())
+      return
+    }
+  }
+
+  return {
+    // Acquire a slot for `key`. Resolves to a release() fn when a slot is
+    // granted, or null if this request was superseded by a newer one for the
+    // same pane while it sat in the queue (stale-drop — caller must not run).
+    acquire(key) {
+      return new Promise((resolve) => {
+        if (active < max) {
+          active++
+          resolve(() => release())
+          return
+        }
+        // A still-queued request for the same pane is now obsolete — mark it so
+        // it resolves to null (dropped) instead of running a stale summary.
+        if (key != null) {
+          for (const item of queue) {
+            if (item.key === key) item.superseded = true
+          }
+        }
+        queue.push({ key, superseded: false, resolve })
+      })
+    }
+  }
 }
 
 export function registerPulse() {
-  const provider = createProvider()
+  const getProvider = createResolver()
 
   // Coalesce bursts: at most one in-flight summary per pane.
   const inFlight = new Set()
+  const semaphore = createSemaphore(MAX_CONCURRENT)
 
   ipcMain.handle('pulse:status', async () => {
+    const provider = await getProvider()
     let reachable = false
     if (provider) {
       try {
@@ -236,6 +363,7 @@ export function registerPulse() {
   })
 
   ipcMain.handle('pulse:summarize', async (_e, payload = {}) => {
+    const provider = await getProvider()
     if (!provider) return null
     // Don't spend a call on an empty/garbage payload (renderer gates too, but the
     // main process must not trust it).
@@ -249,8 +377,17 @@ export function registerPulse() {
       inFlight.add(key)
     }
     try {
-      const raw = await provider.summarize(payload)
-      return parseVerdict(raw)
+      // Wait for a global concurrency slot (>3 panes at once => the rest queue).
+      // A null release means this request was superseded while queued by a newer
+      // request for the same pane — drop it without spending a model call.
+      const release = await semaphore.acquire(key)
+      if (release == null) return null
+      try {
+        const raw = await provider.summarize(payload)
+        return parseVerdict(raw)
+      } finally {
+        release()
+      }
     } catch (err) {
       console.log('[pulse] summarize failed:', err?.status || '', err?.message || err)
       return null

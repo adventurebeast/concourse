@@ -9,8 +9,11 @@ import { registerSession } from './ipc-session.js'
 import { registerPty } from './ipc-pty.js'
 import { registerPulse } from './ipc-pulse.js'
 import { registerShell } from './ipc-shell.js'
+import { registerSettings } from './ipc-settings.js'
+import { initSettings, getRaw } from './settings.js'
 import { createWatchers } from './watcher.js'
 import { installAppMenu } from './menu.js'
+import { flushSync } from './store-io.js'
 
 const ctx = createContext()
 // Recursive fs watcher per window — keeps the file tree in sync with on-disk
@@ -88,7 +91,58 @@ function createWindow({ fresh = false } = {}) {
   return win
 }
 
-app.whenReady().then(() => {
+// The Settings window is a single shared instance (like macOS Preferences): a
+// second request just focuses the existing one. It loads its own settings.html
+// (a second renderer entry point) but reuses the same preload, so window.api —
+// including the settings bridge — is identical to the workbench.
+let settingsWin = null
+function openSettingsWindow() {
+  if (settingsWin && !settingsWin.isDestroyed()) {
+    settingsWin.focus()
+    return settingsWin
+  }
+  // Paint the window in the persisted theme's base colour so it doesn't flash
+  // white/dark before the renderer applies the theme.
+  const dark = getRaw('appearance.theme') === 'dark'
+  settingsWin = new BrowserWindow({
+    width: 760,
+    height: 660,
+    minWidth: 540,
+    minHeight: 440,
+    show: false,
+    title: 'Settings',
+    parent: BrowserWindow.getFocusedWindow() || undefined,
+    backgroundColor: dark ? '#1e1e1e' : '#ffffff',
+    titleBarStyle: 'hiddenInset',
+    webPreferences: {
+      preload: join(import.meta.dirname, '../preload/index.mjs'),
+      sandbox: false
+    }
+  })
+  settingsWin.on('ready-to-show', () => settingsWin.show())
+  settingsWin.on('closed', () => {
+    settingsWin = null
+  })
+  settingsWin.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
+
+  if (process.env.ELECTRON_RENDERER_URL) {
+    const base = process.env.ELECTRON_RENDERER_URL.replace(/\/$/, '')
+    settingsWin.loadURL(base + '/settings.html')
+  } else {
+    settingsWin.loadFile(join(import.meta.dirname, '../renderer/settings.html'))
+  }
+  return settingsWin
+}
+
+app.whenReady().then(async () => {
+  // Warm the settings cache before any window or the Pulse resolver reads it, so
+  // synchronous getters (getRaw) and the new Settings window's background colour
+  // reflect the persisted values from the first frame.
+  await initSettings()
+
   registerWorkspace(ctx, watchers)
   registerFs(ctx)
   registerGit(ctx)
@@ -97,6 +151,7 @@ app.whenReady().then(() => {
   killPtysForWindow = registerPty(ctx)
   registerPulse()
   registerShell()
+  registerSettings()
 
   // App version — read from the packaged app's manifest. Surfaced in the status
   // bar so you can confirm at a glance which build is actually running (the
@@ -108,10 +163,17 @@ app.whenReady().then(() => {
   // File ▸ New Window menu item below.
   ipcMain.on('window:open', () => createWindow({ fresh: true }))
 
-  // Application menu: File ▸ New Window / New File / New Folder / Open Folder, plus
-  // the standard Edit roles. New Window is handled here; the rest are forwarded to
-  // the focused window's renderer (see menu.js).
-  installAppMenu({ onNewWindow: () => createWindow({ fresh: true }) })
+  // Open (or focus) the shared Settings window — from the titlebar gear and the
+  // Settings… menu item (⌘,).
+  ipcMain.on('window:openSettings', () => openSettingsWindow())
+
+  // Application menu: File ▸ New Window / New File / New Folder / Open Folder, the
+  // Settings… item, plus the standard Edit roles. New Window and Settings are
+  // handled here; the rest are forwarded to the focused window's renderer (menu.js).
+  installAppMenu({
+    onNewWindow: () => createWindow({ fresh: true }),
+    onOpenSettings: () => openSettingsWindow()
+  })
 
   createWindow()
   app.on('activate', () => {
@@ -119,6 +181,11 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
+
+// Synchronously drain any staged session/recents writes before we exit, so a
+// force-quit shortly after a layout change still persists it (the async write
+// queue may not get a turn during teardown). See store-io flushSync().
+app.on('before-quit', () => flushSync())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
