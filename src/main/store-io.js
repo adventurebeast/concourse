@@ -68,23 +68,34 @@ export function trackPending(filePath, data) {
   pending.set(filePath, data)
 }
 
-// Synchronously drain all tracked pending writes. For use on app quit, where the
-// async queue may not get a chance to finish. Writes each to a temp file then
-// renames over the target.
-export function flushSync() {
-  for (const [filePath, data] of pending) {
-    const tmp = `${filePath}.${process.pid}.tmp`
+// Synchronously + atomically write `data` to `filePath` (temp file, then rename
+// over the target). For the window-unload / quit path, where the async write
+// queue can't be awaited. Clears any pending entry for this path so a later
+// flushSync() won't redundantly rewrite it. Returns true on success.
+export function writeJsonSync(filePath, data) {
+  const tmp = `${filePath}.${process.pid}.tmp`
+  try {
+    fsSync.writeFileSync(tmp, JSON.stringify(data, null, 2))
+    fsSync.renameSync(tmp, filePath)
+    pending.delete(filePath)
+    return true
+  } catch {
+    // Best-effort; losing this write is non-fatal.
     try {
-      fsSync.writeFileSync(tmp, JSON.stringify(data, null, 2))
-      fsSync.renameSync(tmp, filePath)
+      fsSync.unlinkSync(tmp)
     } catch {
-      // Best-effort; losing this write is non-fatal.
-      try {
-        fsSync.unlinkSync(tmp)
-      } catch {
-        // ignore
-      }
+      // ignore — tmp may not exist
     }
+    return false
+  }
+}
+
+// Synchronously drain all tracked pending writes. For use on app quit, where the
+// async queue may not get a chance to finish. Iterates a snapshot so the
+// per-write pending.delete() can't perturb iteration.
+export function flushSync() {
+  for (const [filePath, data] of [...pending]) {
+    writeJsonSync(filePath, data)
   }
   pending.clear()
 }

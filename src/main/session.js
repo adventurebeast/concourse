@@ -2,7 +2,7 @@ import { app } from 'electron'
 import path from 'path'
 import crypto from 'crypto'
 import fsSync from 'fs'
-import { writeJsonAtomic, readJson, enqueue, trackPending } from './store-io.js'
+import { writeJsonAtomic, writeJsonSync, readJson, enqueue, trackPending } from './store-io.js'
 
 // Persisted per-workspace session state (open editor tabs, terminal layout, UI
 // sizes) plus the last-opened root for auto-reopen. Each workspace lives in its
@@ -95,13 +95,21 @@ export async function setLastRoot(root) {
   })
 }
 
-// Synchronously stage a blob for `root` into the pending map (no I/O), so a quit
-// flush can drain it. Used by the beforeunload saveSync path, where the async
-// write queue can't be trusted to finish. Also stages the meta (lastRoot) update.
-export function stageSession(root, blob) {
+// Synchronously + durably persist a workspace's session blob (plus the lastRoot
+// meta) for the beforeunload saveSync path. This runs as a window tears down —
+// too late to await the async write queue, and (on app quit) AFTER before-quit
+// has already drained+cleared the pending map. So we must write to disk right
+// here rather than only staging; otherwise the final layout is lost. We also
+// trackPending() as a redundant safety net for any later flush.
+export function saveSessionSync(root, blob) {
   if (!root) return
-  trackPending(sessionFile(root), { version: SCHEMA_VERSION, root, blob: blob || {} })
-  trackPending(metaPath(), { version: SCHEMA_VERSION, lastRoot: root })
+  ensureDir()
+  const data = { version: SCHEMA_VERSION, root, blob: blob || {} }
+  const meta = { version: SCHEMA_VERSION, lastRoot: root }
+  trackPending(sessionFile(root), data)
+  trackPending(metaPath(), meta)
+  writeJsonSync(sessionFile(root), data)
+  writeJsonSync(metaPath(), meta)
 }
 
 export async function getSession(root) {

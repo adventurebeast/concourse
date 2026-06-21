@@ -6,7 +6,12 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        input: { index: resolve('src/main/index.js') }
+        // The search worker is a second entry so it's emitted as its own file the
+        // main process can spawn as a worker_threads Worker (out/main/search-worker.js).
+        input: {
+          index: resolve('src/main/index.js'),
+          'search-worker': resolve('src/main/search-worker.js')
+        }
       }
     }
   },

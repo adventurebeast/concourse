@@ -51,6 +51,24 @@ export function createGit({ onOpenDiff, onStatus } = {}) {
   commitBox.appendChild(textarea)
   commitBox.appendChild(commitBtn)
 
+  // Inline error surface for SCM failures (commit / stage / unstage / discard).
+  // Lives in the persistent commitBox so it survives re-renders; cleared on the
+  // next action. (PR-C will promote this to the app-wide toast surface.)
+  const errorEl = document.createElement('div')
+  errorEl.className = 'scm-error'
+  errorEl.style.cssText =
+    'color: var(--red); font-size: 11px; padding: 6px 2px 0; white-space: pre-wrap; word-break: break-word;'
+  errorEl.hidden = true
+  commitBox.appendChild(errorEl)
+  function showError(msg) {
+    errorEl.textContent = msg
+    errorEl.hidden = false
+  }
+  function clearError() {
+    errorEl.textContent = ''
+    errorEl.hidden = true
+  }
+
   function stagedCount() {
     return lastStatus.isRepo && lastStatus.staged ? lastStatus.staged.length : 0
   }
@@ -64,10 +82,17 @@ export function createGit({ onOpenDiff, onStatus } = {}) {
     const message = textarea.value.trim()
     if (!message || stagedCount() === 0) return
     commitBtn.disabled = true
+    clearError()
     try {
-      await api.git.commit(message)
-      textarea.value = ''
-      autoGrow()
+      const res = await api.git.commit(message)
+      if (res && res.error) {
+        // Keep the typed message — the commit didn't happen, don't make the user
+        // retype it — and tell them why instead of failing silently.
+        showError('Commit failed: ' + res.error)
+      } else {
+        textarea.value = ''
+        autoGrow()
+      }
     } finally {
       await refresh()
     }
@@ -133,8 +158,12 @@ export function createGit({ onOpenDiff, onStatus } = {}) {
       b.title = title
       b.addEventListener('click', async (e) => {
         e.stopPropagation()
+        clearError()
         try {
-          await handler()
+          // stage/unstage/discard resolve to `false` on failure (they never throw),
+          // so surface that instead of silently re-rendering as if it worked.
+          const res = await handler()
+          if (res === false) showError(title + ' failed.')
         } finally {
           await refresh()
         }
@@ -250,11 +279,23 @@ export function createGit({ onOpenDiff, onStatus } = {}) {
       initBtn.style.marginTop = '10px'
       initBtn.addEventListener('click', async () => {
         initBtn.disabled = true
+        let res
         try {
-          await api.git.init()
-        } finally {
-          await refresh()
+          res = await api.git.init()
+        } catch {
+          res = false
         }
+        if (res === false) {
+          // Surface the failure in place; don't refresh (that would rebuild this
+          // hint and wipe the message), and let the user try again.
+          initBtn.disabled = false
+          const err = document.createElement('div')
+          err.style.cssText = 'color: var(--red); font-size: 11px; margin-top: 8px;'
+          err.textContent = 'Could not initialize a repository here.'
+          hint.appendChild(err)
+          return
+        }
+        await refresh()
       })
       hint.appendChild(msg)
       hint.appendChild(initBtn)

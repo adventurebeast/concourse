@@ -140,12 +140,15 @@ for (let n = 1; n <= 9; n++) {
 // Cmd/Ctrl+W closes the active terminal (routes through the confirm dialog).
 keys.register('mod+w', () => terminals.closeActive())
 keys.register('mod+k', () => palette.toggle())
-// Layout modes: a single cycler plus direct keys. tabs/grid/stack/flow sit on
-// the adjacent U I O P keys; Cmd+Shift+L taps through them in order.
+// Layout modes: a single cycler plus direct keys. tabs/grid/flow sit on the
+// adjacent U I P keys; Cmd+Shift+L taps through them in order. Stack uses
+// Cmd+Shift+O, not Cmd+O: the menu's "Open Folder…" claims Cmd+O, and menu
+// accelerators fire before the renderer ever sees the keystroke, so a plain
+// mod+o binding here would be permanently dead.
 keys.register('mod+shift+l', () => terminals.cycleLayout(1))
 keys.register('mod+u', () => terminals.setLayout('tabs'))
 keys.register('mod+i', () => terminals.setLayout('grid'))
-keys.register('mod+o', () => terminals.setLayout('stack'))
+keys.register('mod+shift+o', () => terminals.setLayout('stack'))
 keys.register('mod+p', () => terminals.setLayout('flow'))
 // Workbench toggles (VS Code conventions). These drive the existing toolbar
 // buttons so the .active states and resizers stay in sync.
@@ -519,6 +522,10 @@ const isFreshWindow = new URLSearchParams(location.search).get('fresh') === '1'
     if (root) {
       currentRoot = root
       setTitle(root)
+      // Mirror setWorkspace(): the boot/restore path must also seed the beginner
+      // HUD, or its render() early-returns (null root) and the heads-up line stays
+      // blank for a returning user — the default launch path in the default mode.
+      hud.setRoot(root)
       await fileTree.load(root)
       git.refresh()
       let blob = null

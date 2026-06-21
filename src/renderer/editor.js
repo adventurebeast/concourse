@@ -376,6 +376,17 @@ export function createEditor() {
       readOnly = true
     }
 
+    // A concurrent openFile(path) for the same not-yet-open path (fast double-click,
+    // or a reveal racing session-restore) may have created the tab while we awaited
+    // the read. Re-check before allocating a Monaco model — otherwise the second
+    // call leaks a model and orphans a duplicate, uncloseable tab.
+    const raced = tabs.get(key)
+    if (raced) {
+      activate(key)
+      if (opts.line) revealLine(opts.line, opts.column, opts.endColumn)
+      return
+    }
+
     // Read-only previews are plain text; only real text buffers get syntax lang.
     const model = monaco.editor.createModel(content, readOnly ? 'plaintext' : langForPath(path))
 
