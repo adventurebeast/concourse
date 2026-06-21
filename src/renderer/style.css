@@ -775,6 +775,57 @@ body {
   opacity: 0.6;
 }
 
+/* Pulse legend — a click-to-open explainer anchored to the fleet count. The one
+   canonical place to learn what the dots, colours, and labels mean; the just-in-
+   time coach marks point back here. Never auto-pops (click only). */
+.pulse-legend {
+  position: fixed;
+  z-index: 1200;
+  width: 286px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.45);
+}
+.pulse-legend-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.pulse-legend .leg-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+.pulse-legend .leg-row .fleet-dot {
+  width: 9px;
+  height: 9px;
+}
+.pulse-legend .leg-swatch {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--green), var(--accent));
+}
+.pulse-legend .leg-chip {
+  flex-shrink: 0;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--hover);
+  color: var(--text-faint);
+}
+
 #status-clock {
   font-variant-numeric: tabular-nums;
   color: var(--text-faint);

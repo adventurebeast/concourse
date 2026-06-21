@@ -144,8 +144,9 @@ const keys = createKeybindings()
 // Cmd/Ctrl+R is also vetoed in the main process (menu accelerators fire first),
 // but keep a renderer veto too so the keystroke never leaks into a terminal.
 keys.register('mod+r', () => {})
-// Cmd/Ctrl+T opens a fresh terminal tab.
-keys.register('mod+t', () => terminals.create({}))
+// Cmd/Ctrl+T opens a fresh terminal tab. In beginner mode this offers the agent
+// launcher menu (Claude / Codex / plain shell); in expert it spawns a bare shell.
+keys.register('mod+t', () => terminals.newTab())
 // Shift+Cmd/Ctrl+Left / Right cycle the active terminal tab. A modifier is
 // required so plain arrow keys still reach the shell inside a terminal.
 keys.register('mod+shift+left', () => terminals.stepActive(-1))

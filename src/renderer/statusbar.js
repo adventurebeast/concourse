@@ -90,8 +90,53 @@ export function createStatusBar({ onOpenScm } = {}) {
     }
     fleetEl.title =
       `${total} terminal${total === 1 ? '' : 's'}` +
-      (tipParts.length ? ' · ' + tipParts.join(', ') : '')
+      (tipParts.length ? ' · ' + tipParts.join(', ') : '') +
+      ' · click for legend'
   }
+
+  // ---- Pulse legend (click the fleet count) -------------------------------
+  // The fleet count is the one always-visible Pulse surface; clicking it explains
+  // what the dots, colours, and one-line labels mean — a canonical, pull-not-push
+  // reference the just-in-time coach marks point back to. Click-only; never auto-pops.
+  let legendEl = null
+  function closeLegend() {
+    if (!legendEl) return
+    legendEl.remove()
+    legendEl = null
+    document.removeEventListener('mousedown', onDocDown, true)
+    document.removeEventListener('keydown', onKey, true)
+  }
+  function onDocDown(e) {
+    if (legendEl && !legendEl.contains(e.target) && !fleetEl.contains(e.target)) closeLegend()
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') closeLegend()
+  }
+  function toggleLegend() {
+    if (legendEl) return closeLegend()
+    legendEl = document.createElement('div')
+    legendEl.className = 'pulse-legend'
+    legendEl.innerHTML =
+      '<div class="pulse-legend-title">Pulse</div>' +
+      '<div class="leg-row"><i class="fleet-dot working"></i><span>Spinning ring — the agent is working</span></div>' +
+      '<div class="leg-row"><i class="fleet-dot idle"></i><span>Calm dot — quiet, or waiting on you</span></div>' +
+      '<div class="leg-row"><span class="leg-swatch"></span><span>Each colour marks one agent — across every layout</span></div>' +
+      '<div class="leg-row"><span class="leg-chip">abc</span><span>Labels summarise what a pane is doing (needs a model backend)</span></div>'
+    document.body.appendChild(legendEl)
+    const r = fleetEl.getBoundingClientRect()
+    const bar = document.getElementById('status-bar').getBoundingClientRect()
+    legendEl.style.left =
+      Math.max(8, Math.min(r.left, window.innerWidth - legendEl.offsetWidth - 8)) + 'px'
+    legendEl.style.bottom = window.innerHeight - bar.top + 6 + 'px'
+    // Defer so this same click doesn't immediately close it via the doc listener.
+    setTimeout(() => {
+      document.addEventListener('mousedown', onDocDown, true)
+      document.addEventListener('keydown', onKey, true)
+    }, 0)
+  }
+  fleetEl.classList.add('status-action')
+  fleetEl.style.cursor = 'pointer'
+  fleetEl.addEventListener('click', toggleLegend)
 
   // ---- pulse (Layer B summariser) -----------------------------------------
   // A quiet chip showing which model backend is turning quiet panes into

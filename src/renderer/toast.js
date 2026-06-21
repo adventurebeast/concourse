@@ -85,3 +85,21 @@ export function showToastOnce(message, opts = {}, windowMs = 8000) {
   lastShown.set(message, now)
   return showToast(message, opts)
 }
+
+// A coach mark that teaches a concept exactly once — EVER, across launches.
+// Distinct from showToastOnce (which only de-dupes within a session via an
+// in-memory Map): a "you've now learned this" lesson must never re-fire on the
+// next launch, so its seen-flag lives in localStorage. Pass a stable `key` per
+// lesson ('pulse', 'grid', …). Returns the toast handle, or null if it was
+// already shown (or storage is unavailable — in which case we skip rather than
+// risk nagging). Calmer defaults than a plain toast: info kind, 7s dwell.
+export function coachOnce(key, message, opts = {}) {
+  const storageKey = 'concourse.coach.' + key
+  try {
+    if (localStorage.getItem(storageKey)) return null
+    localStorage.setItem(storageKey, '1')
+  } catch {
+    return null
+  }
+  return showToast(message, { kind: 'info', timeout: 7000, ...opts })
+}
