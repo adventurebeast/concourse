@@ -39,8 +39,7 @@ export const SETTINGS_GROUPS = [
       {
         key: 'appearance.mode',
         label: 'Experience Mode',
-        description:
-          'Beginner adds guidance (context line, command palette, friendlier prompts). Expert follows standard IDE conventions.',
+        description: 'Beginner adds extra guidance; Expert follows standard IDE conventions.',
         type: 'enum',
         default: 'beginner',
         options: [
@@ -51,14 +50,39 @@ export const SETTINGS_GROUPS = [
       {
         key: 'appearance.tabStatus',
         label: 'Tab Status Style',
-        description:
-          'How a terminal tab shows whether its agent is working. Pulse tints the whole tab in its colour and slowly breathes while busy; Dots keeps plain tabs with a small spinning status dot.',
+        description: 'How a tab shows whether its agent is working.',
         type: 'enum',
         default: 'pulse',
         options: [
           { value: 'pulse', label: 'Pulse (colour + breathe)' },
           { value: 'dots', label: 'Dots (classic)' }
         ]
+      },
+      {
+        key: 'appearance.headerTheme',
+        label: 'Terminal Header Palette',
+        description: 'Colour palette for terminal identity headers. "Custom…" uses the colours below.',
+        type: 'enum',
+        default: 'default',
+        // Mirror of PALETTE_OPTIONS in src/renderer/term-palettes.js — this file
+        // must stay import-free, so keep these ids/labels in sync by hand.
+        options: [
+          { value: 'default', label: 'Default' },
+          { value: 'jewelbox', label: 'Jewel Box' },
+          { value: 'deep-ocean', label: 'Deep Ocean' },
+          { value: 'ember-dusk', label: 'Ember & Dusk' },
+          { value: 'slate-nord', label: 'Slate Nord' },
+          { value: 'custom', label: 'Custom…' }
+        ]
+      },
+      {
+        key: 'appearance.customHeaderColors',
+        label: 'Custom Header Colours',
+        description:
+          'For the "Custom…" palette: paste hex colours (comma or space separated) or JSON {"light":[…],"dark":[…]}. Each must read with white text. Blank or invalid falls back to Default.',
+        type: 'text',
+        default: '',
+        placeholder: '#4f9cff, #f0883e, #3fb950, …'
       }
     ]
   },
@@ -141,15 +165,14 @@ export const SETTINGS_GROUPS = [
       {
         key: 'terminal.confirmClose',
         label: 'Confirm Before Closing',
-        description: 'Ask for confirmation before closing a terminal. The dialog’s “Don’t ask me again” checkbox also turns this off.',
+        description: 'Ask for confirmation before closing a terminal.',
         type: 'boolean',
         default: true
       },
       {
         key: 'terminal.scrollback',
         label: 'Scrollback',
-        description:
-          'History lines kept for the active terminal. Background panes keep proportionally less to save memory.',
+        description: 'History lines kept for the active terminal.',
         type: 'number',
         default: 10000,
         min: 100,
@@ -166,8 +189,7 @@ export const SETTINGS_GROUPS = [
       {
         key: 'pulse.provider',
         label: 'Provider',
-        description:
-          'Pulse reads each pane and labels it (working / awaiting / done). Choosing Local offers a one-click setup that downloads a small on-device model and runs it for you. Auto-detect prefers a reachable local server, then an Anthropic key.',
+        description: 'Who labels each pane (working / awaiting / done). Auto-detect prefers a local server, then Claude.',
         type: 'enum',
         default: 'auto',
         options: [
@@ -180,8 +202,7 @@ export const SETTINGS_GROUPS = [
       {
         key: 'pulse.localAutostart',
         label: 'Auto-start Local Model',
-        description:
-          'When using a local provider, start the on-device model in the background automatically (your Ollama if installed, otherwise the app’s built-in runtime) — no setup, no localhost URL. Falls back to deterministic Pulse if no local runtime is available.',
+        description: 'Start a local model in the background automatically (Ollama or the built-in runtime).',
         type: 'boolean',
         default: true
       },
@@ -204,7 +225,7 @@ export const SETTINGS_GROUPS = [
       {
         key: 'pulse.anthropicApiKey',
         label: 'Anthropic API Key',
-        description: 'Key for the Claude provider. Stored locally and used only in the main process — never sent back to the UI.',
+        description: 'Key for the Claude provider. Stored locally, never sent to the UI.',
         type: 'secret',
         default: '',
         placeholder: 'sk-ant-…'

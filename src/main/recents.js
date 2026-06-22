@@ -4,8 +4,10 @@ import path from 'path'
 import { writeJsonAtomic, readJson, enqueue, trackPending } from './store-io.js'
 
 // Persisted list of recently-opened workspace folders. Stored as JSON in the
-// app's userData dir so it survives restarts. Most-recent first, capped.
-const MAX_RECENTS = 12
+// app's userData dir so it survives restarts. Most-recent first. We keep a deep
+// history so the welcome screen's recents list scrolls back through past work;
+// the cap bounds growth (and stale entries get pruned at read time anyway).
+const MAX_RECENTS = 50
 
 function storePath() {
   return path.join(app.getPath('userData'), 'recents.json')
@@ -28,21 +30,22 @@ export async function getRecents() {
   // clobber the pruned list.
   return enqueue(async () => {
     const list = await read()
-    const out = []
-    let changed = false
-    for (const p of list) {
-      try {
-        const stat = await fs.stat(p)
-        if (stat.isDirectory()) {
-          out.push({ path: p, name: path.basename(p) || p })
-          continue
+    // Stat every entry in parallel (order preserved by Promise.all) so a deep
+    // history doesn't serialize hundreds of fs calls when the welcome screen
+    // opens. Entries that no longer point at a directory resolve to null.
+    const checked = await Promise.all(
+      list.map(async (p) => {
+        try {
+          const stat = await fs.stat(p)
+          if (stat.isDirectory()) return { path: p, name: path.basename(p) || p }
+        } catch {
+          // missing — drop it
         }
-      } catch {
-        // missing — drop it
-      }
-      changed = true
-    }
-    if (changed) {
+        return null
+      })
+    )
+    const out = checked.filter(Boolean)
+    if (out.length !== list.length) {
       const pruned = out.map((r) => r.path)
       trackPending(storePath(), pruned)
       await writeJsonAtomic(storePath(), pruned)

@@ -101,8 +101,12 @@ html[data-tab-status='dots'] .term-tab.active .dot {
   display: flex;
   flex-direction: column;
 }
+/* Tabs layout shows the same per-pane header (dot · label · close) the grid/stack/
+   flow layouts do, so all four U-I-O-P layouts read as one system. Only the active
+   cell is mounted here (non-active cells are display:none above), so just its header
+   shows — and .term-cell.active gives it the dark active fill, matching the live tab. */
 #term-panes.tabs .cell-header {
-  display: none;
+  display: flex;
 }
 
 #term-panes.grid {
@@ -242,9 +246,9 @@ html[data-tab-status='dots'] .term-tab.active .dot {
      mode opts out (below): there a single pane fuses to its active tab, so a
      full-width rounded top would just notch the editor's corners. */
   border-radius: 6px 6px 0 0;
-  /* Per-terminal identity colour as a band across the top of every pane, so
-     panes stay distinguishable even when the terminal output is empty. */
-  border-top: 3px solid var(--term-color, transparent);
+  /* No identity band on top anymore — the header carries the pane's colour (light tint
+     when unfocused, the dark --active-fill when focused), so a saturated stripe here
+     just read as a hard "dark border". */
 }
 .term-cell.focused {
   outline: 1px solid var(--term-color, var(--accent));
@@ -289,25 +293,18 @@ html[data-tab-status='dots'] .term-tab.active .dot {
   opacity: 1;
   background: var(--border-strong);
 }
-/* Working panes breathe their header tint — the grid/stack/flow echo of the tab
-   pulse. The status dot still spins (top of this file), but a whole bar slowly
-   brightening is the calmer, more glanceable signal across a wall of panes. No JS
-   needed: :has(.dot.working) reads the same working/idle state the dot already
-   carries. Trough (0%/100%) is pinned to the idle resting tint (16%) so the
-   working→idle→working flips on bursty output restart the keyframe seamlessly —
-   no dark flash. 4s ease-in-out, matched to the tab pulse. */
-@keyframes cell-pulse {
-  0%, 100% { background: color-mix(in srgb, var(--term-color, var(--accent)) 16%, var(--bg-elevated)); }
-  50%      { background: color-mix(in srgb, var(--term-color, var(--accent)) 34%, var(--bg-elevated)); }
+/* The header has exactly TWO looks, driven by focus alone — no pulse (the spinning dot
+   already signals work): the FOCUSED pane wears the dark/strong identity fill, every
+   other pane keeps the pale light tint above. Same --active-fill the active TAB uses
+   (defined in style.css :root) so a pane's header and its tab read as one system. */
+.term-cell.active .cell-header {
+  background: var(--active-fill);
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); /* keep the white label legible on lighter hues */
+  border-bottom-color: transparent;
 }
-.cell-header:has(.dot.working) {
-  animation: cell-pulse 4s ease-in-out infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .cell-header:has(.dot.working) {
-    animation: none;
-    background: color-mix(in srgb, var(--term-color, var(--accent)) 30%, var(--bg-elevated));
-  }
+.term-cell.active .cell-header .close:hover {
+  background: color-mix(in srgb, #fff 18%, transparent);
 }
 .cell-body {
   flex: 1;

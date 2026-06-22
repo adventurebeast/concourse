@@ -22,6 +22,12 @@
   --orange: #b5790a;
   --red: #cd3131;
   --modified: #b5790a;
+  /* Active/focused identity fill — shared by the active TAB and the focused pane's HEADER
+     so they read as one system. It's the terminal's own identity hue at FULL strength
+     (--term-color) — the SAME saturated colour already used for pane outlines, status dots
+     and the old top band, NOT an invented dark. Unfocused/idle wears the pale tint of the
+     same hue; the active tab's working breathe just brightens this hue (no second colour). */
+  --active-fill: var(--term-color, var(--accent));
 }
 
 /* Dark theme */
@@ -519,31 +525,46 @@ body {
 }
 /* ---------- Pulse: the whole tab is the status indicator ----------
    working = the identity tint slowly breathes (the calm successor to the spinning
-   dot); idle = a steady tint. Two keyframe sets because the resting background
-   differs: inactive tabs sit on the strip (transparent base), the active tab is
-   lifted onto the editor surface (--bg-editor base). 4s, ease-in-out: a slow,
-   unhurried pulse that reads as "alive" without nagging.
+   dot); idle = a steady tint.
 
-   The trough (0%/100%) is pinned to the idle resting tint (.term-tab = 13%,
-   .term-tab.active = 14%) ON PURPOSE: agents emit output in bursts, so a pane flips
-   working→idle→working on every >IDLE_AFTER_MS gap, and each return RESTARTS this
-   keyframe at frame 0. If the trough sat below the idle tint the restart would slam
-   the tab dark every burst — that's what read as "blinking on/off". Matching the
-   trough to the idle tint makes restarts seamless: the breathe only ever brightens
-   up from rest and falls back to it, never flashing. */
-@keyframes tab-pulse {
-  0%, 100% { background: color-mix(in srgb, var(--term-color, var(--accent)) 13%, transparent); }
-  50%      { background: color-mix(in srgb, var(--term-color, var(--accent)) 30%, transparent); }
+   WHY THIS IS BUILT THE WAY IT IS (don't "simplify" it back): we do NOT animate the
+   `background` directly between two color-mix() values. Those values contain
+   var(--term-color), and a keyframe value that contains var() is a "pending-substitution
+   value" that CSS cannot interpolate — the animation silently falls back to DISCRETE
+   steps. That hard-flips trough↔peak at the 50% mark with NO ease-in-out at ANY duration:
+   the "it just blinks" bug. Instead we animate a registered <number> (--pulse-t, ramping
+   0→1→0, which DOES interpolate because @property gives it a type) and derive the
+   background from it every frame via calc()/color-mix below. Now the easing is real.
+
+   --pulse-t = 0 maps to each element's idle resting tint (.term-tab = 13%, active =
+   --active-fill) ON PURPOSE: agents emit output in bursts, so a pane flips
+   working→idle→working on every >IDLE_AFTER_MS gap and each return restarts the keyframe
+   at --pulse-t 0. Pinning the trough to the idle tint makes those restarts seamless —
+   the breathe only ever brightens up from rest and falls back to it. 6s ease-in-out
+   (~3s each direction) so it reads as a slow breathe, not a flash. */
+@property --pulse-t {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
 }
-@keyframes tab-pulse-active {
-  0%, 100% { background: color-mix(in srgb, var(--term-color, var(--accent)) 14%, var(--bg-editor)); }
-  50%      { background: color-mix(in srgb, var(--term-color, var(--accent)) 30%, var(--bg-editor)); }
+@keyframes tab-pulse {
+  0%, 100% { --pulse-t: 0; }
+  50%      { --pulse-t: 1; }
 }
 .term-tab[data-state='working'] {
-  animation: tab-pulse 4s ease-in-out infinite;
+  animation: tab-pulse 6s ease-in-out infinite;
+  /* trough 13% (== idle tint) → peak 30%, driven by the smoothly-eased --pulse-t. */
+  background: color-mix(in srgb, var(--term-color, var(--accent)) calc((13 + 17 * var(--pulse-t)) * 1%), transparent);
+  /* Don't let the base 0.1s background transition chase the per-frame breathe. */
+  transition: color 0.1s ease, border-color 0.1s ease;
 }
-.term-tab.active[data-state='working'] {
-  animation-name: tab-pulse-active;
+/* Active/focused tab breathes while working by gently brightening its full-hue fill —
+   driven by the same eased --pulse-t, so NO second colour is invented. Trough (--pulse-t 0)
+   == brightness(1) == the resting fill ⇒ seamless restart. Higher specificity than the
+   plain .active rule, so it wins while working. */
+html:not([data-tab-status='dots']) .term-tab.active[data-state='working'] {
+  background: var(--active-fill);
+  filter: brightness(calc(1 + 0.16 * var(--pulse-t)));
 }
 /* Awaiting (your move): the agent came to rest needing you. Steady — it does NOT breathe
    (that's "working") — but lifted a touch above the idle tint so a wall of tabs still
@@ -595,17 +616,48 @@ body {
   background: color-mix(in srgb, var(--term-color, var(--hover)) 22%, var(--hover));
   color: var(--text);
 }
-/* Active: lifted onto the editor surface so it connects to the pane below, with the
-   identity tint blended into that surface so it still reads as "this agent". */
-.term-tab.active {
-  color: var(--text);
-  background: color-mix(in srgb, var(--term-color, transparent) 14%, var(--bg-editor));
-  border-color: var(--border);
-  margin-bottom: -1px; /* cover the strip's bottom border → fuse with the pane */
+/* Active = the FOCUSED tab. It wears the FULL-strength identity hue (vs the pale "light"
+   tint every inactive tab wears) with a white label, so which pane you're driving is
+   unmistakable. The fill (--active-fill, defined once in :root) is shared with the focused
+   pane's HEADER so tab and header match exactly; the working breathe just brightens it.
+   PULSE style only — the "dots" style keeps plain light tabs, so every active-fill rule is
+   scoped :not([data-tab-status='dots']). */
+html:not([data-tab-status='dots']) .term-tab.active {
+  color: #fff;
+  background: var(--active-fill);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); /* keep the white label legible on lighter hues */
+  border-color: transparent; /* the dark fill IS the focus marker — drop the hard frame */
+  margin-bottom: -1px; /* cover the strip's bottom border so there's no seam under it */
   padding-bottom: 1px;
 }
-/* Identity colour, gently: a 2px rounded underline hugging the tab floor on
-   the active tab (replaces the old hard 3px left bar). */
+/* Active + awaiting stays a steady dark fill — you're already looking at it, so the pane
+   itself carries the "your move" cue; no need to recolour the focused tab. */
+html:not([data-tab-status='dots']) .term-tab.active[data-state='awaiting'] {
+  background: var(--active-fill);
+}
+/* Hovering the focused tab just brightens its full-hue fill a touch — never falls back to
+   the light inactive-hover wash (which would wreck the white label). */
+html:not([data-tab-status='dots']) .term-tab.active:hover {
+  background: var(--active-fill);
+  filter: brightness(1.08);
+  color: #fff;
+}
+/* Close glyph rides on the dark fill — keep it light. */
+html:not([data-tab-status='dots']) .term-tab.active .close {
+  color: rgba(255, 255, 255, 0.82);
+}
+html:not([data-tab-status='dots']) .term-tab.active .close:hover {
+  color: #fff;
+  background: color-mix(in srgb, #fff 16%, transparent);
+}
+/* A finished shell that's also focused stays DIMMED, not vivid — a dead process shouldn't
+   blast a dark identity colour just because it's the selected tab. */
+html:not([data-tab-status='dots']) .term-tab.exited.active {
+  color: var(--text-faint);
+  background: color-mix(in srgb, var(--term-color, transparent) 5%, transparent);
+}
+/* Identity underline: kept for the "dots" style (where the tab itself is plain); in pulse
+   style the dark fill already carries identity, so hide the now-redundant line. */
 .term-tab.active::before {
   content: '';
   position: absolute;
@@ -615,6 +667,9 @@ body {
   height: 2px;
   border-radius: 2px;
   background: var(--term-color, var(--accent));
+}
+html:not([data-tab-status='dots']) .term-tab.active::before {
+  background: transparent;
 }
 /* Keyboard focus — always visible, drawn inside so it isn't clipped. */
 .term-tab:focus-visible {
@@ -724,8 +779,9 @@ html[data-tab-status='dots'] .term-tab.active {
     animation: none;
     background: color-mix(in srgb, var(--term-color, var(--accent)) 30%, transparent);
   }
-  .term-tab.active[data-state='working'] {
-    background: color-mix(in srgb, var(--term-color, var(--accent)) 26%, var(--bg-editor));
+  html:not([data-tab-status='dots']) .term-tab.active[data-state='working'] {
+    background: var(--active-fill);
+    filter: none;
   }
 }
 #term-panes {

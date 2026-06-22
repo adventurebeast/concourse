@@ -253,6 +253,24 @@
   padding: 2px 6px;
 }
 
+/* Header-palette picker: dropdown + a live swatch strip of the selected theme. */
+.settings-palette {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+}
+.palette-swatches {
+  display: flex;
+  gap: 4px;
+}
+.palette-swatch {
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.22);
+}
+
 .settings-error {
   padding: 48px;
   color: var(--text-dim);
