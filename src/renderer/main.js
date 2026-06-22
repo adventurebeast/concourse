@@ -152,7 +152,7 @@ function notifyAwait(info) {
     const show = () => {
       awaitNotif?.close?.()
       awaitNotif = new Notification(`${info.name || 'Agent'} · awaiting you`, {
-        body: info.question || 'It finished its turn and is waiting for you.'
+        body: info.summary || 'It finished its turn and is waiting for you.'
       })
       awaitNotif.onclick = () => {
         api.window?.focusSelf?.()

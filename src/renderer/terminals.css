@@ -39,14 +39,26 @@
 .dot.awaiting {
   background: var(--orange);
 }
-/* Unseen come-look: it went awaiting while you were looking elsewhere. The dot pulses a
-   soft amber ring to pull you back; cleared the instant you focus the pane (activate()). */
-.dot.awaiting.unseen {
-  animation: dot-await 1.5s ease-in-out infinite;
+/* Unseen come-look: it went awaiting while you were looking elsewhere. An expanding amber
+   ring "ping" emanates from the dot to pull you back; cleared the instant you focus the
+   pane (activate()). Drawn on ::after (free — only .dot.working uses ::after, and a dot is
+   never both working AND awaiting). The ring's COLOUR is set statically and ONLY
+   transform+opacity — pure numbers — animate, so Chromium tweens them smoothly. (Put a
+   var() INSIDE the keyframe, as before, and the value becomes a "pending-substitution
+   value" that animates DISCRETELY — the ring never tweens and the whole ping is invisible.
+   Same trap the working breathe sidesteps with --pulse-t; see style.css.) */
+.dot.awaiting.unseen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--orange);
+  animation: dot-await 1.5s ease-out infinite;
 }
 @keyframes dot-await {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--orange) 55%, transparent); }
-  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--orange) 0%, transparent); }
+  0%   { transform: scale(0.9); opacity: 0.7; }
+  70%  { opacity: 0; }
+  100% { transform: scale(2.6); opacity: 0; }
 }
 
 /* ---------- Tab status dot ("dots" Pulse style only) ----------
@@ -272,9 +284,13 @@ html[data-tab-status='dots'] .term-tab.active .dot {
   padding: 0 8px;
   font-size: 11px;
   color: var(--text);
-  /* Tint the header with the terminal's identity colour. */
-  background: color-mix(in srgb, var(--term-color, transparent) 16%, var(--bg-elevated));
+  /* Resting headers wear the LIGHT tonal tint — genuinely lighter and far less saturated
+     than the old 16% vibrant mix, so identity reads as a calm wash, not a colour bar. The
+     focused header overrides to the vivid fill; a working unfocused header breathes (below). */
+  background: var(--tone-light);
   border-bottom: 1px solid var(--border);
+  /* Gentle settle when a working header returns to rest (the working rule turns this off). */
+  transition: background 0.25s ease;
 }
 .cell-label {
   flex: 1;
@@ -293,12 +309,29 @@ html[data-tab-status='dots'] .term-tab.active .dot {
   opacity: 1;
   background: var(--border-strong);
 }
-/* The header has exactly TWO looks, driven by focus alone — no pulse (the spinning dot
-   already signals work): the FOCUSED pane wears the dark/strong identity fill, every
-   other pane keeps the pale light tint above. Same --active-fill the active TAB uses
-   (defined in style.css :root) so a pane's header and its tab read as one system. */
+/* A working pane's header BREATHES too (same inherited global --pulse-t clock as the tabs),
+   so the grid / stack / flow fleet views are as glanceable as the tab strip — you see which
+   panes are live at a distance, not by hunting for a tiny spinning dot. Travels light → peak
+   in OKLCH; trough == --tone-light == the resting header, so settling is seamless. Focused
+   panes are excluded — they wear the vivid fill (below) and the cursor is already there. */
+html:not([data-tab-status='dots']) .term-cell[data-state='working']:not(.active) .cell-header {
+  animation: pulse-clock 5s ease-in-out infinite;
+  background: color-mix(in srgb, var(--term-color, var(--accent)) 60%,
+    color-mix(in srgb, white, black calc(var(--pulse-t) * 100%)));
+  transition: none; /* don't chase the per-frame pulse */
+}
+/* Awaiting (your move) — a steady, lifted tone, distinct from both idle and the breathe.
+   (The amber status dot still carries the precise "needs you" cue; this just lifts the bar.) */
+html:not([data-tab-status='dots']) .term-cell[data-state='awaiting']:not(.active) .cell-header {
+  background: var(--tone-mid);
+}
+/* The FOCUSED pane wears the full-strength identity fill with a white label — the same
+   `var(--term-color)` fill the active TAB uses, so a pane's header and its tab read as one
+   system, and it stays unmistakable amid the lighter unfocused headers. (Don't route this
+   through a :root --active-fill var — --term-color is per-pane, so a :root reference
+   resolves to the blue accent for every pane; see style.css.) */
 .term-cell.active .cell-header {
-  background: var(--active-fill);
+  background: var(--term-color, var(--accent));
   color: #fff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); /* keep the white label legible on lighter hues */
   border-bottom-color: transparent;

@@ -8,7 +8,7 @@ import {
 } from './local-llm.js'
 
 // Pulse · Layer B — turn a pane's recent visible output into a compact
-// { state, summary, question } verdict, so the UI can tell "awaiting your input"
+// { state, summary } verdict, so the UI can tell "awaiting your input"
 // from "still working" from "done" without you reading the scrollback.
 //
 // Provider-pluggable (the ecosystem is multi-LLM). The backend is chosen at runtime
@@ -50,43 +50,52 @@ const STATES = ['working', 'awaiting', 'done', 'error', 'idle']
 
 // Structured-output schema (used by the Claude backend; OpenAI-compatible servers
 // vary in json_schema support, so the local backend uses json_object + the prompt).
+// summary first (and required first) so the model generates the important field before
+// the throwaway status tag, and isn't biased into a status-shaped sentence.
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    state: { type: 'string', enum: STATES },
     summary: { type: 'string' },
-    question: { type: 'string' }
+    state: { type: 'string', enum: STATES }
   },
-  required: ['state', 'summary', 'question']
+  required: ['summary', 'state']
 }
 
+// Kept deliberately lean and example-led: the DEFAULT backend is a tiny local model
+// (qwen2.5:0.5b) chosen so Pulse stays light/free/offline, and small models follow a
+// short, example-led prompt far better than a long rule list. The PRIMARY output is the
+// summary — a one-sentence "what is this pane working on" — so a user with many tabs open
+// can remember where each one stands WITHOUT re-reading the scrollback. `state` is a
+// cheap secondary tag only: the visible working/awaiting/idle status is owned by the
+// deterministic Layer A in the renderer, and the model's state merely nudges idle→awaiting.
 const SYSTEM = [
-  'You monitor ONE pane of a terminal multiplexer used to run CLI coding agents',
-  '(such as Claude Code) and plain shells. You are given the recent visible output',
-  'of that single pane. Decide its current state and write a tiny label a human can',
-  'read at a glance. Judge only from the output shown — do not invent activity.',
+  'You watch ONE pane in a wall of many terminal panes running CLI coding agents',
+  '(such as Claude Code) and shells. The user keeps lots of panes open and cannot recall',
+  'what each one is doing. Your MAIN job: in ONE sentence, say WHAT this pane is working',
+  'on — the feature, task, file, or problem in progress — so they can pick up where they',
+  'left off at a glance. Judge only from the visible output; do not invent activity.',
   '',
-  'state — pick exactly one:',
-  '  working  — actively producing output, mid-task, or a spinner/progress is running',
-  '  awaiting — at REST, waiting on the human (an agent\'s normal resting state). Covers',
-  '             BOTH: (a) mid-task — a y/n, confirmation, password/auth, "continue?" it',
-  '             needs answered to proceed; AND (b) end-of-turn — it FINISHED its turn and',
-  '             is parked at its input box waiting for your next instruction. If a coding',
-  '             agent (e.g. Claude Code) is sitting at its prompt with nothing running,',
-  '             that is awaiting, NOT done and NOT idle.',
-  '  done     — a one-shot SHELL command finished successfully and returned to the shell',
-  '             prompt (e.g. a build/test run). Use only for plain commands, not agents.',
-  '  error    — stopped on an error, failure, traceback, or non-zero exit',
-  '  idle     — a bare, empty shell prompt that has not been used; nothing pending',
+  'summary — THE important output. ONE sentence, <=14 words, describing the WORK and where',
+  '          it stands: the feature being built, the bug being chased, the file or command',
+  '          in play. Read the CONTENT of the pane (its messages and output), not just the',
+  '          last line. Be specific, with real names. Do NOT describe status — never write',
+  '          "working", "waiting", "idle", "done", "running", or "awaiting input": the user',
+  '          already sees that. Present tense, no trailing period. Use "" only for a truly',
+  '          empty, unused pane.',
   '',
-  'summary — at most 8 words, present tense, concrete (filenames, counts, command).',
-  '          No fluff, no "the agent", no trailing period.',
-  'question — when state is awaiting: what it needs from you next, <=12 words (the exact',
-  '           prompt if mid-task, else the next step it expects). Otherwise empty string.',
+  'state — a coarse secondary tag; the user already sees status, so spend no effort here.',
+  '        Pick one: working | awaiting | done | error | idle. (awaiting = at a prompt that',
+  '        needs the human, including an agent parked at its own input box.)',
   '',
-  'Respond with ONLY a JSON object of the form',
-  '{"state": "...", "summary": "...", "question": "..."} — no prose, no code fence.'
+  'Respond with ONLY a JSON object {"summary": "...", "state": "..."} — no prose, no code',
+  'fence. Every summary is about the WORK, even when the pane is at rest:',
+  '  "● I updated the login flow to call /token/refresh and added auth.test.js.\\n>" ->',
+  '     {"summary": "Adding token refresh to the login flow, with a test", "state": "awaiting"}',
+  '  "Indexing repository... 1240/3000 files" ->',
+  '     {"summary": "Indexing the repository, about 40 percent done", "state": "working"}',
+  '  "$ npm run build\\nbuilt dist/ in 3.2s\\n$" ->',
+  '     {"summary": "Built the project into dist", "state": "done"}'
 ].join('\n')
 
 // Cap renderer-supplied strings — the main process must not trust the renderer's own
@@ -123,8 +132,9 @@ function parseVerdict(text) {
   if (!state) return null
   return {
     state,
-    summary: typeof parsed.summary === 'string' ? parsed.summary.trim() : '',
-    question: typeof parsed.question === 'string' ? parsed.question.trim() : ''
+    // Strip a trailing period/ellipsis the prompt forbids but a small model sometimes
+    // still emits — keeps the one-line label clean.
+    summary: typeof parsed.summary === 'string' ? parsed.summary.trim().replace(/[.\s]+$/, '') : ''
   }
 }
 
