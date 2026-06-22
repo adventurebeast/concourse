@@ -25,7 +25,10 @@ contextBridge.exposeInMainWorld('api', {
   // openSettings() opens (or focuses) the shared Settings window.
   window: {
     open: () => ipcRenderer.send('window:open'),
-    openSettings: () => ipcRenderer.send('window:openSettings')
+    openSettings: () => ipcRenderer.send('window:openSettings'),
+    // Bring THIS window to the foreground — used by the Pulse awaiting notification's
+    // click handler to pull you back to the agent that needs you.
+    focusSelf: () => ipcRenderer.send('window:focusSelf')
   },
 
   // Application-menu commands (File ▸ New File / New Folder / Open Folder). The

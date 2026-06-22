@@ -126,7 +126,51 @@ const search = createSearch({
 const terminals = createTerminals({
   getRoot: () => currentRoot,
   // Aggregate pane pulse states into the right side of the status bar.
-  onFleet: (fleet) => statusbar.setFleet(fleet)
+  onFleet: (fleet) => statusbar.setFleet(fleet),
+  // Pulse working→awaiting edge: an agent just came to rest needing you. The pane's own
+  // come-look pulse always fires (in terminals.js); when this window is in the
+  // BACKGROUND we ALSO post an OS notification, so you get pulled back without having to
+  // babysit the bar — the whole point of Pulse (see docs/pulse-engine.md).
+  onAwait: (info) => notifyAwait(info)
+})
+
+// ---------- Pulse awaiting notifications ----------
+// Surface the working→awaiting edge OUTSIDE the window — but only when the window is
+// unfocused (you've switched away). In-window, the tab/dot come-look pulse already
+// carries it and a notification would just nag. Clicking the notification brings the
+// window forward and reveals the exact pane. Everything degrades silently: if OS
+// notifications are unsupported or denied, the title-bar flag below still flips.
+const BASE_DOC_TITLE = document.title
+let awaitNotif = null
+function notifyAwait(info) {
+  if (document.hasFocus()) return // you're here — the in-pane come-look is enough
+  // Always-available fallback surface (works even if notifications are blocked): flag
+  // the window/dock title until you return. Cleared on the next window focus (below).
+  document.title = `🔔 ${info.name || 'Agent'} — awaiting you`
+  try {
+    if (typeof Notification === 'undefined' || Notification.permission === 'denied') return
+    const show = () => {
+      awaitNotif?.close?.()
+      awaitNotif = new Notification(`${info.name || 'Agent'} · awaiting you`, {
+        body: info.question || 'It finished its turn and is waiting for you.'
+      })
+      awaitNotif.onclick = () => {
+        api.window?.focusSelf?.()
+        if (info.id) terminals.revealPane(info.id)
+        window.focus()
+      }
+    }
+    if (Notification.permission === 'granted') show()
+    else Notification.requestPermission().then((p) => p === 'granted' && show()).catch(() => {})
+  } catch {
+    /* notifications unsupported — the come-look pulse + title flag still carry it */
+  }
+}
+// Returning to the window clears the awaiting title flag (and dismisses any open note).
+window.addEventListener('focus', () => {
+  if (document.title !== BASE_DOC_TITLE) document.title = BASE_DOC_TITLE
+  awaitNotif?.close?.()
+  awaitNotif = null
 })
 
 // Beginner command palette: a clickable launcher that TYPES a curated command onto

@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { icon } from './icons.js'
 import { coachOnce } from './toast.js'
+import { matchesAwaitPrompt } from './pulse-detect.js'
 
 // The one-time beginner coach mark that explains Pulse the first time a tab starts
 // working. Fired from every path that starts an agent (launcher reuse, '+' preset,
@@ -29,7 +30,7 @@ const TERM_COLORS = [
 
 // Tabbed + grid terminal multiplexer. Each session is an independent PTY shell;
 // run a CLI coding agent in each and watch them all at once in grid view.
-export function createTerminals({ getRoot, onFleet }) {
+export function createTerminals({ getRoot, onFleet, onAwait }) {
   const tabBar = document.getElementById('term-tabs')
   const panesEl = document.getElementById('term-panes')
   const controls = document.querySelector('#terminal-region .panel-controls')
@@ -55,14 +56,28 @@ export function createTerminals({ getRoot, onFleet }) {
   panesEl.classList.add('tabs')
 
   // ---- pulse ----
-  // Two states, full stop: a pane is `working` while output is flowing and `idle`
-  // once it goes quiet. There is no semantic state machine beyond that — the tab
-  // pulse IS the working state. One threshold: bytes ⇒ working; IDLE_AFTER_MS of
-  // silence after the last byte ⇒ idle. Long enough to bridge the sub-second gaps
-  // between an agent's tokens/tool calls (its animated TUI keeps emitting frames) so
-  // it doesn't flicker mid-turn, short enough that a finished command settles to a
-  // calm steady tint promptly. See the PTY onData handler. Tune if it feels twitchy.
+  // Byte flow drives the base state: bytes ⇒ `working`; IDLE_AFTER_MS of silence after
+  // the last byte ⇒ the pane has settled. IDLE_AFTER_MS is long enough to bridge the
+  // sub-second gaps between an agent's tokens/tool calls (its animated TUI keeps
+  // emitting frames) so it doesn't flicker mid-turn, short enough that a finished
+  // command settles promptly. See the PTY onData handler. Tune if it feels twitchy.
   const IDLE_AFTER_MS = 800
+  // On settle we classify (Layer 1 — deterministic, free, offline). If the visible tail
+  // shows an explicit input prompt, the pane is `awaiting` YOU: the agent's resting
+  // state — a y/N, a password, a permission, or just parked at its input box. This is
+  // the high-value signal — ~90% of fleet-driving is waiting to catch an agent back at
+  // rest, so the working→awaiting EDGE is the moment worth a notification (see setState).
+  // Otherwise the pane is calm `idle`, and Layer B (and the slow alt-screen tell below)
+  // may still refine it. False positives are the cardinal sin: every pattern is anchored
+  // to the END of the tail (where a parked cursor sits), so mid-output mentions of "y/n"
+  // or "password" in flowing text don't trip it.
+  const QUIET_MS = 8000 // conservative window for the implicit (alt-screen) awaiting tell
+  // Does the settled pane show an explicit input affordance in its visible tail? Reads
+  // the last few rendered rows (the cursor parks at the prompt) and runs the anchored
+  // patterns in pulse-detect.js. Pure/synchronous — the deterministic floor, no model.
+  function looksAwaitingPrompt(s) {
+    return matchesAwaitPrompt(tailOf(s, 6))
+  }
   // Layer B only runs when a provider is configured in main AND reachable (an
   // Anthropic key, or a live local OpenAI-compatible endpoint); without it the
   // deterministic Layer A still works. Re-polled on an interval so a local model
@@ -374,8 +389,7 @@ export function createTerminals({ getRoot, onFleet }) {
   function launchAgentInPane(s, command) {
     dismissPaneLauncher(s)
     s.used = true
-    s.state = 'working'
-    updateIndicators(s) // pulse the tab the instant they click — immediate feedback
+    setState(s, 'working') // pulse the tab the instant they click — immediate feedback
     if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
     api.term.input(s.id, command + '\r')
     s.term.focus()
@@ -656,17 +670,46 @@ export function createTerminals({ getRoot, onFleet }) {
     if (s) selectCell(s.id)
   }
 
+  // Every semantic state change goes through here so the working→awaiting EDGE — the
+  // moment an agent comes to rest needing you — can't be missed. On that edge, if you
+  // aren't already looking at the pane, flag it `unseen` (a come-look pulse on the
+  // tab/dot) and fire onAwait so a surface OUTSIDE the pane (an OS notification) can pull
+  // you back. Returning to `working` clears the come-look. This is the one seam the spec
+  // (docs/pulse-engine.md) hangs the notify behaviour on — keep all transitions routed
+  // through it.
+  function setState(s, next) {
+    const prev = s.state
+    if (prev === next) return
+    s.state = next
+    if (next === 'awaiting' && prev !== 'awaiting') {
+      // Only a "come-look" if you're not already on this pane in a focused window.
+      const looking = document.hasFocus() && activeId === s.id
+      if (!looking) {
+        s.unseen = true
+        onAwait?.({ id: s.id, name: (s.tabLabel && s.tabLabel.textContent) || s.baseName, question: s.summaryText || '' })
+      }
+    } else if (next === 'working') {
+      s.unseen = false
+    }
+    updateIndicators(s)
+  }
+
   // ---- pulse indicator ----
-  // Two states: `working` (output flowing) or `idle` (gone quiet). Drives BOTH tab
-  // status styles at once (CSS shows whichever the user picked, see appearance.tabStatus):
+  // Three states: `working` (output flowing), `awaiting` (at rest, your move) or `idle`
+  // (gone quiet, nothing pending). Drives BOTH tab status styles at once (CSS shows
+  // whichever the user picked, see appearance.tabStatus):
   //   • "pulse" (default) — the whole tab tints in its identity hue and slowly
-  //     *breathes* while working, settling to a steady tint when idle.
-  //   • "dots" — a compact dot in the tab spins while working, rests when idle.
-  // The grid / stack / flow pane headers always use the dot (no tab strip there). The
-  // same `working`/`idle` value feeds both AND the fleet summary, so they all agree.
+  //     *breathes* while working; holds a steady tint when awaiting/idle.
+  //   • "dots" — a compact dot in the tab spins while working, rests when quiet.
+  // An `awaiting` pane that came to rest while you were elsewhere is also flagged
+  // `unseen` → a soft amber come-look pulse until you focus it. The grid / stack / flow
+  // pane headers always use the dot (no tab strip there). The same value feeds both AND
+  // the fleet summary, so they always agree.
   function updateIndicators(s) {
-    s.tabEl.dataset.state = s.state // pulse style: steady vs breathing tab tint
-    const cls = 'dot ' + s.state
+    s.tabEl.dataset.state = s.state // pulse style: breathing vs steady tab tint
+    if (s.unseen) s.tabEl.dataset.unseen = '1'
+    else delete s.tabEl.dataset.unseen
+    const cls = 'dot ' + s.state + (s.unseen ? ' unseen' : '')
     s.tabDot.className = cls // dots style: the in-tab status dot
     s.cellDot.className = cls
     s.stubDot.className = cls
@@ -674,7 +717,7 @@ export function createTerminals({ getRoot, onFleet }) {
     // only, so Expert stays a bare shell. The status-bar fleet count carries the full
     // Pulse legend; this is just the hover gloss.
     if (document.documentElement.dataset.mode !== 'expert') {
-      const tip = s.state === 'working' ? 'Working' : 'Waiting'
+      const tip = s.state === 'working' ? 'Working' : s.state === 'awaiting' ? 'Awaiting you' : 'Idle'
       s.cellDot.dataset.tip = tip
       s.tabEl.dataset.tip = tip
     } else {
@@ -797,12 +840,14 @@ export function createTerminals({ getRoot, onFleet }) {
       id, term, fit, cell, body: cellBody, tabEl, tabDot, tabLabel, cellLabel, cellDot, color,
       stub, stubDot, stubLabel,
       status: 'running', custom: false,
-      // Two states only: `working` (output flowing — pulsing) or `idle` (gone quiet).
-      // An agent preset (command) auto-fires on open, so it starts working. A plain
-      // shell just sits at its prompt, so it starts idle and won't pulse until the
-      // user actually drives it (see the PTY onData handler).
+      // Three states: `working` (output flowing — pulsing), `awaiting` (at rest, your
+      // move) or `idle` (gone quiet, nothing pending). An agent preset (command)
+      // auto-fires on open, so it starts working. A plain shell just sits at its prompt,
+      // so it starts idle and won't pulse until the user drives it (see PTY onData).
       state: command ? 'working' : 'idle',
-      idleTimer: null, // debounce handle: flips the pane to idle after IDLE_AFTER_MS of silence
+      unseen: false, // came to rest (awaiting) while you were looking elsewhere → come-look
+      idleTimer: null, // debounce handle: classifies the pane on settle after IDLE_AFTER_MS
+      quietTimer: null, // slower settle timer for the conservative alt-screen awaiting tell
       follow: true, // sticky-bottom intent: keep the newest line (prompt / agent input box)
       //              visible. True until the user scrolls up to read history (see onScroll),
       //              re-armed the instant they type. Every write/fit re-asserts the bottom
@@ -975,6 +1020,7 @@ export function createTerminals({ getRoot, onFleet }) {
     if (!s) return
     clearTimeout(s.titleTimer)
     clearTimeout(s.idleTimer)
+    clearTimeout(s.quietTimer)
     resizeObserver.unobserve(s.body)
     dirty.delete(s)
     api.term.kill(id)
@@ -1010,6 +1056,12 @@ export function createTerminals({ getRoot, onFleet }) {
     // note below — so capture the distinction before we overwrite activeId.
     const switching = activeId !== id
     activeId = id
+    // Looking at this pane clears the awaiting come-look (set on the working→awaiting
+    // edge while you were elsewhere). Repaint so the pulse stops immediately.
+    if (s.unseen) {
+      s.unseen = false
+      updateIndicators(s)
+    }
     for (const [sid, sess] of sessions) {
       const on = sid === id
       sess.cell.classList.toggle('active', on)
@@ -1331,34 +1383,53 @@ export function createTerminals({ getRoot, onFleet }) {
     // start the indicator. Only a pane the user has driven (s.used) or an agent preset
     // (!isShell) counts as working; an unused shell stays idle until used.
     if (s.isShell && !s.used) return
-    // Output ⇒ working (pulse). Each byte resets the idle debounce, so the pane
-    // stays working across the sub-second gaps in a turn and only settles to idle
+    // Output ⇒ working (pulse). Each byte resets the settle debounce, so the pane
+    // stays working across the sub-second gaps in a turn and only settles
     // IDLE_AFTER_MS after output truly stops.
     if (s.state !== 'working') {
-      s.state = 'working'
       s.summaryText = null // live activity: drop the stale resting label
       applyTitle(s)
-      updateIndicators(s)
+      setState(s, 'working') // repaints; also clears any awaiting come-look
       // The first time a beginner ever sees a tab start pulsing, explain it — Pulse
       // finally names itself at the exact moment it has meaning. Once ever, never expert.
       if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
     }
+    // New output ⇒ not at rest: cancel both settle timers, then re-arm the fast one.
     clearTimeout(s.idleTimer)
+    clearTimeout(s.quietTimer)
+    s.quietTimer = null
     s.idleTimer = setTimeout(() => {
       s.idleTimer = null
       if (s.status === 'exited') return // the exit handler owns the final state
-      s.state = 'idle'
-      updateIndicators(s)
-      summarize(s) // it just came to rest — label what it did / is waiting on
+      // Layer 1 classify on settle. An explicit prompt in the tail ⇒ awaiting you now
+      // (fast path, high confidence). Otherwise calm: settle to idle, and for a
+      // full-screen TUI arm the conservative QUIET_MS alt-screen tell (the no-LLM floor).
+      if (looksAwaitingPrompt(s)) {
+        setState(s, 'awaiting')
+      } else {
+        setState(s, 'idle')
+        if (s.term.buffer.active.type === 'alternate') {
+          s.quietTimer = setTimeout(() => {
+            s.quietTimer = null
+            if (s.status !== 'exited' && s.state === 'idle' && s.term.buffer.active.type === 'alternate') {
+              setState(s, 'awaiting') // a TUI silent past QUIET_MS is almost certainly at rest
+            }
+          }, QUIET_MS - IDLE_AFTER_MS)
+        }
+      }
+      summarize(s) // Layer B: refine the label, and may promote idle→awaiting
     }, IDLE_AFTER_MS)
   })
   api.term.onExit(({ id }) => {
     const s = sessions.get(id)
     if (!s) return
     s.status = 'exited'
-    s.state = 'idle' // a finished process isn't working; the faded .exited tab marks that it ended
+    s.state = 'idle' // a finished process isn't working/awaiting; the faded .exited tab marks "ended"
+    s.unseen = false // never leave a dead pane nagging for a come-look
     clearTimeout(s.idleTimer) // settled — never leave it pulsing
     s.idleTimer = null
+    clearTimeout(s.quietTimer)
+    s.quietTimer = null
     updateIndicators(s)
     s.tabEl.classList.add('exited')
     // Clear any stale OSC title (programs may leave one set on exit); the resolver
@@ -1418,12 +1489,17 @@ export function createTerminals({ getRoot, onFleet }) {
       s.summarizing = false
     }
     if (!res) return // failed/empty: leave the hash unset so we retry next rest
-    // If the pane has resumed working while we waited (new output flipped it back and
-    // cleared its label), don't paint a stale resting summary over a live pane.
-    if (s.state !== 'idle') return
+    // Stale guard: if the pane resumed working (or the process exited) while we waited,
+    // don't paint a resting label or flip state out from under live output.
+    if (s.state === 'working' || s.status === 'exited') return
     s.lastSummaryHash = h
     const label = res.question ? `⏳ ${res.question}` : res.summary
     s.summaryText = label && label.trim() ? label.trim() : null
+    // Layer B can recognise a rest the deterministic regex missed — most importantly an
+    // agent parked at its OWN input box (end-of-turn await). Promote idle→awaiting so the
+    // come-look edge fires; we set summaryText first so the notification carries the
+    // question. Never demote a deterministic `awaiting` on a model's say-so.
+    if (res.state === 'awaiting' && s.state !== 'awaiting') setState(s, 'awaiting')
     applyTitle(s)
   }
 
@@ -1523,9 +1599,17 @@ export function createTerminals({ getRoot, onFleet }) {
     for (const s of sessions.values()) {
       clearTimeout(s.idleTimer)
       clearTimeout(s.titleTimer)
-      s.idleTimer = s.titleTimer = null
+      clearTimeout(s.quietTimer)
+      s.idleTimer = s.titleTimer = s.quietTimer = null
     }
   }
 
-  return { create, newTab, fitActive, fitAll, setLayout, setTheme, applySettings, cdInto, typeIntoActive, stepActive, activateIndex, cycleLayout, closeActive, getState, restore, dispose }
+  // Bring a pane to the foreground by id — used by the awaiting OS-notification's click
+  // handler to jump straight to the agent that needs you. activate() handles focus,
+  // sticky-bottom and the come-look clear; in grid/flow the pane is already visible.
+  function revealPane(id) {
+    if (sessions.has(id)) activate(id)
+  }
+
+  return { create, newTab, fitActive, fitAll, setLayout, setTheme, applySettings, cdInto, typeIntoActive, stepActive, activateIndex, cycleLayout, closeActive, getState, restore, revealPane, dispose }
 }

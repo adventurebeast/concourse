@@ -33,6 +33,21 @@
 .dot.idle {
   background: var(--term-color, var(--text-faint));
 }
+/* Awaiting: at rest, your move (a prompt, or an agent parked at its turn). A steady
+   solid dot in the "your move" amber — calm, but distinct from idle's identity hue so a
+   wall of dots reads at a glance which one stopped FOR YOU. One state, one colour. */
+.dot.awaiting {
+  background: var(--orange);
+}
+/* Unseen come-look: it went awaiting while you were looking elsewhere. The dot pulses a
+   soft amber ring to pull you back; cleared the instant you focus the pane (activate()). */
+.dot.awaiting.unseen {
+  animation: dot-await 1.5s ease-in-out infinite;
+}
+@keyframes dot-await {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--orange) 55%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--orange) 0%, transparent); }
+}
 
 /* ---------- Tab status dot ("dots" Pulse style only) ----------
    The default "pulse" style hides this dot and tints/breathes the whole tab instead
@@ -80,6 +95,7 @@ html[data-tab-status='dots'] .term-tab.active .dot {
   position: absolute;
   inset: 0;
   display: none;
+  border-radius: 0; /* fused to the active tab here — keep the editor corners square */
 }
 #term-panes.tabs .term-cell.active {
   display: flex;
@@ -220,6 +236,12 @@ html[data-tab-status='dots'] .term-tab.active .dot {
 /* ---------- Cell ---------- */
 .term-cell {
   overflow: hidden;
+  /* Subtle rounded top, echoing the tabs (6px 6px 0 0) so each pane reads as its own
+     little "window" card. Tops only — bottoms stay square against the grid gutter.
+     overflow:hidden already clips the header tint + colour band to the curve. Tabs
+     mode opts out (below): there a single pane fuses to its active tab, so a
+     full-width rounded top would just notch the editor's corners. */
+  border-radius: 6px 6px 0 0;
   /* Per-terminal identity colour as a band across the top of every pane, so
      panes stay distinguishable even when the terminal output is empty. */
   border-top: 3px solid var(--term-color, transparent);
@@ -266,6 +288,26 @@ html[data-tab-status='dots'] .term-tab.active .dot {
 .cell-header .close:hover {
   opacity: 1;
   background: var(--border-strong);
+}
+/* Working panes breathe their header tint — the grid/stack/flow echo of the tab
+   pulse. The status dot still spins (top of this file), but a whole bar slowly
+   brightening is the calmer, more glanceable signal across a wall of panes. No JS
+   needed: :has(.dot.working) reads the same working/idle state the dot already
+   carries. Trough (0%/100%) is pinned to the idle resting tint (16%) so the
+   working→idle→working flips on bursty output restart the keyframe seamlessly —
+   no dark flash. 4s ease-in-out, matched to the tab pulse. */
+@keyframes cell-pulse {
+  0%, 100% { background: color-mix(in srgb, var(--term-color, var(--accent)) 16%, var(--bg-elevated)); }
+  50%      { background: color-mix(in srgb, var(--term-color, var(--accent)) 34%, var(--bg-elevated)); }
+}
+.cell-header:has(.dot.working) {
+  animation: cell-pulse 4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cell-header:has(.dot.working) {
+    animation: none;
+    background: color-mix(in srgb, var(--term-color, var(--accent)) 30%, var(--bg-elevated));
+  }
 }
 .cell-body {
   flex: 1;

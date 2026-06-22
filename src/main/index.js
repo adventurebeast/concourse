@@ -214,6 +214,18 @@ app.whenReady().then(async () => {
   // Settings… menu item (⌘,).
   ipcMain.on('window:openSettings', () => openSettingsWindow())
 
+  // Bring the calling window to the foreground — clicking a Pulse "awaiting you"
+  // notification pulls you back to the agent that needs you. app.focus({steal}) lifts
+  // the whole app above other apps on macOS; un-minimise + focus handles the rest.
+  ipcMain.on('window:focusSelf', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win || win.isDestroyed()) return
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+    if (process.platform === 'darwin') app.focus({ steal: true })
+  })
+
   // Application menu: File ▸ New Window / New File / New Folder / Open Folder, the
   // Settings… item, plus the standard Edit roles. New Window and Settings are
   // handled here; the rest are forwarded to the focused window's renderer (menu.js).

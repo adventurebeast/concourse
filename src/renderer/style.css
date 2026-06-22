@@ -545,6 +545,26 @@ body {
 .term-tab.active[data-state='working'] {
   animation-name: tab-pulse-active;
 }
+/* Awaiting (your move): the agent came to rest needing you. Steady — it does NOT breathe
+   (that's "working") — but lifted a touch above the idle tint so a wall of tabs still
+   shows at a glance which one stopped for you. The agent's identity hue is preserved. */
+.term-tab[data-state='awaiting'] {
+  background: color-mix(in srgb, var(--term-color, var(--accent)) 26%, transparent);
+}
+.term-tab.active[data-state='awaiting'] {
+  background: color-mix(in srgb, var(--term-color, var(--accent)) 26%, var(--bg-editor));
+}
+/* Unseen come-look: it went awaiting while you were elsewhere. A slow amber underline
+   glow pulses to pull you back — inset, so the tab strip's overflow never clips it — and
+   stops the instant you focus the pane (data-unseen cleared in activate()). Amber, not
+   the identity hue, so "needs you" reads even across a same-colour wall of tabs. */
+@keyframes tab-await-unseen {
+  0%, 100% { box-shadow: inset 0 -2.5px 0 0 var(--orange); }
+  50% { box-shadow: inset 0 -2.5px 0 0 color-mix(in srgb, var(--orange) 25%, transparent); }
+}
+.term-tab[data-unseen='1'] {
+  animation: tab-await-unseen 1.5s ease-in-out infinite;
+}
 /* Hairline divider between adjacent inactive tabs — short, centred, faint. */
 .term-tab::after {
   content: '';
@@ -805,6 +825,9 @@ html[data-tab-status='dots'] .term-tab.active {
 }
 .fleet-dot.working {
   background: var(--green);
+}
+.fleet-dot.awaiting {
+  background: var(--orange);
 }
 .fleet-dot.idle {
   background: var(--text-faint);

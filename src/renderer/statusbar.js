@@ -59,10 +59,13 @@ export function createStatusBar({ onOpenScm } = {}) {
   }
 
   // ---- fleet --------------------------------------------------------------
-  // Two buckets, mirroring the pane dots: working (spinner) and idle (at rest).
-  // Each reuses the pane dot's hue (see terminals.css) for instant visual rhyme.
+  // Three buckets, mirroring the pane dots: working (busy), awaiting (at rest, your
+  // move — the high-value one) and idle (quiet). Each reuses the pane dot's hue (see
+  // terminals.css) for instant visual rhyme. `awaiting` sits in the middle so the
+  // count you're hunting for — agents waiting on you — reads between busy and quiet.
   const BUCKETS = [
     { key: 'working', label: 'working' },
+    { key: 'awaiting', label: 'awaiting you' },
     { key: 'idle', label: 'idle' }
   ]
 
@@ -118,8 +121,9 @@ export function createStatusBar({ onOpenScm } = {}) {
     legendEl.className = 'pulse-legend'
     legendEl.innerHTML =
       '<div class="pulse-legend-title">Pulse</div>' +
-      '<div class="leg-row"><i class="fleet-dot working"></i><span>Spinning ring — the agent is working</span></div>' +
-      '<div class="leg-row"><i class="fleet-dot idle"></i><span>Calm dot — quiet, or waiting on you</span></div>' +
+      '<div class="leg-row"><i class="fleet-dot working"></i><span>Working — the agent is busy (the tab breathes)</span></div>' +
+      '<div class="leg-row"><i class="fleet-dot awaiting"></i><span>Awaiting you — at a prompt, or parked at its turn</span></div>' +
+      '<div class="leg-row"><i class="fleet-dot idle"></i><span>Idle — quiet, nothing pending</span></div>' +
       '<div class="leg-row"><span class="leg-swatch"></span><span>Each colour marks one agent — across every layout</span></div>' +
       '<div class="leg-row"><span class="leg-chip">abc</span><span>Labels summarise what a pane is doing (needs a model backend)</span></div>'
     document.body.appendChild(legendEl)
