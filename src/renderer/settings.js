@@ -9,6 +9,7 @@
 import './style.css'
 import './settings.css'
 import { ensureLocalLlmReady } from './localLlmSetup.js'
+import { colorsFor } from './term-palettes.js'
 
 const api = window.api
 
@@ -79,6 +80,37 @@ function makeEnum(s) {
       }
     }
   })
+
+  // The header-palette dropdown gets a live swatch strip so you can SEE each theme
+  // (and your custom colours) instead of picking blind. It reflects the current app
+  // theme's variant and re-paints on every sync — including when the custom-colours
+  // text field changes, since that broadcast re-runs this control's set().
+  if (s.key === 'appearance.headerTheme') {
+    const wrap = document.createElement('div')
+    wrap.className = 'settings-palette'
+    const swatches = document.createElement('div')
+    swatches.className = 'palette-swatches'
+    wrap.append(sel, swatches)
+    const paint = (v) => {
+      const appTheme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
+      swatches.innerHTML = ''
+      for (const c of colorsFor(v, appTheme, values['appearance.customHeaderColors'])) {
+        const dot = document.createElement('span')
+        dot.className = 'palette-swatch'
+        dot.style.background = c
+        swatches.appendChild(dot)
+      }
+    }
+    sel.addEventListener('change', () => paint(sel.value))
+    return {
+      el: wrap,
+      set: (v) => {
+        sel.value = v
+        paint(v)
+      }
+    }
+  }
+
   return { el: sel, set: (v) => (sel.value = v) }
 }
 

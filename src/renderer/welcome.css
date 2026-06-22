@@ -115,8 +115,11 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  max-height: 260px;
+  /* Scroll back through the full recents history. Capped to the viewport so a
+     long list never pushes the centered welcome card off small windows. */
+  max-height: min(360px, 42vh);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .welcome-recent {

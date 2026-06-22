@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { icon } from './icons.js'
 import { coachOnce } from './toast.js'
 import { matchesAwaitPrompt } from './pulse-detect.js'
+import { colorsFor } from './term-palettes.js'
 
 // The one-time beginner coach mark that explains Pulse the first time a tab starts
 // working. Fired from every path that starts an agent (launcher reuse, '+' preset,
@@ -20,13 +21,11 @@ const TERM_THEMES = {
   dark: { background: '#181818', foreground: '#cccccc', cursor: '#cccccc', selectionBackground: '#264f78' }
 }
 
-// Per-terminal identity colours. Each new terminal gets the next colour, shown
-// on its tab and pane so you can track which pane is which at a glance — vital
-// once you have a wall of them. Tuned to read on both light and dark backgrounds.
-const TERM_COLORS = [
-  '#4f9cff', '#f0883e', '#3fb950', '#db61a2',
-  '#a371f7', '#e3b341', '#56d4dd', '#f85149'
-]
+// Per-terminal identity colours come from the active palette (see term-palettes.js
+// and the appearance.headerTheme setting). Each new terminal gets the next hue,
+// shown on its tab and pane header so you can track which pane is which at a glance
+// — vital once you have a wall of them. The palette has a light and a dark variant,
+// so the hues re-tune when the app theme toggles (see setTheme/recolorAll).
 
 // Tabbed + grid terminal multiplexer. Each session is an independent PTY shell;
 // run a CLI coding agent in each and watch them all at once in grid view.
@@ -53,6 +52,12 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   let layout = 'tabs' // 'tabs' | 'grid' | 'stack' | 'flow'
   let flowIndex = 0 // which session sits in the centre in 'flow' (album) layout
   let themeName = 'light'
+  // Active identity-colour palette (appearance.headerTheme). `activeColors` is the
+  // 8-hue array for the CURRENT palette + app theme; it's recomputed (and existing
+  // panes recoloured) whenever either changes — see setHeaderTheme / setTheme.
+  let headerPalette = 'default'
+  let headerCustom = '' // raw user input for the 'custom' palette
+  let activeColors = colorsFor(headerPalette, themeName, headerCustom)
   panesEl.classList.add('tabs')
 
   // ---- pulse ----
@@ -756,7 +761,11 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     const beginner = document.documentElement.dataset.mode !== 'expert'
     const defaultName = beginner ? `Tab ${counter}` : `shell ${counter}`
     const displayName = label || (name ? `${name} ${counter}` : defaultName)
-    const color = TERM_COLORS[(counter - 1) % TERM_COLORS.length]
+    // Stable per-pane colour slot: store the raw ordinal so recolorAll() can re-pick
+    // this pane's hue from any palette/theme (modulo its length) and keep it on its
+    // OWN slot across palette swaps, light/dark toggles and drag-reorders.
+    const colorIndex = counter - 1
+    const color = activeColors[colorIndex % activeColors.length]
 
     // Tab
     const tabEl = document.createElement('button')
@@ -829,6 +838,11 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       theme: TERM_THEMES[themeName],
       cursorBlink: termSettings.cursorBlink,
       scrollback: termSettings.scrollback,
+      // Default-true, but pinned explicitly because the onData handler now LEANS on
+      // it: it re-pins to the bottom only on genuine user input (never on a running
+      // program's query answers), which is how ESC-led keys re-engage sticky-bottom
+      // without us mistaking the terminal's auto-answers for typing. See onData.
+      scrollOnUserInput: true,
       allowProposedApi: true
     })
     const fit = new FitAddon()
@@ -837,7 +851,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     fit.fit()
 
     const s = {
-      id, term, fit, cell, body: cellBody, tabEl, tabDot, tabLabel, cellLabel, cellDot, color,
+      id, term, fit, cell, body: cellBody, tabEl, tabDot, tabLabel, cellLabel, cellDot, color, colorIndex,
       stub, stubDot, stubLabel,
       status: 'running', custom: false,
       // Three states: `working` (output flowing — pulsing), `awaiting` (at rest, your
@@ -850,19 +864,23 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       quietTimer: null, // slower settle timer for the conservative alt-screen awaiting tell
       follow: true, // sticky-bottom intent: keep the newest line (prompt / agent input box)
       //              visible. True until the user scrolls up to read history (see onScroll),
-      //              re-armed the instant they type. Every write/fit re-asserts the bottom
-      //              while it's set — fixing "the prompt sits below the fold until I hit Enter".
+      //              re-armed when they actually type/paste (see onData — NOT on the running
+      //              program's query answers). Every write/fit re-asserts the bottom while it's
+      //              set — fixing "the prompt sits below the fold until I hit Enter".
       pinning: false, // guard: true only while WE scroll programmatically, so the onScroll
       //               below never mistakes our own re-pin (or a reflow) for a user scroll-up.
       summaryText: null, // last Layer-B label (summary, or the pending question)
-      lastSummaryHash: null, // hash of the last tail summarised — skip no-op repeats
+      lastSummaryHash: null, // hash of the last tail summarised at rest — skip no-op repeats
+      lastLiveHash: null, // hash of the last tail the working heartbeat summarised — kept
+      //                     separate from lastSummaryHash so a live re-label never suppresses
+      //                     the at-rest verdict (and its awaiting-edge promotion) that follows
       summarizing: false, // a Layer-B request is in flight for this pane
       used: false, // true once the user types or a command runs — then we won't auto-cd it
       isShell: !command, // plain shell vs an agent preset — gates command capture
       lineBuf: '', // keystroke accumulator for the last-command heuristic
       baseName: displayName, // fallback label shown when nothing better is known
       oscTitle: null, // last OSC 0/2 title the program emitted (Layer 0)
-      heurTitle: null, // last heuristic label (last command + branch)
+      heurTitle: null, // last heuristic label (the typed command line; branch not shown)
       titleTimer: null // debounce handle for onTitleChange
     }
     sessions.set(id, s)
@@ -903,11 +921,35 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       return true
     })
     term.onData((data) => {
+      // xterm's onData carries TWO different things on one channel: (1) genuine
+      // user input — keys typed, text pasted (a bracketed paste arrives wrapped as
+      // \x1b[200~…\x1b[201~); and (2) the terminal's own automatic ANSWERS to
+      // queries the running program emits — cursor-position reports (\x1b[…R),
+      // device attributes (\x1b[?…c), OSC colour answers, mode reports, etc. Both
+      // must reach the PTY, but only (1) is the user driving the pane.
+      //
+      // Conflating them was the "can't scroll up while an agent streams" bug:
+      // agents probe the terminal continuously as they output, and every probe
+      // ANSWER was being treated as "the user typed" — re-arming sticky-bottom
+      // (s.follow) so the very next write snapped the viewport back to the bottom,
+      // making it impossible to hold a scrolled-up position to read history. (It
+      // also marked never-touched shells "used" — so a shell whose prompt probes
+      // the terminal at startup would pulse unbidden — and wiped the command-title
+      // buffer mid-line.)
+      //
+      // Program answers are always ESC-introduced control strings; real typed text
+      // never is. A bracketed paste is ESC-led but IS user input, so admit the
+      // \x1b[200~ paste marker. ESC-led special keys (arrows, Esc, F-keys) fall
+      // through as "not input" here, but xterm's native scrollOnUserInput (set in
+      // the Terminal options) still re-pins them — it fires only for genuine input,
+      // never for these answers, and routes through onScroll below to set s.follow.
+      const userInput = data.charCodeAt(0) !== 0x1b || data.startsWith('\x1b[200~')
+      api.term.input(id, data) // forward EVERYTHING to the PTY — answers included
+      if (!userInput) return
       s.used = true
-      s.follow = true // typing means "show me what I'm typing" — re-engage sticky-bottom
+      s.follow = true // typing/paste means "show me what I'm doing" — re-engage sticky-bottom
       if (s.launcher) dismissPaneLauncher(s) // typing into the pane = "I'll drive it myself"
       if (s.isShell) captureCommand(s, data)
-      api.term.input(id, data)
     })
     term.onResize(({ cols, rows }) => api.term.resize(id, cols, rows))
     // Track the user's scroll intent so sticky-bottom never fights them. Every scroll —
@@ -1134,23 +1176,28 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   // emits (Layer 0) wins; else the free heuristic (last command + git branch);
   // else the base name ("shell 2"). One resolver keeps the layers from fighting
   // and is where a model-generated summary would slot in later.
-  const MAX_TITLE = 60
-  function applyAutoLabels(s, text) {
+  // The REAL, width-aware truncation is CSS's job: every label (.cell-label, .term-tab-label,
+  // .stub-label) is `overflow:hidden; text-overflow:ellipsis`, each bounded to its own width —
+  // so a full-width cell header shows far more than a 180px tab, and each ellipsises exactly at
+  // its own pixel edge. MAX_TITLE is only a sanity bound so a pathologically long typed line
+  // never becomes a giant DOM text node / tooltip; it should stay well above any width we render.
+  const MAX_TITLE = 200
+  function applyAutoLabels(s, text, full = text) {
     // Guard against writing into a label that's mid-rename (detached node).
     if (s.tabLabel.isConnected) s.tabLabel.textContent = text
     if (s.cellLabel.isConnected) s.cellLabel.textContent = text
     s.stubLabel.textContent = text
-    s.tabEl.title = text // full untruncated string on hover
-    s.cell.title = text
+    s.tabEl.title = full // full, untruncated string on hover — CSS shows as much as fits
+    s.cell.title = full
   }
   function applyTitle(s) {
     if (s.custom) return // a manual rename always wins
     // The Layer-B summary (what the pane just did / is asking) is the richest auto
     // label — it wins over a program's OSC title (often static, e.g. "claude") and
     // the keystroke heuristic. A manual rename still trumps everything.
-    let t = s.summaryText || s.oscTitle || s.heurTitle || s.baseName
-    if (t.length > MAX_TITLE) t = t.slice(0, MAX_TITLE - 1) + '…'
-    applyAutoLabels(s, t)
+    const full = s.summaryText || s.oscTitle || s.heurTitle || s.baseName
+    const text = full.length > MAX_TITLE ? full.slice(0, MAX_TITLE - 1) + '…' : full
+    applyAutoLabels(s, text, full) // display string truncates to CSS width; tooltip keeps it all
   }
   function setAutoTitle(s, raw) {
     const t = (raw || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/\s+/g, ' ').trim()
@@ -1158,11 +1205,13 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     applyTitle(s)
   }
 
-  // ---- free heuristic: last command + git branch -----------------------------
+  // ---- free heuristic: the last typed command line ---------------------------
   // Zero-cost, harness-agnostic "clue" for shell/command panes. We reconstruct
   // the command line straight from the user's keystrokes — no output parsing, no
   // prompt-format assumptions, no shell integration. Best-effort: bail on escape
-  // sequences (arrow keys / history recall) rather than guess.
+  // sequences (arrow keys / history recall) rather than guess. The branch is NOT
+  // shown in the label (it's elsewhere in the UI); we still cache it as Pulse model
+  // context, since an agent may be working in a different worktree than you expect.
   let cachedBranch = null
   let branchPending = false
   function refreshBranch() {
@@ -1198,10 +1247,12 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     }
   }
   function setHeuristic(s, cmd) {
-    const label = cmd.replace(/\s+/g, ' ').trim().slice(0, 48)
-    s.heurTitle = cachedBranch ? `${label} · ${cachedBranch}` : label
+    // Just the typed line — no " · branch" tail. The branch is already shown elsewhere in
+    // the UI, so repeating it here only ate header room; CSS truncates the line to the
+    // label's own width. Generous bound (CSS does the visible cut); keeps storage sane.
+    s.heurTitle = cmd.replace(/\s+/g, ' ').trim().slice(0, 160)
     applyTitle(s)
-    refreshBranch() // keep the branch cache warm for the next command
+    refreshBranch() // still warm the branch cache — Pulse passes it to the model as context
   }
 
   // ---- fit ----
@@ -1388,6 +1439,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     // IDLE_AFTER_MS after output truly stops.
     if (s.state !== 'working') {
       s.summaryText = null // live activity: drop the stale resting label
+      s.lastLiveHash = null // new working stint: let the heartbeat re-label from scratch
       applyTitle(s)
       setState(s, 'working') // repaints; also clears any awaiting come-look
       // The first time a beginner ever sees a tab start pulsing, explain it — Pulse
@@ -1463,16 +1515,22 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0
     return h
   }
-  // Called once each time a pane comes to rest (the working→idle edge). Sends the
-  // visible tail to the model and writes back a one-line label — and ONLY a label.
-  // It never touches the working/idle state; the pulse is driven purely by byte flow.
-  async function summarize(s) {
+  // Sends the pane's visible tail to the model and writes back a one-line label. Called
+  // two ways: (1) when a pane comes to rest (the working→idle edge) — the resting verdict,
+  // which may also promote idle→awaiting; and (2) on the working heartbeat with
+  // { live: true } — a present-tense label for a pane that's STILL working, so a long turn's
+  // header tracks what it's doing instead of freezing on the program's own (often static)
+  // title. The live path only paints a label; it never touches the working/idle state.
+  async function summarize(s, { live = false } = {}) {
     if (!pulseEnabled || !api.pulse?.summarize) return
     if (s.summarizing) return // one request per pane at a time
+    if (live && s.state !== 'working') return // heartbeat only labels panes still working
     const tail = tailOf(s)
     if (!tail) return
     const h = hashStr(tail)
-    if (h === s.lastSummaryHash) return // this exact screen already has a label
+    // The heartbeat dedups on its OWN hash so a no-op live re-label never marks the screen
+    // as "summarised" and suppresses the at-rest verdict (with its awaiting promotion).
+    if (h === (live ? s.lastLiveHash : s.lastSummaryHash)) return
     s.summarizing = true
     let res = null
     try {
@@ -1489,9 +1547,21 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       s.summarizing = false
     }
     if (!res) return // failed/empty: leave the hash unset so we retry next rest
-    // Stale guard: if the pane resumed working (or the process exited) while we waited,
-    // don't paint a resting label or flip state out from under live output.
-    if (s.state === 'working' || s.status === 'exited') return
+    if (s.status === 'exited') return // process ended while we waited — the exit handler owns it
+    if (live) s.lastLiveHash = h
+    // A heartbeat whose call returned while the pane is STILL working: paint the live label
+    // and stop — never set lastSummaryHash, never change state (the at-rest verdict, with
+    // its awaiting edge, stays the settle path's job).
+    if (live && s.state === 'working') {
+      const label = res.question ? `⏳ ${res.question}` : res.summary
+      s.summaryText = label && label.trim() ? label.trim() : null
+      applyTitle(s)
+      return
+    }
+    // At-rest verdict — reached by the settle path, OR by a heartbeat whose call landed right
+    // as the pane came to rest (s.state !== 'working' now), which makes it a valid settle read.
+    // If the pane has since resumed working, don't paint a resting label over live output.
+    if (s.state === 'working') return
     s.lastSummaryHash = h
     const label = res.question ? `⏳ ${res.question}` : res.summary
     s.summaryText = label && label.trim() ? label.trim() : null
@@ -1502,6 +1572,21 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     if (res.state === 'awaiting' && s.state !== 'awaiting') setState(s, 'awaiting')
     applyTitle(s)
   }
+
+  // Pulse working heartbeat. A pane that keeps emitting output never hits the settle path,
+  // so without this its header would sit frozen — for an agent, on the program's static OSC
+  // title ("claude") — for the whole turn. On a slow tick, re-summarise every pane that's
+  // still working so the label tracks what it's doing live. Cheap: the local model is free,
+  // an unchanged screen is skipped by the per-pane hash (lastLiveHash), and main caps global
+  // concurrency at 3 and supersedes stale queued calls. Tune the period for liveness vs. call
+  // volume. (The fast settle path still owns the at-rest / awaiting edge.)
+  const WORKING_PULSE_MS = 30000
+  setInterval(() => {
+    if (!pulseEnabled) return
+    for (const s of sessions.values()) {
+      if (s.status !== 'exited' && s.state === 'working') summarize(s, { live: true })
+    }
+  }, WORKING_PULSE_MS)
 
   // OS window resizes need no special handling: shrinking/growing the window
   // changes every visible pane's body size, which the per-pane ResizeObserver above
@@ -1531,10 +1616,41 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   window.addEventListener('dragover', swallowStrayFileDrag)
   window.addEventListener('drop', swallowStrayFileDrag)
 
-  // Apply a light/dark theme to all existing terminals and future ones.
+  // Apply a light/dark theme to all existing terminals and future ones. The
+  // identity palette has a light and a dark variant, so re-derive the active hues
+  // and recolour every pane's header — without this the dark-tuned hues would never
+  // take effect on a toggle (setTheme historically only touched xterm's own colours).
   function setTheme(name) {
     themeName = TERM_THEMES[name] ? name : 'light'
     for (const s of sessions.values()) s.term.options.theme = TERM_THEMES[themeName]
+    activeColors = colorsFor(headerPalette, themeName, headerCustom)
+    recolorAll()
+  }
+
+  // Switch the identity-colour palette (appearance.headerTheme). `id` is a palette
+  // key; `customRaw` is the raw user input used only when id === 'custom'. Existing
+  // panes are recoloured immediately, future ones inherit the new activeColors.
+  function setHeaderTheme(id, customRaw) {
+    if (typeof id === 'string' && id) headerPalette = id
+    if (typeof customRaw === 'string') headerCustom = customRaw
+    activeColors = colorsFor(headerPalette, themeName, headerCustom)
+    recolorAll()
+  }
+
+  // Re-apply --term-color to every existing pane (tab + cell + rail stub) from the
+  // current activeColors, keeping each pane on its own stored slot. Also refreshes
+  // s.color so any code reading it stays in sync. The Pulse tint/breathe and status
+  // dots all derive from --term-color, so they pick up the new hue live.
+  function recolorAll() {
+    if (!activeColors || !activeColors.length) return
+    for (const s of sessions.values()) {
+      const c = activeColors[s.colorIndex % activeColors.length]
+      if (!c) continue
+      s.color = c
+      s.tabEl.style.setProperty('--term-color', c)
+      s.cell.style.setProperty('--term-color', c)
+      s.stub.style.setProperty('--term-color', c)
+    }
   }
 
   // Apply central terminal preferences (from the Settings window). Updates the
@@ -1611,5 +1727,5 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     if (sessions.has(id)) activate(id)
   }
 
-  return { create, newTab, fitActive, fitAll, setLayout, setTheme, applySettings, cdInto, typeIntoActive, stepActive, activateIndex, cycleLayout, closeActive, getState, restore, revealPane, dispose }
+  return { create, newTab, fitActive, fitAll, setLayout, setTheme, setHeaderTheme, applySettings, cdInto, typeIntoActive, stepActive, activateIndex, cycleLayout, closeActive, getState, restore, revealPane, dispose }
 }

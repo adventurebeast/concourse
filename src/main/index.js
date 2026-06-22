@@ -12,6 +12,7 @@ import { registerModel } from './ipc-model.js'
 import { stopLocalServer } from './local-llm.js'
 import { registerShell } from './ipc-shell.js'
 import { registerSettings } from './ipc-settings.js'
+import { registerCommands } from './ipc-commands.js'
 import { initSettings, getRaw } from './settings.js'
 import { createWatchers } from './watcher.js'
 import { installAppMenu } from './menu.js'
@@ -199,6 +200,7 @@ app.whenReady().then(async () => {
   registerModel()
   registerShell()
   registerSettings()
+  registerCommands(ctx)
 
   // App version — read from the packaged app's manifest. Surfaced in the status
   // bar so you can confirm at a glance which build is actually running (the
