@@ -173,12 +173,22 @@ window.addEventListener('focus', () => {
   awaitNotif = null
 })
 
-// Beginner command palette: a clickable launcher that TYPES a curated command onto
-// the active prompt (the user presses Enter). Trigger lives in the terminal tab bar
-// (beginner mode only, gated in CSS); also opens with Cmd/Ctrl+K.
-const palette = createCommandPalette({ typeInto: (cmd) => terminals.typeIntoActive(cmd) })
+// Command palette (⌘K): TYPES a command onto the active prompt (the user presses
+// Enter). Surfaces ♥ favorites + this project's commands + frecency-ranked shell
+// history, all from the main process; the curated beginner cheatsheet shows below
+// in beginner mode. Trigger button lives in the terminal tab bar (beginner only).
+const palette = createCommandPalette({
+  typeInto: (cmd) => terminals.typeIntoActive(cmd),
+  // The palette's three dynamic sources (♥ favorites · project commands · frecency
+  // history) and the ♥ toggle, all backed by the main process (api.commands).
+  listCommands: () => api.commands.list(),
+  favorite: (cmd, label, opts) => api.commands.favorite(cmd, label, opts),
+  unfavorite: (id) => api.commands.unfavorite(id)
+})
 document.getElementById('cmd-trigger').addEventListener('click', () => palette.toggle())
 palette.mountStrip(document.getElementById('cmd-strip'))
+// Favorites can change in another window (or via the heart here) — re-render live.
+api.commands.onChanged(() => palette.refresh())
 
 // Saving a file should refresh git status.
 editor.onSave(() => git.refresh())

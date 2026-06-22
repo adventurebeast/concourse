@@ -141,5 +141,17 @@ contextBridge.exposeInMainWorld('api', {
     set: (key, value) => ipcRenderer.invoke('settings:set', key, value),
     reset: (key) => ipcRenderer.invoke('settings:reset', key),
     onChanged: (cb) => ipcRenderer.on('settings:changed', (_e, payload) => cb(payload))
+  },
+
+  // Command palette sources — handlers in src/main/ipc-commands.js. list() returns
+  // { favorites, project, history } scoped to the window's open folder; favorite()
+  // / unfavorite() toggle ♥ favorites (favorite with { project: true } pins to the
+  // open folder); onChanged() fires in every window when favorites change.
+  commands: {
+    list: () => ipcRenderer.invoke('commands:list'),
+    favorite: (cmd, label, opts = {}) =>
+      ipcRenderer.invoke('commands:favorite', { cmd, label, project: !!opts.project }),
+    unfavorite: (id) => ipcRenderer.invoke('commands:unfavorite', id),
+    onChanged: (cb) => ipcRenderer.on('commands:changed', () => cb())
   }
 })
