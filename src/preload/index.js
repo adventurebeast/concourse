@@ -115,6 +115,17 @@ contextBridge.exposeInMainWorld('api', {
     summarize: (payload) => ipcRenderer.invoke('pulse:summarize', payload)
   },
 
+  // Local model provisioning — the one-click "run the Local LLM" flow, handlers in
+  // src/main/ipc-model.js. status() says whether the built-in model is already on
+  // disk; provision() starts a local runtime and downloads the model, streaming
+  // progress via onProgress(); cancel() aborts an in-flight download.
+  model: {
+    status: () => ipcRenderer.invoke('model:status'),
+    provision: (opts) => ipcRenderer.invoke('model:provision', opts),
+    cancel: () => ipcRenderer.invoke('model:cancel'),
+    onProgress: (cb) => ipcRenderer.on('model:progress', (_e, p) => cb(p))
+  },
+
   // Settings — central user preferences, handlers in src/main/ipc-settings.js.
   // schema() returns the grouped registry that drives the Settings UI; getAll()
   // returns current values with secrets redacted (plus a secretsSet map); set()

@@ -5,11 +5,11 @@ import { FitAddon } from '@xterm/addon-fit'
 import { icon } from './icons.js'
 import { coachOnce } from './toast.js'
 
-// The one-time beginner coach mark that explains Pulse the first time a dot spins.
-// Fired from every path that starts an agent (launcher reuse, '+' preset, or a
-// user-driven shell going active) — coachOnce makes it once-ever regardless.
+// The one-time beginner coach mark that explains Pulse the first time a tab starts
+// working. Fired from every path that starts an agent (launcher reuse, '+' preset,
+// or a user-driven shell going active) — coachOnce makes it once-ever regardless.
 const PULSE_COACH =
-  'That spinning dot is Pulse — it means the agent is working. It calms when the agent is done or waiting on you.'
+  'That pulsing tab is Pulse — it means the agent is working. It calms to a steady colour when the agent is done or waiting on you.'
 
 const api = window.api
 
@@ -44,7 +44,8 @@ export function createTerminals({ getRoot, onFleet }) {
     fontSize: 12.5,
     fontFamily: 'Menlo, Monaco, "SF Mono", "Courier New", monospace',
     cursorBlink: true,
-    scrollback: 10000
+    scrollback: 10000,
+    confirmClose: true // show the close-confirmation dialog (terminal.confirmClose)
   }
   let activeId = null
   let counter = 0
@@ -55,24 +56,28 @@ export function createTerminals({ getRoot, onFleet }) {
 
   // ---- pulse ----
   // Two states, full stop: a pane is `working` while output is flowing and `idle`
-  // once it goes quiet. There is no semantic state machine beyond that — the spinner
-  // IS the working state. One threshold: bytes ⇒ working; IDLE_AFTER_MS of silence
-  // after the last byte ⇒ idle. Long enough to bridge the sub-second gaps between an
-  // agent's tokens/tool calls (its animated TUI keeps emitting frames) so it doesn't
-  // flicker mid-turn, short enough that a finished command settles to a calm dot
-  // promptly. See the PTY onData handler. Tune here if it feels twitchy/laggy.
+  // once it goes quiet. There is no semantic state machine beyond that — the tab
+  // pulse IS the working state. One threshold: bytes ⇒ working; IDLE_AFTER_MS of
+  // silence after the last byte ⇒ idle. Long enough to bridge the sub-second gaps
+  // between an agent's tokens/tool calls (its animated TUI keeps emitting frames) so
+  // it doesn't flicker mid-turn, short enough that a finished command settles to a
+  // calm steady tint promptly. See the PTY onData handler. Tune if it feels twitchy.
   const IDLE_AFTER_MS = 800
   // Layer B only runs when a provider is configured in main AND reachable (an
   // Anthropic key, or a live local OpenAI-compatible endpoint); without it the
-  // deterministic Layer A still works. Queried once at startup — restart to pick up a
-  // provider you brought up later.
+  // deterministic Layer A still works. Re-polled on an interval so a local model
+  // server that Concourse auto-starts (or that you bring up later) turns Layer B on
+  // without a restart — the probe is a single cheap localhost request.
   let pulseEnabled = false
-  api.pulse
-    ?.status?.()
-    .then((st) => {
-      pulseEnabled = !!(st && st.enabled && st.reachable)
-    })
-    .catch(() => {})
+  const refreshPulseStatus = () =>
+    api.pulse
+      ?.status?.()
+      .then((st) => {
+        pulseEnabled = !!(st && st.enabled && st.reachable)
+      })
+      .catch(() => {})
+  refreshPulseStatus()
+  setInterval(refreshPulseStatus, 15000)
 
   // ---- inject extra panel controls: one button per layout, always visible ----
   // The button for the current layout is highlighted (.active).
@@ -363,14 +368,14 @@ export function createTerminals({ getRoot, onFleet }) {
     s.launcher = null
   }
   // Run an agent in an existing (empty) pane — the launcher's reuse path. Mirrors the
-  // create({command}) preset seam: mark used, spin the dot immediately for instant
+  // create({command}) preset seam: mark used, start the pulse immediately for instant
   // feedback, then send the command. A missing binary just prints "command not
   // found" harmlessly, which is why the copy never promises success.
   function launchAgentInPane(s, command) {
     dismissPaneLauncher(s)
     s.used = true
     s.state = 'working'
-    updateIndicators(s) // spin the dot the instant they click — immediate feedback
+    updateIndicators(s) // pulse the tab the instant they click — immediate feedback
     if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
     api.term.input(s.id, command + '\r')
     s.term.focus()
@@ -384,6 +389,12 @@ export function createTerminals({ getRoot, onFleet }) {
   // re-focuses the open dialog and returns instead.
   let confirmOverlay = null
   function confirmClose(s) {
+    // Preference off (user ticked "Don't ask me again", or toggled it in Settings) →
+    // skip the dialog and close immediately.
+    if (!termSettings.confirmClose) {
+      destroy(s.id)
+      return
+    }
     if (confirmOverlay) {
       confirmOverlay.querySelector('.tc-danger')?.focus()
       return
@@ -403,6 +414,19 @@ export function createTerminals({ getRoot, onFleet }) {
     msg.className = 'tc-msg'
     msg.textContent = 'The shell and any running agent will be terminated.'
     box.append(title, msg)
+    // "Don't ask me again" — when ticked AND the user proceeds, persist
+    // terminal.confirmClose = false so future closes skip this dialog (and the
+    // Settings panel reflects it via the broadcast). Ticking it has no effect if the
+    // user cancels — the choice only commits alongside the close it's attached to.
+    const dontAsk = document.createElement('label')
+    dontAsk.className = 'tc-dontask'
+    const dontAskBox = document.createElement('input')
+    dontAskBox.type = 'checkbox'
+    dontAskBox.className = 'tc-dontask-box'
+    const dontAskText = document.createElement('span')
+    dontAskText.textContent = 'Don’t ask me again'
+    dontAsk.append(dontAskBox, dontAskText)
+    box.appendChild(dontAsk)
     const actions = document.createElement('div')
     actions.className = 'tc-actions'
     const cancel = document.createElement('button')
@@ -430,6 +454,10 @@ export function createTerminals({ getRoot, onFleet }) {
       document.removeEventListener('keydown', onKey, true)
     }
     const confirm = () => {
+      if (dontAskBox.checked) {
+        termSettings.confirmClose = false
+        Promise.resolve(api.settings?.set?.('terminal.confirmClose', false)).catch(() => {})
+      }
       finish()
       destroy(s.id)
     }
@@ -628,25 +656,30 @@ export function createTerminals({ getRoot, onFleet }) {
     if (s) selectCell(s.id)
   }
 
-  // ---- indicator dot ----
-  // Two states, and the dot class IS the state: `working` (a spinning ring — output
-  // is flowing) or `idle` (a calm dot — gone quiet). The same class drives the three
-  // per-pane dots AND the aggregate fleet summary, so they always agree.
+  // ---- pulse indicator ----
+  // Two states: `working` (output flowing) or `idle` (gone quiet). Drives BOTH tab
+  // status styles at once (CSS shows whichever the user picked, see appearance.tabStatus):
+  //   • "pulse" (default) — the whole tab tints in its identity hue and slowly
+  //     *breathes* while working, settling to a steady tint when idle.
+  //   • "dots" — a compact dot in the tab spins while working, rests when idle.
+  // The grid / stack / flow pane headers always use the dot (no tab strip there). The
+  // same `working`/`idle` value feeds both AND the fleet summary, so they all agree.
   function updateIndicators(s) {
+    s.tabEl.dataset.state = s.state // pulse style: steady vs breathing tab tint
     const cls = 'dot ' + s.state
-    s.tabDot.className = cls
+    s.tabDot.className = cls // dots style: the in-tab status dot
     s.cellDot.className = cls
     s.stubDot.className = cls
-    // A just-in-time reminder of what the dot means, on the pane's own dot — beginner
+    // A just-in-time reminder of what the state means, surfaced on hover — beginner
     // only, so Expert stays a bare shell. The status-bar fleet count carries the full
     // Pulse legend; this is just the hover gloss.
     if (document.documentElement.dataset.mode !== 'expert') {
       const tip = s.state === 'working' ? 'Working' : 'Waiting'
       s.cellDot.dataset.tip = tip
-      s.tabDot.dataset.tip = tip
+      s.tabEl.dataset.tip = tip
     } else {
       delete s.cellDot.dataset.tip
-      delete s.tabDot.dataset.tip
+      delete s.tabEl.dataset.tip
     }
     emitFleet()
   }
@@ -688,6 +721,9 @@ export function createTerminals({ getRoot, onFleet }) {
     tabEl.draggable = true
     tabEl.dataset.id = id // reorderFromDom() maps DOM order back to sessions by id
     tabEl.style.setProperty('--term-color', color)
+    // Status dot for the "dots" Pulse style. CSS hides it in the default "pulse"
+    // style (where the whole tab tints + breathes instead); it's always kept in the
+    // DOM and updated so flipping the setting needs no re-render. See updateIndicators.
     const tabDot = document.createElement('span')
     tabDot.className = 'dot idle'
     const tabLabel = document.createElement('span')
@@ -761,9 +797,9 @@ export function createTerminals({ getRoot, onFleet }) {
       id, term, fit, cell, body: cellBody, tabEl, tabDot, tabLabel, cellLabel, cellDot, color,
       stub, stubDot, stubLabel,
       status: 'running', custom: false,
-      // Two states only: `working` (output flowing — spinner) or `idle` (gone quiet).
+      // Two states only: `working` (output flowing — pulsing) or `idle` (gone quiet).
       // An agent preset (command) auto-fires on open, so it starts working. A plain
-      // shell just sits at its prompt, so it starts idle and won't spin until the
+      // shell just sits at its prompt, so it starts idle and won't pulse until the
       // user actually drives it (see the PTY onData handler).
       state: command ? 'working' : 'idle',
       idleTimer: null, // debounce handle: flips the pane to idle after IDLE_AFTER_MS of silence
@@ -789,7 +825,7 @@ export function createTerminals({ getRoot, onFleet }) {
     // ResizeObserver above). Tag the element so the observer can find the session.
     cellBody.__session = s
     resizeObserver.observe(cellBody)
-    updateIndicators(s) // paint the initial working/idle dot
+    updateIndicators(s) // paint the initial working/idle tab tint
 
     // Beginner-only empty-pane launcher: greet a brand-new user's first pane with
     // "Launch an agent here" instead of a mute prompt. Never on restored panes
@@ -969,6 +1005,10 @@ export function createTerminals({ getRoot, onFleet }) {
   function activate(id) {
     const s = sessions.get(id)
     if (!s) return
+    // A genuine switch (different pane becoming active) vs. a re-click on the pane
+    // you're already in. The two need opposite scroll behaviour — see the s.follow
+    // note below — so capture the distinction before we overwrite activeId.
+    const switching = activeId !== id
     activeId = id
     for (const [sid, sess] of sessions) {
       const on = sid === id
@@ -985,7 +1025,7 @@ export function createTerminals({ getRoot, onFleet }) {
       // (same as album flow's centerOn).
       setTimeout(() => s.term.focus(), 0)
     }
-    // Switching to a pane means "show me what's happening here" — and agents stream
+    // Switching TO a pane means "show me what's happening here" — and agents stream
     // output into background panes constantly. Re-engage sticky-bottom so the fit
     // below (and every subsequent write) snaps to the live line. Without this, a pane
     // whose follow was dropped while it sat as a hidden/preview tile — its off-screen
@@ -993,7 +1033,13 @@ export function createTerminals({ getRoot, onFleet }) {
     // reads that as a user scroll-up — would open stranded above the fold, invisible
     // until you typed a key. fitPane/pinBottom both gate their scrollToBottom on
     // s.follow, so resetting it here is what makes the switch land at the bottom.
-    s.follow = true
+    //
+    // But ONLY on a real switch. Re-clicking the pane you're already in — to start a
+    // text selection up in the scrollback, say — must leave the scroll position alone;
+    // forcing follow back on here would scrollToBottom out from under the click and
+    // yank you off the lines you were copying from. Respect whatever follow the user's
+    // own scrolling already set (onScroll keeps it accurate).
+    if (switching) s.follow = true
     // Activation changed which pane is primary (and may have flipped one from
     // hidden→visible). Re-fit whatever is primary once the layout settles; fitPane
     // leaves previews/hidden panes untouched so their agents keep their width. Focus
@@ -1282,10 +1328,10 @@ export function createTerminals({ getRoot, onFleet }) {
     s.term.write(data, () => pinBottom(s))
     // A fresh, untouched shell only emits startup chrome — its prompt, or an
     // auto-injected `cd … && clear` from cdInto(). That isn't work, so don't let it
-    // spin the indicator. Only a pane the user has driven (s.used) or an agent preset
+    // start the indicator. Only a pane the user has driven (s.used) or an agent preset
     // (!isShell) counts as working; an unused shell stays idle until used.
     if (s.isShell && !s.used) return
-    // Output ⇒ working (spinner). Each byte resets the idle debounce, so the pane
+    // Output ⇒ working (pulse). Each byte resets the idle debounce, so the pane
     // stays working across the sub-second gaps in a turn and only settles to idle
     // IDLE_AFTER_MS after output truly stops.
     if (s.state !== 'working') {
@@ -1293,7 +1339,7 @@ export function createTerminals({ getRoot, onFleet }) {
       s.summaryText = null // live activity: drop the stale resting label
       applyTitle(s)
       updateIndicators(s)
-      // The first time a beginner ever sees a dot start spinning, explain it — Pulse
+      // The first time a beginner ever sees a tab start pulsing, explain it — Pulse
       // finally names itself at the exact moment it has meaning. Once ever, never expert.
       if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
     }
@@ -1311,7 +1357,7 @@ export function createTerminals({ getRoot, onFleet }) {
     if (!s) return
     s.status = 'exited'
     s.state = 'idle' // a finished process isn't working; the faded .exited tab marks that it ended
-    clearTimeout(s.idleTimer) // settled — never leave it spinning
+    clearTimeout(s.idleTimer) // settled — never leave it pulsing
     s.idleTimer = null
     updateIndicators(s)
     s.tabEl.classList.add('exited')
@@ -1348,7 +1394,7 @@ export function createTerminals({ getRoot, onFleet }) {
   }
   // Called once each time a pane comes to rest (the working→idle edge). Sends the
   // visible tail to the model and writes back a one-line label — and ONLY a label.
-  // It never touches the working/idle dot; the spinner is driven purely by byte flow.
+  // It never touches the working/idle state; the pulse is driven purely by byte flow.
   async function summarize(s) {
     if (!pulseEnabled || !api.pulse?.summarize) return
     if (s.summarizing) return // one request per pane at a time
@@ -1431,6 +1477,7 @@ export function createTerminals({ getRoot, onFleet }) {
     }
     if (typeof opts.cursorBlink === 'boolean') termSettings.cursorBlink = opts.cursorBlink
     if (typeof opts.scrollback === 'number') termSettings.scrollback = opts.scrollback
+    if (typeof opts.confirmClose === 'boolean') termSettings.confirmClose = opts.confirmClose
     for (const s of sessions.values()) {
       if (fontChanged) {
         s.term.options.fontSize = termSettings.fontSize

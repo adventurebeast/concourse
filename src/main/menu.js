@@ -17,8 +17,10 @@ function toRenderer(win, command) {
 // Build and install the application menu.
 //
 // The File menu carries the basics — New Window, New File / Folder, Open Folder —
-// with the editor-style accelerators people expect (⌘N new file, ⇧⌘N new window,
-// ⌘O open). Two deliberate choices:
+// with the editor-style accelerators people expect (⌘N new file, ⇧⌘N new window).
+// Three deliberate choices:
+//   • Open Folder is on ⇧⌘O, not ⌘O — the renderer keeps ⌘O for the master-stack
+//     layout (the U-I-O-P layout row), and menu accelerators fire first.
 //   • ⌘W is left to the renderer (it closes the active terminal, not the window);
 //     the menu's Close Window sits on ⇧⌘W so the two don't collide.
 //   • the Reload / Force-Reload roles are omitted — this is an app, not a web page,
@@ -66,7 +68,10 @@ export function installAppMenu({ onNewWindow, onOpenSettings }) {
       { label: 'New File', accelerator: 'CmdOrCtrl+N', click: (_i, win) => toRenderer(win, 'new-file') },
       { label: 'New Folder', click: (_i, win) => toRenderer(win, 'new-folder') },
       { type: 'separator' },
-      { label: 'Open Folder…', accelerator: 'CmdOrCtrl+O', click: (_i, win) => toRenderer(win, 'open-folder') },
+      // Shift+O, not plain ⌘O: the renderer keeps ⌘O for the master-stack layout
+      // (the U-I-O-P layout row), and menu accelerators fire first, so a plain
+      // ⌘O here would steal that keystroke from the renderer.
+      { label: 'Open Folder…', accelerator: 'CmdOrCtrl+Shift+O', click: (_i, win) => toRenderer(win, 'open-folder') },
       // Non-mac: Settings lives here (no app menu to host it).
       ...(isMac ? [] : [{ type: 'separator' }, settingsItem]),
       { type: 'separator' },

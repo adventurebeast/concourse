@@ -181,13 +181,13 @@ keys.register('mod+w', () => terminals.closeActive())
 keys.register('mod+k', () => palette.toggle())
 // Layout modes: a single cycler plus direct keys. tabs/grid/flow sit on the
 // adjacent U I P keys; Cmd+Shift+L taps through them in order. Stack uses
-// Cmd+Shift+O, not Cmd+O: the menu's "Open Folder…" claims Cmd+O, and menu
-// accelerators fire before the renderer ever sees the keystroke, so a plain
-// mod+o binding here would be permanently dead.
+// U-I-O-P is the layout row: tabs / grid / stack / flow. The menu's
+// "Open Folder…" moved to Cmd+Shift+O so plain Cmd+O stays free for the
+// master-stack layout here (menu accelerators fire before the renderer).
 keys.register('mod+shift+l', () => terminals.cycleLayout(1))
 keys.register('mod+u', () => terminals.setLayout('tabs'))
 keys.register('mod+i', () => terminals.setLayout('grid'))
-keys.register('mod+shift+o', () => terminals.setLayout('stack'))
+keys.register('mod+o', () => terminals.setLayout('stack'))
 keys.register('mod+p', () => terminals.setLayout('flow'))
 // Workbench toggles (VS Code conventions). These drive the existing toolbar
 // buttons so the .active states and resizers stay in sync.
@@ -325,6 +325,22 @@ document.getElementById('toggle-mode').addEventListener('click', () => {
 })
 applyMode(mode)
 
+// ---------- Tab status style (pulse default, dots optional, persisted) ----------
+// How a terminal tab signals "working": the default 'pulse' tints the whole tab and
+// breathes it; 'dots' keeps the classic small status dot. Lives on <html
+// data-tab-status> so the switch is pure CSS (terminals.css / style.css branch off it).
+// Mirrors theme/mode: localStorage is boot-authoritative (no flash) and the value is
+// echoed into the central store so the Settings window stays in sync.
+const TAB_STATUS_KEY = 'concourse-tab-status'
+let tabStatus = localStorage.getItem(TAB_STATUS_KEY) || 'pulse'
+function applyTabStatus(next) {
+  tabStatus = next === 'dots' ? 'dots' : 'pulse'
+  document.documentElement.dataset.tabStatus = tabStatus
+  localStorage.setItem(TAB_STATUS_KEY, tabStatus)
+  Promise.resolve(api.settings?.set?.('appearance.tabStatus', tabStatus)).catch(() => {})
+}
+applyTabStatus(tabStatus)
+
 // ---------- Central settings (Settings window) ----------
 // The Settings window writes to a main-process store; every window then receives a
 // settings:changed broadcast. Editor/terminal preferences are applied live here;
@@ -344,13 +360,16 @@ function applyEditorTerminalSettings(v) {
     fontSize: v['terminal.fontSize'],
     fontFamily: v['terminal.fontFamily'],
     cursorBlink: v['terminal.cursorBlink'],
-    scrollback: v['terminal.scrollback']
+    scrollback: v['terminal.scrollback'],
+    confirmClose: v['terminal.confirmClose']
   })
 }
 function applyAppearanceSettings(v) {
   if (!v) return
   if (v['appearance.theme'] && v['appearance.theme'] !== theme) applyTheme(v['appearance.theme'])
   if (v['appearance.mode'] && v['appearance.mode'] !== mode) applyMode(v['appearance.mode'])
+  if (v['appearance.tabStatus'] && v['appearance.tabStatus'] !== tabStatus)
+    applyTabStatus(v['appearance.tabStatus'])
 }
 // Initial load: localStorage already drove theme/mode (authoritative at boot, no
 // flash), so only reconcile editor/terminal prefs here — this avoids a load-race

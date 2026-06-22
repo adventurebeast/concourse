@@ -34,13 +34,22 @@
   background: var(--term-color, var(--text-faint));
 }
 
-/* Identity colour at a glance: ring each inactive tab's status dot in that
-   terminal's hue, so you can still tell agents apart across a wall of tabs.
-   The active tab already carries its hue as the underline, so drop its ring. */
+/* ---------- Tab status dot ("dots" Pulse style only) ----------
+   The default "pulse" style hides this dot and tints/breathes the whole tab instead
+   (see .term-tab in style.css). The "dots" style shows it: a spinning ring while
+   working, a calm hued dot when idle. The dot is always in the DOM and kept updated,
+   so flipping appearance.tabStatus is a pure CSS switch — no re-render. */
 .term-tab .dot {
+  display: none;
+}
+html[data-tab-status='dots'] .term-tab .dot {
+  display: block;
+  /* Identity colour at a glance: ring each inactive tab's dot in its terminal's hue
+     so you can still tell agents apart across a wall of tabs. The active tab carries
+     its hue as the underline, so drop its ring (below). */
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--term-color, transparent) 22%, transparent);
 }
-.term-tab.active .dot {
+html[data-tab-status='dots'] .term-tab.active .dot {
   box-shadow: none;
 }
 
@@ -419,11 +428,25 @@
   color: var(--text-dim);
   line-height: 1.5;
 }
+.tc-dontask {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 16px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.tc-dontask-box {
+  margin: 0;
+  cursor: pointer;
+}
 .tc-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 16px;
 }
 .tc-cancel {
   background: var(--bg-input);

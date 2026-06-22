@@ -47,6 +47,18 @@ export const SETTINGS_GROUPS = [
           { value: 'beginner', label: 'Beginner' },
           { value: 'expert', label: 'Expert' }
         ]
+      },
+      {
+        key: 'appearance.tabStatus',
+        label: 'Tab Status Style',
+        description:
+          'How a terminal tab shows whether its agent is working. Pulse tints the whole tab in its colour and slowly breathes while busy; Dots keeps plain tabs with a small spinning status dot.',
+        type: 'enum',
+        default: 'pulse',
+        options: [
+          { value: 'pulse', label: 'Pulse (colour + breathe)' },
+          { value: 'dots', label: 'Dots (classic)' }
+        ]
       }
     ]
   },
@@ -127,6 +139,13 @@ export const SETTINGS_GROUPS = [
         default: true
       },
       {
+        key: 'terminal.confirmClose',
+        label: 'Confirm Before Closing',
+        description: 'Ask for confirmation before closing a terminal. The dialog’s “Don’t ask me again” checkbox also turns this off.',
+        type: 'boolean',
+        default: true
+      },
+      {
         key: 'terminal.scrollback',
         label: 'Scrollback',
         description:
@@ -148,7 +167,7 @@ export const SETTINGS_GROUPS = [
         key: 'pulse.provider',
         label: 'Provider',
         description:
-          'Pulse reads each pane and labels it (working / awaiting / done). Auto-detect prefers a reachable local server, then an Anthropic key.',
+          'Pulse reads each pane and labels it (working / awaiting / done). Choosing Local offers a one-click setup that downloads a small on-device model and runs it for you. Auto-detect prefers a reachable local server, then an Anthropic key.',
         type: 'enum',
         default: 'auto',
         options: [
@@ -159,12 +178,20 @@ export const SETTINGS_GROUPS = [
         ]
       },
       {
+        key: 'pulse.localAutostart',
+        label: 'Auto-start Local Model',
+        description:
+          'When using a local provider, start the on-device model in the background automatically (your Ollama if installed, otherwise the app’s built-in runtime) — no setup, no localhost URL. Falls back to deterministic Pulse if no local runtime is available.',
+        type: 'boolean',
+        default: true
+      },
+      {
         key: 'pulse.model',
         label: 'Model',
         description: 'Override the model for the active provider. Blank uses the provider default.',
         type: 'text',
         default: '',
-        placeholder: 'auto (claude-haiku-4-5 / llama3.2:3b)'
+        placeholder: 'auto (claude-haiku-4-5 / qwen2.5:0.5b)'
       },
       {
         key: 'pulse.baseUrl',

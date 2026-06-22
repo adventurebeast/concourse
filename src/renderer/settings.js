@@ -8,6 +8,7 @@
 // the settings-specific layout on top.
 import './style.css'
 import './settings.css'
+import { ensureLocalLlmReady } from './localLlmSetup.js'
 
 const api = window.api
 
@@ -62,9 +63,21 @@ function makeEnum(s) {
     opt.textContent = o.label
     sel.appendChild(opt)
   }
-  sel.addEventListener('change', () => {
+  sel.addEventListener('change', async () => {
+    const prev = values[s.key]
     values[s.key] = sel.value
     api.settings.set(s.key, sel.value)
+    // Choosing the Local Pulse provider IS the consent to run a local model: kick off
+    // the one-click setup (download + background runtime). If the user backs out, put
+    // the dropdown back so we don't leave Pulse pointed at a model they declined.
+    if (s.key === 'pulse.provider' && sel.value === 'local') {
+      const result = await ensureLocalLlmReady()
+      if (result !== 'installed') {
+        values[s.key] = prev
+        sel.value = prev
+        api.settings.set(s.key, prev)
+      }
+    }
   })
   return { el: sel, set: (v) => (sel.value = v) }
 }

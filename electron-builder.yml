@@ -14,6 +14,15 @@ files:
 asarUnpack:
   - "**/node_modules/node-pty/**"
   - "out/main/search-worker.js"
+# Bundled local-model runtime: the llama.cpp `llama-server` binary + its sibling libs,
+# vendored into build/bin by `npm run fetch:llama` (the dist/pack scripts run it first).
+# Shipped to <Resources>/llama so a user with no Ollama still gets a built-in, offline
+# Pulse model. The ~400 MB weights are NOT bundled — they download on first use.
+extraResources:
+  - from: build/bin
+    to: llama
+    filter:
+      - "**/*"
 mac:
   category: public.app-category.developer-tools
   target:
