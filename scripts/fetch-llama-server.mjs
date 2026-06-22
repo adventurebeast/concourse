@@ -10,7 +10,8 @@
 // llama.cpp is MIT-licensed — redistribution inside the app is fine.
 //
 // NOTE: this is build tooling that runs in plain Node (not Electron). It relies on the
-// system `unzip` (present on macOS/Linux). The app targets macOS today.
+// system `tar` (macOS/Linux .tar.gz assets) or `unzip` (Windows .zip) — both present on
+// their respective platforms. The app targets macOS today.
 
 import {
   existsSync,
@@ -80,7 +81,8 @@ async function main() {
     headers: { 'user-agent': 'concourse-build', accept: 'application/vnd.github+json' }
   }).then((r) => r.json())
 
-  const asset = (rel.assets || []).find((x) => matcher.test(x.name) && x.name.endsWith('.zip'))
+  // llama.cpp ships macOS/Linux as .tar.gz and Windows as .zip — accept either.
+  const asset = (rel.assets || []).find((x) => matcher.test(x.name) && /\.(?:zip|tar\.gz|tgz)$/i.test(x.name))
   if (!asset) {
     console.warn('[fetch:llama] available assets:', (rel.assets || []).map((x) => x.name).join(', '))
     bail(`no matching release asset for ${process.platform}/${process.arch}`)
@@ -98,14 +100,25 @@ async function main() {
   writeFileSync(zipPath, bytes)
 
   console.log('[fetch:llama] extracting…')
-  execFileSync('unzip', ['-o', '-q', zipPath, '-d', work])
+  if (/\.zip$/i.test(asset.name)) {
+    execFileSync('unzip', ['-o', '-q', zipPath, '-d', work])
+  } else {
+    execFileSync('tar', ['-xzf', zipPath, '-C', work]) // .tar.gz / .tgz (macOS/Linux)
+  }
 
   const srcDir = findServerDir(work)
   if (!srcDir) bail('llama-server not found inside the archive')
 
+  // Ship ONLY the server binary + its shared libraries (it resolves them via
+  // @loader_path / rpath, so they must sit beside it) + the LICENSE. The archive also
+  // bundles a dozen other CLI tools (llama-cli, llama-bench, llama-tts, rpc-server, …)
+  // that Pulse never calls — copying them too would triple the runtime's footprint in
+  // the app for nothing.
+  const isLib = (f) => /\.(?:dylib|so(?:\.\d+)*|dll)$/i.test(f)
   for (const f of readdirSync(srcDir)) {
     const s = join(srcDir, f)
-    if (statSync(s).isFile()) copyFileSync(s, join(outDir, f))
+    if (!statSync(s).isFile()) continue
+    if (f === serverName || isLib(f) || f === 'LICENSE') copyFileSync(s, join(outDir, f))
   }
   chmodSync(join(outDir, serverName), 0o755)
   rmSync(work, { recursive: true, force: true })
