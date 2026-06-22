@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { icon } from './icons.js'
 import { coachOnce } from './toast.js'
 import { matchesAwaitPrompt } from './pulse-detect.js'
+import './spinner.js' // global ticker that animates the braille "thinking" glyph on .dot.working
 import { colorsFor } from './term-palettes.js'
 
 // The one-time beginner coach mark that explains Pulse the first time a tab starts
@@ -49,7 +50,14 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   }
   let activeId = null
   let counter = 0
-  let layout = 'tabs' // 'tabs' | 'grid' | 'stack' | 'flow'
+  // Initial layout for a brand-new workspace follows the user's saved default
+  // (appearance.defaultLayout, cached to localStorage by main.js so the first paint
+  // has it with no flash). A restored workspace overrides this via setLayout() with
+  // its own last-used layout, so per-workspace memory still wins.
+  const DEFAULT_LAYOUT_KEY = 'concourse-default-layout'
+  const VALID_LAYOUTS = ['tabs', 'grid', 'stack', 'flow']
+  const savedDefaultLayout = localStorage.getItem(DEFAULT_LAYOUT_KEY)
+  let layout = VALID_LAYOUTS.includes(savedDefaultLayout) ? savedDefaultLayout : 'tabs'
   let flowIndex = 0 // which session sits in the centre in 'flow' (album) layout
   let themeName = 'light'
   // Active identity-colour palette (appearance.headerTheme). `activeColors` is the
@@ -58,7 +66,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   let headerPalette = 'default'
   let headerCustom = '' // raw user input for the 'custom' palette
   let activeColors = colorsFor(headerPalette, themeName, headerCustom)
-  panesEl.classList.add('tabs')
+  panesEl.classList.add(layout)
 
   // ---- pulse ----
   // Byte flow drives the base state: bytes ⇒ `working`; IDLE_AFTER_MS of silence after
@@ -691,7 +699,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       const looking = document.hasFocus() && activeId === s.id
       if (!looking) {
         s.unseen = true
-        onAwait?.({ id: s.id, name: (s.tabLabel && s.tabLabel.textContent) || s.baseName, summary: s.summaryText || '' })
+        onAwait?.({ id: s.id, name: visibleLabel(s) || s.baseName, summary: s.summaryText || '' })
       }
     } else if (next === 'working') {
       s.unseen = false
@@ -746,10 +754,6 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       for (const s of sessions.values()) {
         counts[s.state] = (counts[s.state] || 0) + 1
       }
-      // Gate the global breathe clock (style.css html.has-working): it runs ONLY while at
-      // least one pane is working, so an idle fleet costs zero animation. Toggled here, in
-      // the coalesced rAF, so a burst of transitions collapses to one class write per frame.
-      document.documentElement.classList.toggle('has-working', (counts.working || 0) > 0)
       if (onFleet) onFleet({ total: sessions.size, counts })
     })
   }
@@ -885,7 +889,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       isShell: !command, // plain shell vs an agent preset — gates command capture
       lineBuf: '', // keystroke accumulator for the last-command heuristic
       baseName: displayName, // fallback label shown when nothing better is known
-      oscTitle: null, // last OSC 0/2 title the program emitted (Layer 0)
+      oscTitle: null, // last OSC 0/2 title the program emitted (Layer 0) — always leads the label
       heurTitle: null, // last heuristic label (the typed command line; branch not shown)
       titleTimer: null // debounce handle for onTitleChange
     }
@@ -894,6 +898,8 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     // ResizeObserver above). Tag the element so the observer can find the session.
     cellBody.__session = s
     resizeObserver.observe(cellBody)
+    labelResizeObserver.observe(tabLabel) // re-measure the hover-marquee on width changes
+    labelResizeObserver.observe(cellLabel)
     updateIndicators(s) // paint the initial working/idle tab tint
 
     // Beginner-only empty-pane launcher: greet a brand-new user's first pane with
@@ -1073,6 +1079,8 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     dirty.delete(s)
     api.term.kill(id)
     s.term.dispose()
+    labelResizeObserver.unobserve(s.tabLabel)
+    labelResizeObserver.unobserve(s.cellLabel)
     s.cell.remove()
     s.stub.remove()
     s.tabEl.remove()
@@ -1152,7 +1160,8 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   function renameStart(s, labelEl) {
     const input = document.createElement('input')
     input.className = 'rename-input'
-    input.value = labelEl.textContent
+    // Prefill with the lead label only (.lbl-main), not the dim "— summary" tail.
+    input.value = labelEl.querySelector('.lbl-main')?.textContent ?? labelEl.textContent
     labelEl.replaceWith(input)
     input.focus()
     input.select()
@@ -1188,25 +1197,79 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   // its own pixel edge. MAX_TITLE is only a sanity bound so a pathologically long typed line
   // never becomes a giant DOM text node / tooltip; it should stay well above any width we render.
   const MAX_TITLE = 200
-  function applyAutoLabels(s, text, full = text) {
-    // Guard against writing into a label that's mid-rename (detached node).
-    if (s.tabLabel.isConnected) s.tabLabel.textContent = text
-    if (s.cellLabel.isConnected) s.cellLabel.textContent = text
-    s.stubLabel.textContent = text
-    s.tabEl.title = full // full, untruncated string on hover — CSS shows as much as fits
-    s.cell.title = full
+  // The auto label carries TWO writers on ONE line, deliberately split into two spans so
+  // they never fight over a single text node (the old single-string race flickered between
+  // a program's live title and our model summary):
+  //   • primary (.lbl-main) — a program's OWN title ALWAYS leads and is shown verbatim:
+  //     Claude Code's (or any agent's) live OSC header, vim, ssh, a shell's titled prompt.
+  //     We never replace it. Only a pane that sets NO title at all leads with our summary.
+  //   • secondary (.lbl-sub) — our Pulse summary APPENDED as a dim "— summary" tail on the
+  //     SAME line, so we ADD context to the program's title instead of overriding it. It
+  //     just clips at rest; hover marquees it (below).
+  // Shown identically in every view — tabs, stack (MS), flow (AF) — the roomier views just
+  // reveal more before the clip. A manual rename (s.custom) still trumps both.
+  const clamp = (v) => (v && v.length > MAX_TITLE ? v.slice(0, MAX_TITLE - 1) + '…' : v || '')
+  function visibleLabel(s) {
+    return s.oscTitle || s.summaryText || s.heurTitle || s.baseName
+  }
+  // Write [primary] + optional dim [— secondary] into a clip element, reusing a single
+  // .lbl-inner track (the marquee transforms this child; the clip element stays put).
+  function setTwoPart(clipEl, primary, secondary) {
+    if (!clipEl || !clipEl.isConnected) return
+    let inner = clipEl.firstElementChild
+    if (!inner || !inner.classList.contains('lbl-inner')) {
+      clipEl.replaceChildren()
+      inner = document.createElement('span')
+      inner.className = 'lbl-inner'
+      clipEl.appendChild(inner)
+    }
+    const main = document.createElement('span')
+    main.className = 'lbl-main'
+    main.textContent = primary // textContent keeps agent-influenced text literal (no HTML)
+    if (secondary) {
+      const sub = document.createElement('span')
+      sub.className = 'lbl-sub'
+      sub.textContent = ' — ' + secondary
+      inner.replaceChildren(main, sub)
+    } else {
+      inner.replaceChildren(main)
+    }
+  }
+  // Mark a clip as overflowing (so :hover can marquee it) and hand the keyframes the exact
+  // pixel distance + a distance-scaled duration. Read-only layout query; safe in rAF/RO.
+  function measureMarquee(clipEl) {
+    if (!clipEl || !clipEl.isConnected) return
+    const inner = clipEl.firstElementChild
+    if (!inner) return clipEl.classList.remove('is-overflow')
+    const over = inner.scrollWidth - clipEl.clientWidth
+    if (over > 4) {
+      clipEl.classList.add('is-overflow')
+      clipEl.style.setProperty('--marquee-shift', `-${over}px`)
+      clipEl.style.setProperty('--marquee-dur', `${Math.min(14, Math.max(3, over / 28)).toFixed(1)}s`)
+    } else {
+      clipEl.classList.remove('is-overflow')
+    }
   }
   function applyTitle(s) {
     if (s.custom) return // a manual rename always wins
-    // The Layer-B summary (what the pane just did / is asking) is the richest auto
-    // label — it wins over a program's OSC title (often static, e.g. "claude") and
-    // the keystroke heuristic. A manual rename still trumps everything.
-    const full = s.summaryText || s.oscTitle || s.heurTitle || s.baseName
-    const text = full.length > MAX_TITLE ? full.slice(0, MAX_TITLE - 1) + '…' : full
-    applyAutoLabels(s, text, full) // display string truncates to CSS width; tooltip keeps it all
+    const primary = clamp(visibleLabel(s))
+    // Append the summary only when the program supplied its OWN title (so we ADD to it).
+    // With no OSC title the summary IS the lead, and a tail would just repeat it.
+    const secondary = s.oscTitle && s.summaryText && s.summaryText !== s.oscTitle ? clamp(s.summaryText) : null
+    setTwoPart(s.tabLabel, primary, secondary)
+    setTwoPart(s.cellLabel, primary, secondary)
+    if (s.stubLabel.isConnected) s.stubLabel.textContent = primary // slim rail stub: single-line
+    const tip = secondary ? `${primary} — ${secondary}` : primary
+    s.tabEl.title = tip
+    s.cell.title = tip
+    requestAnimationFrame(() => {
+      measureMarquee(s.tabLabel)
+      measureMarquee(s.cellLabel)
+    })
   }
   function setAutoTitle(s, raw) {
     const t = (raw || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/\s+/g, ' ').trim()
+    // Any title a program sets leads the label verbatim; our summary appends to it.
     s.oscTitle = !t || t === s.baseName ? null : t
     applyTitle(s)
   }
@@ -1428,6 +1491,14 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       const s = entry.target.__session
       if (s) scheduleRefit(s)
     }
+  })
+  // Re-check label overflow whenever a label's own width changes — a layout switch
+  // (tabs→stack→flow), a window resize, or more tabs squeezing the bar. This keeps the
+  // hover-marquee's "is it overflowing / by how much" state correct without re-running
+  // applyTitle. Reading scrollWidth/clientWidth inside an RO callback is the standard
+  // (no-thrash) place to do it.
+  const labelResizeObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) measureMarquee(entry.target)
   })
 
   // ---- pty output -> terminal: drives the two-state (working/idle) indicator ----

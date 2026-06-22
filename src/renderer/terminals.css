@@ -8,25 +8,24 @@
   position: relative;
 }
 
-/* ---------- Pulse: working spins, idle rests ---------- */
-/* Working: a faint full ring in the terminal's identity hue with one brighter arc
-   rotating — reads as "output incoming" at a glance. */
+/* ---------- Working: an ASCII "thinking" spinner ----------
+   The ONLY per-pane "working" signal — a braille glyph in the pane's hue, like modern agent
+   CLIs. The CHARACTER is cycled by spinner.js (JS textContent — reliable everywhere); CSS owns
+   the look: big enough to read at a glance, and a gentle scale "breathe" (transform/opacity —
+   always renders) so it feels alive, not a flat tick. The glyph replaces the dot's circle. */
 .dot.working {
   background: transparent;
-}
-.dot.working::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 1.5px solid color-mix(in srgb, var(--term-color, var(--green)) 26%, transparent);
-  border-top-color: var(--term-color, var(--green));
-  animation: dot-spin 0.8s linear infinite;
-}
-@keyframes dot-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 17px;
+  height: 16px;
+  color: var(--term-color, var(--green));
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -1.5px; /* tuck the two braille cells together into one 4×4 grid */
 }
 /* Idle: a calm solid dot in the terminal's identity hue. A finished process is also
    "idle" — the faded `.exited` tab label carries the "ended" cue. */
@@ -66,8 +65,20 @@
    (see .term-tab in style.css). The "dots" style shows it: a spinning ring while
    working, a calm hued dot when idle. The dot is always in the DOM and kept updated,
    so flipping appearance.tabStatus is a pure CSS switch — no re-render. */
+/* Default style: show the dot ONLY while it carries motion/urgency — the spinning ring for
+   `working`, the amber dot for `awaiting`. Idle tabs hide it (the tab's hue tint already
+   gives identity), keeping a resting fleet calm. The "dots" style shows the idle dot too. */
 .term-tab .dot {
   display: none;
+}
+.term-tab .dot.working,
+.term-tab .dot.awaiting {
+  display: block;
+}
+/* On the active (full-hue, dark-fill) tab the hue-matched glyph would vanish into the
+   background — paint it white so "working" still reads on the focused tab. */
+.term-tab.active .dot.working {
+  color: #fff;
 }
 html[data-tab-status='dots'] .term-tab .dot {
   display: block;
@@ -89,6 +100,47 @@ html[data-tab-status='dots'] .term-tab.active .dot {
 }
 .term-tab.exited .term-tab-label {
   opacity: 0.55;
+}
+
+/* ---- two-part auto label + hover marquee ----------------------------------------
+   A label clip (.term-tab-label / .cell-label) holds ONE inline-block track (.lbl-inner)
+   carrying the program's own title (.lbl-main) plus our dim Pulse summary tail (.lbl-sub).
+   At rest the track is capped to the clip and ellipsises — nothing moves. Hover a clip the
+   JS has flagged .is-overflow and the track marquees to reveal the rest, then eases back:
+   motion happens only when there's something hidden AND only when you ask for it. */
+.lbl-inner {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.lbl-sub {
+  opacity: 0.5; /* our summary rides dimmer than the program's own lead title */
+}
+.term-tab:hover .term-tab-label.is-overflow .lbl-inner,
+.term-cell:hover .cell-label.is-overflow .lbl-inner {
+  max-width: none; /* release the rest-state clamp so the full text can slide through */
+  overflow: visible;
+  text-overflow: clip;
+  animation: lbl-marquee var(--marquee-dur, 6s) ease-in-out infinite alternate;
+}
+@keyframes lbl-marquee {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    transform: translateX(var(--marquee-shift, 0));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .term-tab:hover .term-tab-label.is-overflow .lbl-inner,
+  .term-cell:hover .cell-label.is-overflow .lbl-inner {
+    animation: none;
+  }
 }
 .rename-input {
   background: var(--bg-input);
@@ -314,11 +366,18 @@ html[data-tab-status='dots'] .term-tab.active .dot {
    panes are live at a distance, not by hunting for a tiny spinning dot. Travels light → peak
    in OKLCH; trough == --tone-light == the resting header, so settling is seamless. Focused
    panes are excluded — they wear the vivid fill (below) and the cursor is already there. */
-html:not([data-tab-status='dots']) .term-cell[data-state='working']:not(.active) .cell-header {
-  animation: pulse-clock 5s ease-in-out infinite;
-  background: color-mix(in srgb, var(--term-color, var(--accent)) 60%,
-    color-mix(in srgb, white, black calc(var(--pulse-t) * 100%)));
-  transition: none; /* don't chase the per-frame pulse */
+/* Working headers carry NO tint either — the braille spinner + the shimmering label are the
+   working signal, matching the tabs. (thinking-shimmer keyframes live in style.css.) */
+html:not([data-tab-status='dots']) .term-cell[data-state='working']:not(.active) .cell-label {
+  background: linear-gradient(100deg,
+    var(--term-color, var(--accent)) 28%,
+    #fff 50%,
+    var(--term-color, var(--accent)) 72%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-shimmer 1.7s ease-in-out infinite;
 }
 /* Awaiting (your move) — a steady, lifted tone, distinct from both idle and the breathe.
    (The amber status dot still carries the precise "needs you" cue; this just lifts the bar.) */
@@ -338,6 +397,25 @@ html:not([data-tab-status='dots']) .term-cell[data-state='awaiting']:not(.active
 }
 .term-cell.active .cell-header .close:hover {
   background: color-mix(in srgb, #fff 18%, transparent);
+}
+/* Focused header wears the dark full-hue fill, so its working glyph goes white to stay
+   visible (same reason as the active tab dot). */
+.term-cell.active .cell-header .dot.working {
+  color: #fff;
+}
+/* …and the focused header's label shimmers while working, matching the focused tab — a
+   dimmed-white → pure-white band sweeps the white label over the hue fill. */
+html:not([data-tab-status='dots']) .term-cell.active[data-state='working'] .cell-label {
+  background: linear-gradient(100deg,
+    rgba(255, 255, 255, 0.68) 28%,
+    #fff 50%,
+    rgba(255, 255, 255, 0.68) 72%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: none; /* with transparent glyphs the inherited shadow would ghost (esp. .lbl-sub) */
+  animation: thinking-shimmer 1.7s ease-in-out infinite;
 }
 .cell-body {
   flex: 1;
