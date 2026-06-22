@@ -8,6 +8,8 @@ import { registerSearch } from './ipc-search.js'
 import { registerSession } from './ipc-session.js'
 import { registerPty } from './ipc-pty.js'
 import { registerPulse } from './ipc-pulse.js'
+import { registerModel } from './ipc-model.js'
+import { stopLocalServer } from './local-llm.js'
 import { registerShell } from './ipc-shell.js'
 import { registerSettings } from './ipc-settings.js'
 import { initSettings, getRaw } from './settings.js'
@@ -194,6 +196,7 @@ app.whenReady().then(async () => {
   registerSession()
   killPtysForWindow = registerPty(ctx)
   registerPulse()
+  registerModel()
   registerShell()
   registerSettings()
 
@@ -210,6 +213,18 @@ app.whenReady().then(async () => {
   // Open (or focus) the shared Settings window — from the titlebar gear and the
   // Settings… menu item (⌘,).
   ipcMain.on('window:openSettings', () => openSettingsWindow())
+
+  // Bring the calling window to the foreground — clicking a Pulse "awaiting you"
+  // notification pulls you back to the agent that needs you. app.focus({steal}) lifts
+  // the whole app above other apps on macOS; un-minimise + focus handles the rest.
+  ipcMain.on('window:focusSelf', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win || win.isDestroyed()) return
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+    if (process.platform === 'darwin') app.focus({ steal: true })
+  })
 
   // Application menu: File ▸ New Window / New File / New Folder / Open Folder, the
   // Settings… item, plus the standard Edit roles. New Window and Settings are
@@ -229,7 +244,12 @@ app.whenReady().then(async () => {
 // Synchronously drain any staged session/recents writes before we exit, so a
 // force-quit shortly after a layout change still persists it (the async write
 // queue may not get a turn during teardown). See store-io flushSync().
-app.on('before-quit', () => flushSync())
+app.on('before-quit', () => {
+  flushSync()
+  // Stop the Pulse model server, but only if WE launched it (an externally-owned
+  // Ollama — the menubar app, or one you started — is left running).
+  stopLocalServer()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

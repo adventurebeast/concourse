@@ -25,7 +25,10 @@ contextBridge.exposeInMainWorld('api', {
   // openSettings() opens (or focuses) the shared Settings window.
   window: {
     open: () => ipcRenderer.send('window:open'),
-    openSettings: () => ipcRenderer.send('window:openSettings')
+    openSettings: () => ipcRenderer.send('window:openSettings'),
+    // Bring THIS window to the foreground — used by the Pulse awaiting notification's
+    // click handler to pull you back to the agent that needs you.
+    focusSelf: () => ipcRenderer.send('window:focusSelf')
   },
 
   // Application-menu commands (File ▸ New File / New Folder / Open Folder). The
@@ -113,6 +116,17 @@ contextBridge.exposeInMainWorld('api', {
   pulse: {
     status: () => ipcRenderer.invoke('pulse:status'),
     summarize: (payload) => ipcRenderer.invoke('pulse:summarize', payload)
+  },
+
+  // Local model provisioning — the one-click "run the Local LLM" flow, handlers in
+  // src/main/ipc-model.js. status() says whether the built-in model is already on
+  // disk; provision() starts a local runtime and downloads the model, streaming
+  // progress via onProgress(); cancel() aborts an in-flight download.
+  model: {
+    status: () => ipcRenderer.invoke('model:status'),
+    provision: (opts) => ipcRenderer.invoke('model:provision', opts),
+    cancel: () => ipcRenderer.invoke('model:cancel'),
+    onProgress: (cb) => ipcRenderer.on('model:progress', (_e, p) => cb(p))
   },
 
   // Settings — central user preferences, handlers in src/main/ipc-settings.js.

@@ -1,5 +1,11 @@
 import { ipcMain } from 'electron'
 import { getRaw } from './settings.js'
+import {
+  ensureLocalRuntimeStarted,
+  localServerManaged,
+  resolveLocalBaseUrl,
+  resolveLocalModel
+} from './local-llm.js'
 
 // Pulse · Layer B — turn a pane's recent visible output into a compact
 // { state, summary, question } verdict, so the UI can tell "awaiting your input"
@@ -24,8 +30,9 @@ import { getRaw } from './settings.js'
 // failure degrades to null — Pulse must never take the app down.
 
 const DEFAULT_CLAUDE_MODEL = 'claude-haiku-4-5'
-const DEFAULT_LOCAL_MODEL = 'llama3.2:3b'
-const DEFAULT_LOCAL_BASE_URL = 'http://localhost:11434/v1'
+// The local base URL and model live in local-llm.js (shared with the provisioning
+// flow) so the server we auto-start, the model we download, and the model Pulse
+// calls can never drift apart.
 
 // Configuration precedence for Pulse: a Settings value (set in the Settings
 // window) wins; otherwise the matching environment variable; otherwise the
@@ -199,13 +206,14 @@ function claudeProvider(apiKey) {
 // configurable base URL: no SDK, no native build, no key required (localhost runtimes
 // ignore Authorization; a key is sent only if CONCOURSE_PULSE_API_KEY is set).
 function openAICompatibleProvider() {
-  const baseUrl = (settingOrEnv('pulse.baseUrl', 'CONCOURSE_PULSE_BASE_URL') || DEFAULT_LOCAL_BASE_URL).replace(/\/+$/, '')
-  const model = settingOrEnv('pulse.model', 'CONCOURSE_PULSE_MODEL') || DEFAULT_LOCAL_MODEL
+  const baseUrl = resolveLocalBaseUrl()
+  const model = resolveLocalModel()
   const key = settingOrEnv('pulse.localApiKey', 'CONCOURSE_PULSE_API_KEY')
   const headers = { 'content-type': 'application/json', ...(key && { authorization: `Bearer ${key}` }) }
   return {
     name: 'local',
     model,
+    baseUrl,
     async reachable() {
       // GET /models is the cheap OpenAI-compatible liveness probe (Ollama: /v1/models).
       const r = await fetchWithTimeout(`${baseUrl}/models`, { headers }, 1500)
@@ -239,6 +247,19 @@ function openAICompatibleProvider() {
   }
 }
 
+// Kick a background local-model server (Ollama) into existence when the Local backend
+// is in play and nothing is serving yet. Fire-and-forget and idempotent — it no-ops if
+// a server is already reachable, if one we own is already starting, or if auto-start is
+// turned off in Settings. This is what makes local Pulse truly zero-config: you don't
+// run `ollama serve` and you don't paste a localhost URL — the app brings the server up
+// and a later resolve (within the TTL) sees it reachable and switches to local.
+function maybeAutostartLocal() {
+  if (getRaw('pulse.localAutostart') === false) return
+  // The runtime layer picks Ollama or the bundled llama-server and only starts
+  // something it can manage and that's ready — so this is safe to fire blindly.
+  ensureLocalRuntimeStarted().catch(() => {})
+}
+
 // Resolve a backend at runtime (see the header for the full precedence list). This is
 // async because auto-detect may probe the local server, and the result is cached for a
 // few seconds so we don't probe on every call — while still noticing a server that
@@ -260,19 +281,30 @@ function createResolver() {
     // Explicit choice: trust it. (For 'local' we don't gate on a probe — a briefly-down
     // server should still report its configured provider and recover on its own; for
     // 'claude' a missing key leaves Pulse off until one is set.)
-    if (mode === 'local') return local
+    if (mode === 'local') {
+      maybeAutostartLocal()
+      return local
+    }
     if (mode === 'claude') return claude
 
     // Auto-detect (default). Precedence:
-    // 1. Explicit endpoint (Settings base URL or env): trust the operator, no probe.
+    // 1. Explicit endpoint (Settings base URL or env): trust the operator. We still try
+    //    auto-start (it no-ops unless it's a manageable localhost Ollama that's down).
     const explicitLocal = !!settingOrEnv('pulse.baseUrl', 'CONCOURSE_PULSE_BASE_URL')
-    if (explicitLocal) return local
+    if (explicitLocal) {
+      maybeAutostartLocal()
+      return local
+    }
     // 2. A reachable local server wins (free, offline, private). A refused connection
     //    fails fast, so this adds no real latency when nothing is running.
     if (await local.reachable()) return local
-    // 3. Fall back to Anthropic when a key is present.
+    // 3. Nothing serving yet — start a background server if auto-start is on and Ollama
+    //    is installed. Fire-and-forget: a later resolve, once the port answers, returns
+    //    local. Meanwhile fall through so Pulse isn't stuck waiting on model load.
+    maybeAutostartLocal()
+    // 4. Fall back to Anthropic when a key is present.
     if (claude) return claude
-    // 4. Nothing usable — Layer A still carries the UI.
+    // 5. Nothing usable yet — Layer A still carries the UI.
     return null
   }
 
@@ -354,11 +386,17 @@ export function registerPulse() {
         reachable = false
       }
     }
+    // `managed` = a model server WE launched is alive. `starting` = we launched it but
+    // it isn't answering yet (model still loading) — lets the UI say "starting local
+    // model…" instead of looking disabled during the first-run warm-up.
+    const managed = localServerManaged()
     return {
       enabled: !!provider,
       provider: provider?.name ?? null,
       model: provider?.model ?? null,
-      reachable
+      reachable,
+      managed,
+      starting: managed && provider?.name === 'local' && !reachable
     }
   })
 

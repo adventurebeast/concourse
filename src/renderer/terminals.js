@@ -4,12 +4,13 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { icon } from './icons.js'
 import { coachOnce } from './toast.js'
+import { matchesAwaitPrompt } from './pulse-detect.js'
 
-// The one-time beginner coach mark that explains Pulse the first time a dot spins.
-// Fired from every path that starts an agent (launcher reuse, '+' preset, or a
-// user-driven shell going active) — coachOnce makes it once-ever regardless.
+// The one-time beginner coach mark that explains Pulse the first time a tab starts
+// working. Fired from every path that starts an agent (launcher reuse, '+' preset,
+// or a user-driven shell going active) — coachOnce makes it once-ever regardless.
 const PULSE_COACH =
-  'That spinning dot is Pulse — it means the agent is working. It calms when the agent is done or waiting on you.'
+  'That pulsing tab is Pulse — it means the agent is working. It calms to a steady colour when the agent is done or waiting on you.'
 
 const api = window.api
 
@@ -29,7 +30,7 @@ const TERM_COLORS = [
 
 // Tabbed + grid terminal multiplexer. Each session is an independent PTY shell;
 // run a CLI coding agent in each and watch them all at once in grid view.
-export function createTerminals({ getRoot, onFleet }) {
+export function createTerminals({ getRoot, onFleet, onAwait }) {
   const tabBar = document.getElementById('term-tabs')
   const panesEl = document.getElementById('term-panes')
   const controls = document.querySelector('#terminal-region .panel-controls')
@@ -44,7 +45,8 @@ export function createTerminals({ getRoot, onFleet }) {
     fontSize: 12.5,
     fontFamily: 'Menlo, Monaco, "SF Mono", "Courier New", monospace',
     cursorBlink: true,
-    scrollback: 10000
+    scrollback: 10000,
+    confirmClose: true // show the close-confirmation dialog (terminal.confirmClose)
   }
   let activeId = null
   let counter = 0
@@ -54,25 +56,43 @@ export function createTerminals({ getRoot, onFleet }) {
   panesEl.classList.add('tabs')
 
   // ---- pulse ----
-  // Two states, full stop: a pane is `working` while output is flowing and `idle`
-  // once it goes quiet. There is no semantic state machine beyond that — the spinner
-  // IS the working state. One threshold: bytes ⇒ working; IDLE_AFTER_MS of silence
-  // after the last byte ⇒ idle. Long enough to bridge the sub-second gaps between an
-  // agent's tokens/tool calls (its animated TUI keeps emitting frames) so it doesn't
-  // flicker mid-turn, short enough that a finished command settles to a calm dot
-  // promptly. See the PTY onData handler. Tune here if it feels twitchy/laggy.
+  // Byte flow drives the base state: bytes ⇒ `working`; IDLE_AFTER_MS of silence after
+  // the last byte ⇒ the pane has settled. IDLE_AFTER_MS is long enough to bridge the
+  // sub-second gaps between an agent's tokens/tool calls (its animated TUI keeps
+  // emitting frames) so it doesn't flicker mid-turn, short enough that a finished
+  // command settles promptly. See the PTY onData handler. Tune if it feels twitchy.
   const IDLE_AFTER_MS = 800
+  // On settle we classify (Layer 1 — deterministic, free, offline). If the visible tail
+  // shows an explicit input prompt, the pane is `awaiting` YOU: the agent's resting
+  // state — a y/N, a password, a permission, or just parked at its input box. This is
+  // the high-value signal — ~90% of fleet-driving is waiting to catch an agent back at
+  // rest, so the working→awaiting EDGE is the moment worth a notification (see setState).
+  // Otherwise the pane is calm `idle`, and Layer B (and the slow alt-screen tell below)
+  // may still refine it. False positives are the cardinal sin: every pattern is anchored
+  // to the END of the tail (where a parked cursor sits), so mid-output mentions of "y/n"
+  // or "password" in flowing text don't trip it.
+  const QUIET_MS = 8000 // conservative window for the implicit (alt-screen) awaiting tell
+  // Does the settled pane show an explicit input affordance in its visible tail? Reads
+  // the last few rendered rows (the cursor parks at the prompt) and runs the anchored
+  // patterns in pulse-detect.js. Pure/synchronous — the deterministic floor, no model.
+  function looksAwaitingPrompt(s) {
+    return matchesAwaitPrompt(tailOf(s, 6))
+  }
   // Layer B only runs when a provider is configured in main AND reachable (an
   // Anthropic key, or a live local OpenAI-compatible endpoint); without it the
-  // deterministic Layer A still works. Queried once at startup — restart to pick up a
-  // provider you brought up later.
+  // deterministic Layer A still works. Re-polled on an interval so a local model
+  // server that Concourse auto-starts (or that you bring up later) turns Layer B on
+  // without a restart — the probe is a single cheap localhost request.
   let pulseEnabled = false
-  api.pulse
-    ?.status?.()
-    .then((st) => {
-      pulseEnabled = !!(st && st.enabled && st.reachable)
-    })
-    .catch(() => {})
+  const refreshPulseStatus = () =>
+    api.pulse
+      ?.status?.()
+      .then((st) => {
+        pulseEnabled = !!(st && st.enabled && st.reachable)
+      })
+      .catch(() => {})
+  refreshPulseStatus()
+  setInterval(refreshPulseStatus, 15000)
 
   // ---- inject extra panel controls: one button per layout, always visible ----
   // The button for the current layout is highlighted (.active).
@@ -363,14 +383,13 @@ export function createTerminals({ getRoot, onFleet }) {
     s.launcher = null
   }
   // Run an agent in an existing (empty) pane — the launcher's reuse path. Mirrors the
-  // create({command}) preset seam: mark used, spin the dot immediately for instant
+  // create({command}) preset seam: mark used, start the pulse immediately for instant
   // feedback, then send the command. A missing binary just prints "command not
   // found" harmlessly, which is why the copy never promises success.
   function launchAgentInPane(s, command) {
     dismissPaneLauncher(s)
     s.used = true
-    s.state = 'working'
-    updateIndicators(s) // spin the dot the instant they click — immediate feedback
+    setState(s, 'working') // pulse the tab the instant they click — immediate feedback
     if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
     api.term.input(s.id, command + '\r')
     s.term.focus()
@@ -384,6 +403,12 @@ export function createTerminals({ getRoot, onFleet }) {
   // re-focuses the open dialog and returns instead.
   let confirmOverlay = null
   function confirmClose(s) {
+    // Preference off (user ticked "Don't ask me again", or toggled it in Settings) →
+    // skip the dialog and close immediately.
+    if (!termSettings.confirmClose) {
+      destroy(s.id)
+      return
+    }
     if (confirmOverlay) {
       confirmOverlay.querySelector('.tc-danger')?.focus()
       return
@@ -403,6 +428,19 @@ export function createTerminals({ getRoot, onFleet }) {
     msg.className = 'tc-msg'
     msg.textContent = 'The shell and any running agent will be terminated.'
     box.append(title, msg)
+    // "Don't ask me again" — when ticked AND the user proceeds, persist
+    // terminal.confirmClose = false so future closes skip this dialog (and the
+    // Settings panel reflects it via the broadcast). Ticking it has no effect if the
+    // user cancels — the choice only commits alongside the close it's attached to.
+    const dontAsk = document.createElement('label')
+    dontAsk.className = 'tc-dontask'
+    const dontAskBox = document.createElement('input')
+    dontAskBox.type = 'checkbox'
+    dontAskBox.className = 'tc-dontask-box'
+    const dontAskText = document.createElement('span')
+    dontAskText.textContent = 'Don’t ask me again'
+    dontAsk.append(dontAskBox, dontAskText)
+    box.appendChild(dontAsk)
     const actions = document.createElement('div')
     actions.className = 'tc-actions'
     const cancel = document.createElement('button')
@@ -430,6 +468,10 @@ export function createTerminals({ getRoot, onFleet }) {
       document.removeEventListener('keydown', onKey, true)
     }
     const confirm = () => {
+      if (dontAskBox.checked) {
+        termSettings.confirmClose = false
+        Promise.resolve(api.settings?.set?.('terminal.confirmClose', false)).catch(() => {})
+      }
       finish()
       destroy(s.id)
     }
@@ -628,25 +670,59 @@ export function createTerminals({ getRoot, onFleet }) {
     if (s) selectCell(s.id)
   }
 
-  // ---- indicator dot ----
-  // Two states, and the dot class IS the state: `working` (a spinning ring — output
-  // is flowing) or `idle` (a calm dot — gone quiet). The same class drives the three
-  // per-pane dots AND the aggregate fleet summary, so they always agree.
+  // Every semantic state change goes through here so the working→awaiting EDGE — the
+  // moment an agent comes to rest needing you — can't be missed. On that edge, if you
+  // aren't already looking at the pane, flag it `unseen` (a come-look pulse on the
+  // tab/dot) and fire onAwait so a surface OUTSIDE the pane (an OS notification) can pull
+  // you back. Returning to `working` clears the come-look. This is the one seam the spec
+  // (docs/pulse-engine.md) hangs the notify behaviour on — keep all transitions routed
+  // through it.
+  function setState(s, next) {
+    const prev = s.state
+    if (prev === next) return
+    s.state = next
+    if (next === 'awaiting' && prev !== 'awaiting') {
+      // Only a "come-look" if you're not already on this pane in a focused window.
+      const looking = document.hasFocus() && activeId === s.id
+      if (!looking) {
+        s.unseen = true
+        onAwait?.({ id: s.id, name: (s.tabLabel && s.tabLabel.textContent) || s.baseName, question: s.summaryText || '' })
+      }
+    } else if (next === 'working') {
+      s.unseen = false
+    }
+    updateIndicators(s)
+  }
+
+  // ---- pulse indicator ----
+  // Three states: `working` (output flowing), `awaiting` (at rest, your move) or `idle`
+  // (gone quiet, nothing pending). Drives BOTH tab status styles at once (CSS shows
+  // whichever the user picked, see appearance.tabStatus):
+  //   • "pulse" (default) — the whole tab tints in its identity hue and slowly
+  //     *breathes* while working; holds a steady tint when awaiting/idle.
+  //   • "dots" — a compact dot in the tab spins while working, rests when quiet.
+  // An `awaiting` pane that came to rest while you were elsewhere is also flagged
+  // `unseen` → a soft amber come-look pulse until you focus it. The grid / stack / flow
+  // pane headers always use the dot (no tab strip there). The same value feeds both AND
+  // the fleet summary, so they always agree.
   function updateIndicators(s) {
-    const cls = 'dot ' + s.state
-    s.tabDot.className = cls
+    s.tabEl.dataset.state = s.state // pulse style: breathing vs steady tab tint
+    if (s.unseen) s.tabEl.dataset.unseen = '1'
+    else delete s.tabEl.dataset.unseen
+    const cls = 'dot ' + s.state + (s.unseen ? ' unseen' : '')
+    s.tabDot.className = cls // dots style: the in-tab status dot
     s.cellDot.className = cls
     s.stubDot.className = cls
-    // A just-in-time reminder of what the dot means, on the pane's own dot — beginner
+    // A just-in-time reminder of what the state means, surfaced on hover — beginner
     // only, so Expert stays a bare shell. The status-bar fleet count carries the full
     // Pulse legend; this is just the hover gloss.
     if (document.documentElement.dataset.mode !== 'expert') {
-      const tip = s.state === 'working' ? 'Working' : 'Waiting'
+      const tip = s.state === 'working' ? 'Working' : s.state === 'awaiting' ? 'Awaiting you' : 'Idle'
       s.cellDot.dataset.tip = tip
-      s.tabDot.dataset.tip = tip
+      s.tabEl.dataset.tip = tip
     } else {
       delete s.cellDot.dataset.tip
-      delete s.tabDot.dataset.tip
+      delete s.tabEl.dataset.tip
     }
     emitFleet()
   }
@@ -688,6 +764,9 @@ export function createTerminals({ getRoot, onFleet }) {
     tabEl.draggable = true
     tabEl.dataset.id = id // reorderFromDom() maps DOM order back to sessions by id
     tabEl.style.setProperty('--term-color', color)
+    // Status dot for the "dots" Pulse style. CSS hides it in the default "pulse"
+    // style (where the whole tab tints + breathes instead); it's always kept in the
+    // DOM and updated so flipping the setting needs no re-render. See updateIndicators.
     const tabDot = document.createElement('span')
     tabDot.className = 'dot idle'
     const tabLabel = document.createElement('span')
@@ -761,12 +840,14 @@ export function createTerminals({ getRoot, onFleet }) {
       id, term, fit, cell, body: cellBody, tabEl, tabDot, tabLabel, cellLabel, cellDot, color,
       stub, stubDot, stubLabel,
       status: 'running', custom: false,
-      // Two states only: `working` (output flowing — spinner) or `idle` (gone quiet).
-      // An agent preset (command) auto-fires on open, so it starts working. A plain
-      // shell just sits at its prompt, so it starts idle and won't spin until the
-      // user actually drives it (see the PTY onData handler).
+      // Three states: `working` (output flowing — pulsing), `awaiting` (at rest, your
+      // move) or `idle` (gone quiet, nothing pending). An agent preset (command)
+      // auto-fires on open, so it starts working. A plain shell just sits at its prompt,
+      // so it starts idle and won't pulse until the user drives it (see PTY onData).
       state: command ? 'working' : 'idle',
-      idleTimer: null, // debounce handle: flips the pane to idle after IDLE_AFTER_MS of silence
+      unseen: false, // came to rest (awaiting) while you were looking elsewhere → come-look
+      idleTimer: null, // debounce handle: classifies the pane on settle after IDLE_AFTER_MS
+      quietTimer: null, // slower settle timer for the conservative alt-screen awaiting tell
       follow: true, // sticky-bottom intent: keep the newest line (prompt / agent input box)
       //              visible. True until the user scrolls up to read history (see onScroll),
       //              re-armed the instant they type. Every write/fit re-asserts the bottom
@@ -789,7 +870,7 @@ export function createTerminals({ getRoot, onFleet }) {
     // ResizeObserver above). Tag the element so the observer can find the session.
     cellBody.__session = s
     resizeObserver.observe(cellBody)
-    updateIndicators(s) // paint the initial working/idle dot
+    updateIndicators(s) // paint the initial working/idle tab tint
 
     // Beginner-only empty-pane launcher: greet a brand-new user's first pane with
     // "Launch an agent here" instead of a mute prompt. Never on restored panes
@@ -939,6 +1020,7 @@ export function createTerminals({ getRoot, onFleet }) {
     if (!s) return
     clearTimeout(s.titleTimer)
     clearTimeout(s.idleTimer)
+    clearTimeout(s.quietTimer)
     resizeObserver.unobserve(s.body)
     dirty.delete(s)
     api.term.kill(id)
@@ -969,7 +1051,17 @@ export function createTerminals({ getRoot, onFleet }) {
   function activate(id) {
     const s = sessions.get(id)
     if (!s) return
+    // A genuine switch (different pane becoming active) vs. a re-click on the pane
+    // you're already in. The two need opposite scroll behaviour — see the s.follow
+    // note below — so capture the distinction before we overwrite activeId.
+    const switching = activeId !== id
     activeId = id
+    // Looking at this pane clears the awaiting come-look (set on the working→awaiting
+    // edge while you were elsewhere). Repaint so the pulse stops immediately.
+    if (s.unseen) {
+      s.unseen = false
+      updateIndicators(s)
+    }
     for (const [sid, sess] of sessions) {
       const on = sid === id
       sess.cell.classList.toggle('active', on)
@@ -985,7 +1077,7 @@ export function createTerminals({ getRoot, onFleet }) {
       // (same as album flow's centerOn).
       setTimeout(() => s.term.focus(), 0)
     }
-    // Switching to a pane means "show me what's happening here" — and agents stream
+    // Switching TO a pane means "show me what's happening here" — and agents stream
     // output into background panes constantly. Re-engage sticky-bottom so the fit
     // below (and every subsequent write) snaps to the live line. Without this, a pane
     // whose follow was dropped while it sat as a hidden/preview tile — its off-screen
@@ -993,7 +1085,13 @@ export function createTerminals({ getRoot, onFleet }) {
     // reads that as a user scroll-up — would open stranded above the fold, invisible
     // until you typed a key. fitPane/pinBottom both gate their scrollToBottom on
     // s.follow, so resetting it here is what makes the switch land at the bottom.
-    s.follow = true
+    //
+    // But ONLY on a real switch. Re-clicking the pane you're already in — to start a
+    // text selection up in the scrollback, say — must leave the scroll position alone;
+    // forcing follow back on here would scrollToBottom out from under the click and
+    // yank you off the lines you were copying from. Respect whatever follow the user's
+    // own scrolling already set (onScroll keeps it accurate).
+    if (switching) s.follow = true
     // Activation changed which pane is primary (and may have flipped one from
     // hidden→visible). Re-fit whatever is primary once the layout settles; fitPane
     // leaves previews/hidden panes untouched so their agents keep their width. Focus
@@ -1282,37 +1380,56 @@ export function createTerminals({ getRoot, onFleet }) {
     s.term.write(data, () => pinBottom(s))
     // A fresh, untouched shell only emits startup chrome — its prompt, or an
     // auto-injected `cd … && clear` from cdInto(). That isn't work, so don't let it
-    // spin the indicator. Only a pane the user has driven (s.used) or an agent preset
+    // start the indicator. Only a pane the user has driven (s.used) or an agent preset
     // (!isShell) counts as working; an unused shell stays idle until used.
     if (s.isShell && !s.used) return
-    // Output ⇒ working (spinner). Each byte resets the idle debounce, so the pane
-    // stays working across the sub-second gaps in a turn and only settles to idle
+    // Output ⇒ working (pulse). Each byte resets the settle debounce, so the pane
+    // stays working across the sub-second gaps in a turn and only settles
     // IDLE_AFTER_MS after output truly stops.
     if (s.state !== 'working') {
-      s.state = 'working'
       s.summaryText = null // live activity: drop the stale resting label
       applyTitle(s)
-      updateIndicators(s)
-      // The first time a beginner ever sees a dot start spinning, explain it — Pulse
+      setState(s, 'working') // repaints; also clears any awaiting come-look
+      // The first time a beginner ever sees a tab start pulsing, explain it — Pulse
       // finally names itself at the exact moment it has meaning. Once ever, never expert.
       if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
     }
+    // New output ⇒ not at rest: cancel both settle timers, then re-arm the fast one.
     clearTimeout(s.idleTimer)
+    clearTimeout(s.quietTimer)
+    s.quietTimer = null
     s.idleTimer = setTimeout(() => {
       s.idleTimer = null
       if (s.status === 'exited') return // the exit handler owns the final state
-      s.state = 'idle'
-      updateIndicators(s)
-      summarize(s) // it just came to rest — label what it did / is waiting on
+      // Layer 1 classify on settle. An explicit prompt in the tail ⇒ awaiting you now
+      // (fast path, high confidence). Otherwise calm: settle to idle, and for a
+      // full-screen TUI arm the conservative QUIET_MS alt-screen tell (the no-LLM floor).
+      if (looksAwaitingPrompt(s)) {
+        setState(s, 'awaiting')
+      } else {
+        setState(s, 'idle')
+        if (s.term.buffer.active.type === 'alternate') {
+          s.quietTimer = setTimeout(() => {
+            s.quietTimer = null
+            if (s.status !== 'exited' && s.state === 'idle' && s.term.buffer.active.type === 'alternate') {
+              setState(s, 'awaiting') // a TUI silent past QUIET_MS is almost certainly at rest
+            }
+          }, QUIET_MS - IDLE_AFTER_MS)
+        }
+      }
+      summarize(s) // Layer B: refine the label, and may promote idle→awaiting
     }, IDLE_AFTER_MS)
   })
   api.term.onExit(({ id }) => {
     const s = sessions.get(id)
     if (!s) return
     s.status = 'exited'
-    s.state = 'idle' // a finished process isn't working; the faded .exited tab marks that it ended
-    clearTimeout(s.idleTimer) // settled — never leave it spinning
+    s.state = 'idle' // a finished process isn't working/awaiting; the faded .exited tab marks "ended"
+    s.unseen = false // never leave a dead pane nagging for a come-look
+    clearTimeout(s.idleTimer) // settled — never leave it pulsing
     s.idleTimer = null
+    clearTimeout(s.quietTimer)
+    s.quietTimer = null
     updateIndicators(s)
     s.tabEl.classList.add('exited')
     // Clear any stale OSC title (programs may leave one set on exit); the resolver
@@ -1348,7 +1465,7 @@ export function createTerminals({ getRoot, onFleet }) {
   }
   // Called once each time a pane comes to rest (the working→idle edge). Sends the
   // visible tail to the model and writes back a one-line label — and ONLY a label.
-  // It never touches the working/idle dot; the spinner is driven purely by byte flow.
+  // It never touches the working/idle state; the pulse is driven purely by byte flow.
   async function summarize(s) {
     if (!pulseEnabled || !api.pulse?.summarize) return
     if (s.summarizing) return // one request per pane at a time
@@ -1372,12 +1489,17 @@ export function createTerminals({ getRoot, onFleet }) {
       s.summarizing = false
     }
     if (!res) return // failed/empty: leave the hash unset so we retry next rest
-    // If the pane has resumed working while we waited (new output flipped it back and
-    // cleared its label), don't paint a stale resting summary over a live pane.
-    if (s.state !== 'idle') return
+    // Stale guard: if the pane resumed working (or the process exited) while we waited,
+    // don't paint a resting label or flip state out from under live output.
+    if (s.state === 'working' || s.status === 'exited') return
     s.lastSummaryHash = h
     const label = res.question ? `⏳ ${res.question}` : res.summary
     s.summaryText = label && label.trim() ? label.trim() : null
+    // Layer B can recognise a rest the deterministic regex missed — most importantly an
+    // agent parked at its OWN input box (end-of-turn await). Promote idle→awaiting so the
+    // come-look edge fires; we set summaryText first so the notification carries the
+    // question. Never demote a deterministic `awaiting` on a model's say-so.
+    if (res.state === 'awaiting' && s.state !== 'awaiting') setState(s, 'awaiting')
     applyTitle(s)
   }
 
@@ -1431,6 +1553,7 @@ export function createTerminals({ getRoot, onFleet }) {
     }
     if (typeof opts.cursorBlink === 'boolean') termSettings.cursorBlink = opts.cursorBlink
     if (typeof opts.scrollback === 'number') termSettings.scrollback = opts.scrollback
+    if (typeof opts.confirmClose === 'boolean') termSettings.confirmClose = opts.confirmClose
     for (const s of sessions.values()) {
       if (fontChanged) {
         s.term.options.fontSize = termSettings.fontSize
@@ -1476,9 +1599,17 @@ export function createTerminals({ getRoot, onFleet }) {
     for (const s of sessions.values()) {
       clearTimeout(s.idleTimer)
       clearTimeout(s.titleTimer)
-      s.idleTimer = s.titleTimer = null
+      clearTimeout(s.quietTimer)
+      s.idleTimer = s.titleTimer = s.quietTimer = null
     }
   }
 
-  return { create, newTab, fitActive, fitAll, setLayout, setTheme, applySettings, cdInto, typeIntoActive, stepActive, activateIndex, cycleLayout, closeActive, getState, restore, dispose }
+  // Bring a pane to the foreground by id — used by the awaiting OS-notification's click
+  // handler to jump straight to the agent that needs you. activate() handles focus,
+  // sticky-bottom and the come-look clear; in grid/flow the pane is already visible.
+  function revealPane(id) {
+    if (sessions.has(id)) activate(id)
+  }
+
+  return { create, newTab, fitActive, fitAll, setLayout, setTheme, applySettings, cdInto, typeIntoActive, stepActive, activateIndex, cycleLayout, closeActive, getState, restore, revealPane, dispose }
 }

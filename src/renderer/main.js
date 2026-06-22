@@ -126,7 +126,51 @@ const search = createSearch({
 const terminals = createTerminals({
   getRoot: () => currentRoot,
   // Aggregate pane pulse states into the right side of the status bar.
-  onFleet: (fleet) => statusbar.setFleet(fleet)
+  onFleet: (fleet) => statusbar.setFleet(fleet),
+  // Pulse working→awaiting edge: an agent just came to rest needing you. The pane's own
+  // come-look pulse always fires (in terminals.js); when this window is in the
+  // BACKGROUND we ALSO post an OS notification, so you get pulled back without having to
+  // babysit the bar — the whole point of Pulse (see docs/pulse-engine.md).
+  onAwait: (info) => notifyAwait(info)
+})
+
+// ---------- Pulse awaiting notifications ----------
+// Surface the working→awaiting edge OUTSIDE the window — but only when the window is
+// unfocused (you've switched away). In-window, the tab/dot come-look pulse already
+// carries it and a notification would just nag. Clicking the notification brings the
+// window forward and reveals the exact pane. Everything degrades silently: if OS
+// notifications are unsupported or denied, the title-bar flag below still flips.
+const BASE_DOC_TITLE = document.title
+let awaitNotif = null
+function notifyAwait(info) {
+  if (document.hasFocus()) return // you're here — the in-pane come-look is enough
+  // Always-available fallback surface (works even if notifications are blocked): flag
+  // the window/dock title until you return. Cleared on the next window focus (below).
+  document.title = `🔔 ${info.name || 'Agent'} — awaiting you`
+  try {
+    if (typeof Notification === 'undefined' || Notification.permission === 'denied') return
+    const show = () => {
+      awaitNotif?.close?.()
+      awaitNotif = new Notification(`${info.name || 'Agent'} · awaiting you`, {
+        body: info.question || 'It finished its turn and is waiting for you.'
+      })
+      awaitNotif.onclick = () => {
+        api.window?.focusSelf?.()
+        if (info.id) terminals.revealPane(info.id)
+        window.focus()
+      }
+    }
+    if (Notification.permission === 'granted') show()
+    else Notification.requestPermission().then((p) => p === 'granted' && show()).catch(() => {})
+  } catch {
+    /* notifications unsupported — the come-look pulse + title flag still carry it */
+  }
+}
+// Returning to the window clears the awaiting title flag (and dismisses any open note).
+window.addEventListener('focus', () => {
+  if (document.title !== BASE_DOC_TITLE) document.title = BASE_DOC_TITLE
+  awaitNotif?.close?.()
+  awaitNotif = null
 })
 
 // Beginner command palette: a clickable launcher that TYPES a curated command onto
@@ -181,13 +225,13 @@ keys.register('mod+w', () => terminals.closeActive())
 keys.register('mod+k', () => palette.toggle())
 // Layout modes: a single cycler plus direct keys. tabs/grid/flow sit on the
 // adjacent U I P keys; Cmd+Shift+L taps through them in order. Stack uses
-// Cmd+Shift+O, not Cmd+O: the menu's "Open Folder…" claims Cmd+O, and menu
-// accelerators fire before the renderer ever sees the keystroke, so a plain
-// mod+o binding here would be permanently dead.
+// U-I-O-P is the layout row: tabs / grid / stack / flow. The menu's
+// "Open Folder…" moved to Cmd+Shift+O so plain Cmd+O stays free for the
+// master-stack layout here (menu accelerators fire before the renderer).
 keys.register('mod+shift+l', () => terminals.cycleLayout(1))
 keys.register('mod+u', () => terminals.setLayout('tabs'))
 keys.register('mod+i', () => terminals.setLayout('grid'))
-keys.register('mod+shift+o', () => terminals.setLayout('stack'))
+keys.register('mod+o', () => terminals.setLayout('stack'))
 keys.register('mod+p', () => terminals.setLayout('flow'))
 // Workbench toggles (VS Code conventions). These drive the existing toolbar
 // buttons so the .active states and resizers stay in sync.
@@ -325,6 +369,22 @@ document.getElementById('toggle-mode').addEventListener('click', () => {
 })
 applyMode(mode)
 
+// ---------- Tab status style (pulse default, dots optional, persisted) ----------
+// How a terminal tab signals "working": the default 'pulse' tints the whole tab and
+// breathes it; 'dots' keeps the classic small status dot. Lives on <html
+// data-tab-status> so the switch is pure CSS (terminals.css / style.css branch off it).
+// Mirrors theme/mode: localStorage is boot-authoritative (no flash) and the value is
+// echoed into the central store so the Settings window stays in sync.
+const TAB_STATUS_KEY = 'concourse-tab-status'
+let tabStatus = localStorage.getItem(TAB_STATUS_KEY) || 'pulse'
+function applyTabStatus(next) {
+  tabStatus = next === 'dots' ? 'dots' : 'pulse'
+  document.documentElement.dataset.tabStatus = tabStatus
+  localStorage.setItem(TAB_STATUS_KEY, tabStatus)
+  Promise.resolve(api.settings?.set?.('appearance.tabStatus', tabStatus)).catch(() => {})
+}
+applyTabStatus(tabStatus)
+
 // ---------- Central settings (Settings window) ----------
 // The Settings window writes to a main-process store; every window then receives a
 // settings:changed broadcast. Editor/terminal preferences are applied live here;
@@ -344,13 +404,16 @@ function applyEditorTerminalSettings(v) {
     fontSize: v['terminal.fontSize'],
     fontFamily: v['terminal.fontFamily'],
     cursorBlink: v['terminal.cursorBlink'],
-    scrollback: v['terminal.scrollback']
+    scrollback: v['terminal.scrollback'],
+    confirmClose: v['terminal.confirmClose']
   })
 }
 function applyAppearanceSettings(v) {
   if (!v) return
   if (v['appearance.theme'] && v['appearance.theme'] !== theme) applyTheme(v['appearance.theme'])
   if (v['appearance.mode'] && v['appearance.mode'] !== mode) applyMode(v['appearance.mode'])
+  if (v['appearance.tabStatus'] && v['appearance.tabStatus'] !== tabStatus)
+    applyTabStatus(v['appearance.tabStatus'])
 }
 // Initial load: localStorage already drove theme/mode (authoritative at boot, no
 // flash), so only reconcile editor/terminal prefs here — this avoids a load-race

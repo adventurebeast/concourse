@@ -504,7 +504,11 @@ body {
   max-width: 180px;
   font-size: 12px;
   color: var(--text-dim);
-  background: none;
+  /* Identity tint: the whole tab is washed in its terminal's hue so you can tell
+     agents apart across a wall of tabs — this replaces the old status dot. The
+     wash strength *breathes* while the agent is working (see [data-state] below);
+     idle tabs hold a calm, steady tint. */
+  background: color-mix(in srgb, var(--term-color, transparent) 13%, transparent);
   border: 1px solid transparent; /* reserve the frame; only the active tab shows it */
   border-bottom: none;
   border-radius: 6px 6px 0 0; /* subtle top rounding only */
@@ -512,6 +516,54 @@ body {
   white-space: nowrap;
   flex-shrink: 0;
   transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+}
+/* ---------- Pulse: the whole tab is the status indicator ----------
+   working = the identity tint slowly breathes (the calm successor to the spinning
+   dot); idle = a steady tint. Two keyframe sets because the resting background
+   differs: inactive tabs sit on the strip (transparent base), the active tab is
+   lifted onto the editor surface (--bg-editor base). 4s, ease-in-out: a slow,
+   unhurried pulse that reads as "alive" without nagging.
+
+   The trough (0%/100%) is pinned to the idle resting tint (.term-tab = 13%,
+   .term-tab.active = 14%) ON PURPOSE: agents emit output in bursts, so a pane flips
+   working→idle→working on every >IDLE_AFTER_MS gap, and each return RESTARTS this
+   keyframe at frame 0. If the trough sat below the idle tint the restart would slam
+   the tab dark every burst — that's what read as "blinking on/off". Matching the
+   trough to the idle tint makes restarts seamless: the breathe only ever brightens
+   up from rest and falls back to it, never flashing. */
+@keyframes tab-pulse {
+  0%, 100% { background: color-mix(in srgb, var(--term-color, var(--accent)) 13%, transparent); }
+  50%      { background: color-mix(in srgb, var(--term-color, var(--accent)) 30%, transparent); }
+}
+@keyframes tab-pulse-active {
+  0%, 100% { background: color-mix(in srgb, var(--term-color, var(--accent)) 14%, var(--bg-editor)); }
+  50%      { background: color-mix(in srgb, var(--term-color, var(--accent)) 30%, var(--bg-editor)); }
+}
+.term-tab[data-state='working'] {
+  animation: tab-pulse 4s ease-in-out infinite;
+}
+.term-tab.active[data-state='working'] {
+  animation-name: tab-pulse-active;
+}
+/* Awaiting (your move): the agent came to rest needing you. Steady — it does NOT breathe
+   (that's "working") — but lifted a touch above the idle tint so a wall of tabs still
+   shows at a glance which one stopped for you. The agent's identity hue is preserved. */
+.term-tab[data-state='awaiting'] {
+  background: color-mix(in srgb, var(--term-color, var(--accent)) 26%, transparent);
+}
+.term-tab.active[data-state='awaiting'] {
+  background: color-mix(in srgb, var(--term-color, var(--accent)) 26%, var(--bg-editor));
+}
+/* Unseen come-look: it went awaiting while you were elsewhere. A slow amber underline
+   glow pulses to pull you back — inset, so the tab strip's overflow never clips it — and
+   stops the instant you focus the pane (data-unseen cleared in activate()). Amber, not
+   the identity hue, so "needs you" reads even across a same-colour wall of tabs. */
+@keyframes tab-await-unseen {
+  0%, 100% { box-shadow: inset 0 -2.5px 0 0 var(--orange); }
+  50% { box-shadow: inset 0 -2.5px 0 0 color-mix(in srgb, var(--orange) 25%, transparent); }
+}
+.term-tab[data-unseen='1'] {
+  animation: tab-await-unseen 1.5s ease-in-out infinite;
 }
 /* Hairline divider between adjacent inactive tabs — short, centred, faint. */
 .term-tab::after {
@@ -537,16 +589,17 @@ body {
 .term-tab:last-of-type::after {
   opacity: 0;
 }
-/* Hover: soft rounded highlight + a whisper of the identity colour. */
+/* Hover: lift the identity wash a touch (a working tab keeps breathing — its
+   animation overrides this background). */
 .term-tab:hover {
-  background: color-mix(in srgb, var(--term-color, var(--hover)) 10%, var(--hover));
+  background: color-mix(in srgb, var(--term-color, var(--hover)) 22%, var(--hover));
   color: var(--text);
 }
-/* Active: lifted onto the editor surface so it connects to the pane below.
-   Hairline frame on top + sides; no lavender fill, no hard blue top line. */
+/* Active: lifted onto the editor surface so it connects to the pane below, with the
+   identity tint blended into that surface so it still reads as "this agent". */
 .term-tab.active {
   color: var(--text);
-  background: var(--bg-editor);
+  background: color-mix(in srgb, var(--term-color, transparent) 14%, var(--bg-editor));
   border-color: var(--border);
   margin-bottom: -1px; /* cover the strip's bottom border → fuse with the pane */
   padding-bottom: 1px;
@@ -574,9 +627,27 @@ body {
 .term-tab.dragging::after {
   opacity: 0;
 }
-/* Dimmed dead-shell state. */
+/* Dimmed dead-shell state: drop the identity wash (a finished process shouldn't
+   carry a vivid colour) and never pulse. */
 .term-tab.exited {
   color: var(--text-faint);
+  background: color-mix(in srgb, var(--term-color, transparent) 5%, transparent);
+  animation: none;
+}
+
+/* ---------- "Dots" Pulse style (opt-in via appearance.tabStatus) ----------
+   For people who'd rather not have tinted, breathing tabs: fall back to the classic
+   look — plain tabs with a small status dot (the dot itself is un-hidden + spins via
+   terminals.css). Strip the identity tint and the breathing animation from the tab. */
+html[data-tab-status='dots'] .term-tab {
+  background: none;
+  animation: none !important;
+}
+html[data-tab-status='dots'] .term-tab:hover {
+  background: color-mix(in srgb, var(--term-color, var(--hover)) 10%, var(--hover));
+}
+html[data-tab-status='dots'] .term-tab.active {
+  background: var(--bg-editor);
 }
 .term-tab.exited.active::before {
   background: var(--text-faint);
@@ -639,13 +710,22 @@ body {
   outline-offset: -2px;
   color: var(--text);
 }
-/* Respect reduced-motion: drop the easing. */
+/* Respect reduced-motion: drop the easing, and replace the breathing pulse with a
+   static stronger wash so a working tab is still clearly distinct from an idle one
+   without any motion. */
 @media (prefers-reduced-motion: reduce) {
   .term-tab,
   .term-tab::after,
   .term-tab .close,
   .term-tab-add {
     transition: none;
+  }
+  .term-tab[data-state='working'] {
+    animation: none;
+    background: color-mix(in srgb, var(--term-color, var(--accent)) 30%, transparent);
+  }
+  .term-tab.active[data-state='working'] {
+    background: color-mix(in srgb, var(--term-color, var(--accent)) 26%, var(--bg-editor));
   }
 }
 #term-panes {
@@ -745,6 +825,9 @@ body {
 }
 .fleet-dot.working {
   background: var(--green);
+}
+.fleet-dot.awaiting {
+  background: var(--orange);
 }
 .fleet-dot.idle {
   background: var(--text-faint);
