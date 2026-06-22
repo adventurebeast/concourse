@@ -691,7 +691,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       const looking = document.hasFocus() && activeId === s.id
       if (!looking) {
         s.unseen = true
-        onAwait?.({ id: s.id, name: (s.tabLabel && s.tabLabel.textContent) || s.baseName, question: s.summaryText || '' })
+        onAwait?.({ id: s.id, name: (s.tabLabel && s.tabLabel.textContent) || s.baseName, summary: s.summaryText || '' })
       }
     } else if (next === 'working') {
       s.unseen = false
@@ -712,6 +712,8 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   // the fleet summary, so they always agree.
   function updateIndicators(s) {
     s.tabEl.dataset.state = s.state // pulse style: breathing vs steady tab tint
+    s.cell.dataset.state = s.state // grid/stack/flow: unfocused header breathes while working
+    s.stub.dataset.state = s.state
     if (s.unseen) s.tabEl.dataset.unseen = '1'
     else delete s.tabEl.dataset.unseen
     const cls = 'dot ' + s.state + (s.unseen ? ' unseen' : '')
@@ -737,14 +739,18 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   // produces at most one summary per frame.
   let fleetRaf = 0
   function emitFleet() {
-    if (!onFleet || fleetRaf) return
+    if (fleetRaf) return
     fleetRaf = requestAnimationFrame(() => {
       fleetRaf = 0
       const counts = {}
       for (const s of sessions.values()) {
         counts[s.state] = (counts[s.state] || 0) + 1
       }
-      onFleet({ total: sessions.size, counts })
+      // Gate the global breathe clock (style.css html.has-working): it runs ONLY while at
+      // least one pane is working, so an idle fleet costs zero animation. Toggled here, in
+      // the coalesced rAF, so a burst of transitions collapses to one class write per frame.
+      document.documentElement.classList.toggle('has-working', (counts.working || 0) > 0)
+      if (onFleet) onFleet({ total: sessions.size, counts })
     })
   }
 
@@ -869,7 +875,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       //              set — fixing "the prompt sits below the fold until I hit Enter".
       pinning: false, // guard: true only while WE scroll programmatically, so the onScroll
       //               below never mistakes our own re-pin (or a reflow) for a user scroll-up.
-      summaryText: null, // last Layer-B label (summary, or the pending question)
+      summaryText: null, // last Layer-B label (the model's one-line summary)
       lastSummaryHash: null, // hash of the last tail summarised at rest — skip no-op repeats
       lastLiveHash: null, // hash of the last tail the working heartbeat summarised — kept
       //                     separate from lastSummaryHash so a live re-label never suppresses
@@ -1553,7 +1559,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     // and stop — never set lastSummaryHash, never change state (the at-rest verdict, with
     // its awaiting edge, stays the settle path's job).
     if (live && s.state === 'working') {
-      const label = res.question ? `⏳ ${res.question}` : res.summary
+      const label = res.summary
       s.summaryText = label && label.trim() ? label.trim() : null
       applyTitle(s)
       return
@@ -1563,12 +1569,12 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     // If the pane has since resumed working, don't paint a resting label over live output.
     if (s.state === 'working') return
     s.lastSummaryHash = h
-    const label = res.question ? `⏳ ${res.question}` : res.summary
+    const label = res.summary
     s.summaryText = label && label.trim() ? label.trim() : null
     // Layer B can recognise a rest the deterministic regex missed — most importantly an
     // agent parked at its OWN input box (end-of-turn await). Promote idle→awaiting so the
     // come-look edge fires; we set summaryText first so the notification carries the
-    // question. Never demote a deterministic `awaiting` on a model's say-so.
+    // summary label. Never demote a deterministic `awaiting` on a model's say-so.
     if (res.state === 'awaiting' && s.state !== 'awaiting') setState(s, 'awaiting')
     applyTitle(s)
   }

@@ -112,7 +112,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Pulse — Layer B model summariser, handlers in src/main/ipc-pulse.js.
   // The API key lives only in the main process; the renderer sends a text tail and
-  // gets back a { state, summary, question } verdict (or null when disabled).
+  // gets back a { state, summary } verdict (or null when disabled).
   pulse: {
     status: () => ipcRenderer.invoke('pulse:status'),
     summarize: (payload) => ipcRenderer.invoke('pulse:summarize', payload)
