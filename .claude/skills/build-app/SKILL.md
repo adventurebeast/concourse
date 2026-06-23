@@ -11,7 +11,8 @@ Produce the packaged macOS Concourse app from source.
 
 Run all five steps in order: build → locate → commit → install → launch. Installing to
 /Applications is what makes it a real, Spotlight-launchable app; launching completes the
-build, but the launch step may have to be **delegated to the user** (see its guard).
+build and always uses `open -n` (a separate instance, safe even when this session runs
+inside Concourse).
 
 1. From the project root, run the build:
    - **Unpacked `.app` (fast, for local launch):** `npm run pack`
@@ -58,26 +59,18 @@ build, but the launch step may have to be **delegated to the user** (see its gua
    need right-click → Open, or `xattr -dr com.apple.quarantine /Applications/Concourse.app`
    to clear Gatekeeper.)
 
-5. Launch the installed app — this completes every build. **GUARD FIRST:** this very
-   session often runs *inside* a Concourse instance, and quitting "Concourse" would
-   kill it. Walk the parent-process chain from the current shell
-   (`ps -o ppid=,comm= -p <pid>` upward); if any ancestor is
-   `…/Concourse.app/Contents/MacOS/Concourse`, **do NOT quit/relaunch yourself** —
-   hand the user the command (or just tell them to ⌘-Space → "Concourse") and stop:
+5. Launch the installed app — this completes every build. **ALWAYS launch with `open -n`**,
+   never quit/relaunch:
    ```
-   osascript -e 'quit app "Concourse"' ; open -a Concourse
+   open -n /Applications/Concourse.app
    ```
-   (or `open -n /Applications/Concourse.app` to launch the NEW build as a *second* instance
-   without killing the one hosting the session — no `requestSingleInstanceLock` in this app,
-   so two can coexist).
-
-   Only when the session is **not** inside Concourse, do it directly:
-   - Quit any running instance so the fresh build loads: `osascript -e 'quit app "Concourse"' 2>/dev/null; sleep 1`
-   - Then: `open -a Concourse` (now resolves to the /Applications copy).
-   - **Confirm the new build loaded:** the bumped version shows as `vX.Y.Z` at
-     the far-right of the bottom status bar. It must match the `version` in
-     `package.json`. If it doesn't, an old instance is still running — quit and
-     reopen.
+   `open -n` starts the NEW build as a *separate* instance, so it never kills a Concourse that
+   may be hosting this very session (this app sets no `requestSingleInstanceLock`, so multiple
+   instances coexist fine). This is the rule whether or not the session is running inside
+   Concourse — do not use `osascript -e 'quit app "Concourse"'` or plain `open -a`.
+   - **Confirm the new build loaded:** the bumped version shows as `vX.Y.Z` at the far-right of
+     the bottom status bar of the newly-opened window. It must match the `version` in
+     `package.json`.
 
 ## Notes
 
