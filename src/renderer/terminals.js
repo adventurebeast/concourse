@@ -1299,8 +1299,19 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       measureMarquee(s.cellLabel)
     })
   }
+  // Strip a leading decorative status glyph (dingbat / emoji / arrow + optional variation
+  // selector) that some agents prefix to their OSC title — Claude Code leads with a rotating
+  // sparkle (✳ ✻ ✶ …). We already render our own braille working-spinner to the left of the
+  // label, so the agent's glyph just clashes with it (and flickers as it rotates). Plain words
+  // lead instead. Only a leading glyph RUN is removed; a normal title is untouched.
+  const LEAD_GLYPH = /^(?:[⌀-➿⬀-⯿️‍]|\p{Extended_Pictographic})+\s*/u
   function setAutoTitle(s, raw) {
-    const t = (raw || '').replace(/[\x00-\x1f\x7f]/g, '').replace(/\s+/g, ' ').trim()
+    const t = (raw || '')
+      .replace(/[\x00-\x1f\x7f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(LEAD_GLYPH, '')
+      .trim()
     // Any title a program sets leads the label verbatim; our summary appends to it.
     s.oscTitle = !t || t === s.baseName ? null : t
     applyTitle(s)

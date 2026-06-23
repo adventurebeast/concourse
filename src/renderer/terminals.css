@@ -373,19 +373,9 @@ html[data-tab-status='dots'] .term-tab.active .dot {
    panes are live at a distance, not by hunting for a tiny spinning dot. Travels light → peak
    in OKLCH; trough == --tone-light == the resting header, so settling is seamless. Focused
    panes are excluded — they wear the --tone-focus fill (below) and the cursor is already there. */
-/* Working headers carry NO tint either — the braille spinner + the shimmering label are the
-   working signal, matching the tabs. (thinking-shimmer keyframes live in style.css.) */
-html:not([data-tab-status='dots']) .term-cell[data-state='working']:not(.active) .cell-label {
-  background: linear-gradient(100deg,
-    var(--term-color, var(--accent)) 28%,
-    #fff 50%,
-    var(--term-color, var(--accent)) 72%);
-  background-size: 220% 100%;
-  -webkit-background-clip: text;
-          background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: thinking-shimmer 1.7s ease-in-out infinite;
-}
+/* Working headers carry NO tint and NO label shimmer — the braille spinner alone is the
+   working signal in the pane header. (The shimmer didn't render reliably here, so the label
+   stays a plain solid colour; the tab strip keeps its shimmer.) */
 /* Awaiting (your move) — a steady, lifted tone, distinct from both idle and the breathe.
    (The amber status dot still carries the precise "needs you" cue; this just lifts the bar.) */
 html:not([data-tab-status='dots']) .term-cell[data-state='awaiting']:not(.active) .cell-header {
@@ -404,20 +394,7 @@ html:not([data-tab-status='dots']) .term-cell[data-state='awaiting']:not(.active
 .term-cell.active .cell-header .close:hover {
   background: color-mix(in srgb, var(--text) 18%, transparent);
 }
-/* …and the focused header's label shimmers while working, matching the focused tab — a
-   dimmed-white → pure-white band sweeps the white label over the hue fill. */
-html:not([data-tab-status='dots']) .term-cell.active[data-state='working'] .cell-label {
-  background: linear-gradient(100deg,
-    var(--term-color, var(--accent)) 28%,
-    #fff 50%,
-    var(--term-color, var(--accent)) 72%);
-  background-size: 220% 100%;
-  -webkit-background-clip: text;
-          background-clip: text;
-  -webkit-text-fill-color: transparent;
-  text-shadow: none; /* with transparent glyphs the inherited shadow would ghost (esp. .lbl-sub) */
-  animation: thinking-shimmer 1.7s ease-in-out infinite;
-}
+/* The focused pane header carries no label shimmer either — see the working rule above. */
 .cell-body {
   flex: 1;
   min-height: 0;
