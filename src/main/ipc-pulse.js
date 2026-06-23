@@ -2,10 +2,29 @@ import { ipcMain } from 'electron'
 import { getRaw } from './settings.js'
 import {
   ensureLocalRuntimeStarted,
+  getLocalRuntime,
   localServerManaged,
   resolveLocalBaseUrl,
   resolveLocalModel
 } from './local-llm.js'
+
+// Pulse is a tiny, frequent microtask (a ~250-token tail in, a one-line label out), so
+// we pin the local model to a small footprint instead of taking each backend's defaults.
+// This is the difference between Pulse sipping resources and cooking the machine:
+//   - num_ctx 2048: our tail (<=2500 chars) + system prompt fit easily under 2K tokens.
+//     Ollama's DEFAULT is the model's full trained context (32K for qwen2.5) — which pins
+//     a ~1.8 GB KV cache on the GPU for a 0.5B model and churns it every call. Capping the
+//     context drops the resident footprint ~60% (measured 1.8 GB -> 717 MB).
+//   - num_predict 128: a <=14-word summary + the JSON wrapper never needs more; caps the
+//     worst-case generation so a confused tiny model can't run away to max_tokens.
+//   - keep_alive 30s: let the model fall out of VRAM ~30s after the panes go quiet instead
+//     of Ollama's 5-minute default (which the 30s working-heartbeat refreshes FOREVER, so
+//     the GPU never idles). During active use the heartbeat keeps it warm; once you stop,
+//     it releases. NOTE: these only take effect on Ollama's NATIVE /api/chat — the
+//     OpenAI-compatible /v1 endpoint silently drops them, which is why local Pulse ran hot.
+const LOCAL_NUM_CTX = 2048
+const LOCAL_NUM_PREDICT = 128
+const LOCAL_KEEP_ALIVE = '30s'
 
 // Pulse · Layer B — turn a pane's recent visible output into a compact
 // { state, summary } verdict, so the UI can tell "awaiting your input"
@@ -269,16 +288,49 @@ function openAICompatibleProvider() {
   const model = resolveLocalModel()
   const key = settingOrEnv('pulse.localApiKey', 'CONCOURSE_PULSE_API_KEY')
   const headers = { 'content-type': 'application/json', ...(key && { authorization: `Bearer ${key}` }) }
+  // Ollama is the common local backend, and only its NATIVE /api/chat honours the footprint
+  // caps (num_ctx / num_predict / keep_alive) that keep Pulse light — the /v1 OpenAI-compat
+  // shim drops them. So when the runtime is Ollama, talk to it natively; every other
+  // OpenAI-compatible server (LM Studio, our bundled llama-server, a remote box) keeps /v1.
+  const isOllama = getLocalRuntime().kind === 'ollama'
   return {
     name: 'local',
     model,
     baseUrl,
     async reachable() {
-      // GET /models is the cheap OpenAI-compatible liveness probe (Ollama: /v1/models).
+      // GET /models is the cheap OpenAI-compatible liveness probe (Ollama answers it too).
       const r = await fetchWithTimeout(`${baseUrl}/models`, { headers }, 1500)
       return !!r && r.ok
     },
     async summarize(payload) {
+      if (isOllama) {
+        // Native Ollama: /api/chat sits next to /v1 (strip the /v1 suffix). `format: 'json'`
+        // is Ollama's JSON mode; `options`/`keep_alive` are the footprint caps the /v1 shim
+        // ignores. This is what makes local Pulse stop pinning a 32K-context KV cache.
+        const apiBase = baseUrl.replace(/\/v1\/?$/, '')
+        const r = await fetchWithTimeout(
+          `${apiBase}/api/chat`,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              model,
+              stream: false,
+              format: 'json',
+              keep_alive: LOCAL_KEEP_ALIVE,
+              options: { temperature: 0, num_ctx: LOCAL_NUM_CTX, num_predict: LOCAL_NUM_PREDICT },
+              messages: [
+                { role: 'system', content: SYSTEM },
+                { role: 'user', content: buildUserText(payload) }
+              ]
+            })
+          },
+          20000
+        )
+        if (!r || !r.ok) return null
+        const data = await r.json().catch(() => null)
+        return data?.message?.content ?? null
+      }
       const r = await fetchWithTimeout(
         `${baseUrl}/chat/completions`,
         {
@@ -286,7 +338,7 @@ function openAICompatibleProvider() {
           headers,
           body: JSON.stringify({
             model,
-            max_tokens: 200,
+            max_tokens: LOCAL_NUM_PREDICT,
             temperature: 0,
             // json_object is the lowest-common-denominator across local servers; the
             // prompt already pins the exact keys and we validate the parsed result.
@@ -383,7 +435,11 @@ function createResolver() {
 // and FIFO-queue the rest. Queued requests carry their pane key so a newer
 // request for the same pane can supersede (stale-drop) an older queued one —
 // we don't want to spend a call on a summary the UI has already moved past.
-const MAX_CONCURRENT = 3
+// Kept low: on a weak machine (CPU-only inference, few cores) even 2 simultaneous
+// local generations saturate the box. Pulse is a background convenience, not a
+// throughput job — serialising a little is invisible to the user and keeps the
+// fans down. The per-pane settle cooldown in the renderer already thins the queue.
+const MAX_CONCURRENT = 2
 
 function createSemaphore(max) {
   let active = 0

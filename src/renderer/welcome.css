@@ -34,13 +34,19 @@
   display: inline-flex;
 }
 
-/* Box-drawing "CONCOURSE" wordmark (U+2550 block). A bright band sweeps across
-   the glyphs via a clipped gradient — same shimmer language as Pulse. */
+/* Box-drawing "CONCOURSE" wordmark (U+2550 block). The three rows only tile
+   into continuous strokes when BOTH axes are exact: line-height MUST be 1 (any
+   more leaves a vertical gap between rows) and letter-spacing MUST be 0 (any
+   negative value overlaps the vertical bars into a maze). A bright band sweeps
+   across via a clipped gradient — same shimmer language as Pulse.
+   NOTE: this depends on the mono font drawing box glyphs flush to the cell;
+   it's tuned for SF Mono / Menlo. */
 .welcome-ascii {
   margin: 0 0 2px;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: clamp(10px, 2.4vw, 13px);
-  line-height: 1.04;
+  font-size: clamp(11px, 2.6vw, 14px);
+  line-height: 1;
+  letter-spacing: 0;
   white-space: pre;
   background: linear-gradient(
     100deg,

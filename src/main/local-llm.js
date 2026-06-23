@@ -1,5 +1,6 @@
 import { spawn, execFile } from 'child_process'
 import { existsSync } from 'fs'
+import { cpus } from 'os'
 import { join } from 'path'
 import { app } from 'electron'
 import { getRaw } from './settings.js'
@@ -200,14 +201,28 @@ export async function ensureLocalRuntimeStarted({ force = false } = {}) {
       console.log('[pulse] started Ollama (ollama serve), pid', child?.pid)
     } else if (rt.kind === 'bundled') {
       if (!existsSync(rt.modelPath)) return // weights not downloaded yet
+      // Cap the runtime's footprint so Pulse stays a light background task even on a
+      // modest machine. Pulse sends a ~250-token tail and wants a one-line label, so a
+      // small context and short generation are plenty — and matching llama.cpp's threads
+      // to HALF the cores (min 2) leaves the rest for the user's actual agents instead of
+      // letting a tiny model peg every core. Without these, llama-server defaults to a
+      // large context and ALL cores, which is exactly what makes a fleet run hot.
+      const threads = Math.max(2, Math.floor(cpus().length / 2))
       track(
-        spawn(rt.binary, ['-m', rt.modelPath, '--host', '127.0.0.1', '--port', String(BUNDLED_PORT)], {
-          env: { ...process.env },
-          stdio: 'ignore',
-          detached: false
-        })
+        spawn(
+          rt.binary,
+          [
+            '-m', rt.modelPath,
+            '--host', '127.0.0.1',
+            '--port', String(BUNDLED_PORT),
+            '-c', '2048', // context window (KV cache) — matches LOCAL_NUM_CTX in ipc-pulse
+            '-n', '128', //  max tokens to generate per request
+            '-t', String(threads) // CPU threads — leave headroom for the user's agents
+          ],
+          { env: { ...process.env }, stdio: 'ignore', detached: false }
+        )
       )
-      console.log('[pulse] started bundled llama-server, pid', child?.pid)
+      console.log('[pulse] started bundled llama-server, pid', child?.pid, `(ctx 2048, ${threads} threads)`)
     }
   } catch (err) {
     child = null

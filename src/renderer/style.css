@@ -874,13 +874,9 @@ html[data-tab-status='dots'] .term-tab.active {
   .term-tab-add {
     transition: none;
   }
-  /* Stop the spinning status dot and the unseen "come-look" ping — the working tint
-     (--tone-mid, set steadily for every theme) still reads as distinct from idle, with
-     no motion. The dot stays visible (a static ring); only its rotation is dropped. */
-  .dot.working::after,
-  .dot.awaiting.unseen::after {
-    animation: none;
-  }
+  /* The braille working figure freezes on a static frame under reduced motion (spinner.js
+     swaps in STATIC); the working tab tint (--tone-mid, set steadily for every theme) still
+     reads as distinct from resting, with no motion. Nothing here animates anymore. */
 }
 #term-panes {
   flex: 1;

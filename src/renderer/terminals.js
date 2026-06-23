@@ -5,7 +5,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import { icon } from './icons.js'
 import { coachOnce } from './toast.js'
 import { matchesAwaitPrompt } from './pulse-detect.js'
-import './spinner.js' // global ticker that animates the braille "thinking" glyph on .dot.working
+import { RESTING_GRID, STATIC_GRID, createThinker } from './braille-thinker.js' // working-figure engine
+import { makeFigure, paint } from './dot-figure.js' // SVG dot-matrix renderer for the figure
 import { colorsFor } from './term-palettes.js'
 
 // The one-time beginner coach mark that explains Pulse the first time a tab starts
@@ -85,6 +86,13 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // to the END of the tail (where a parked cursor sits), so mid-output mentions of "y/n"
   // or "password" in flowing text don't trip it.
   const QUIET_MS = 8000 // conservative window for the implicit (alt-screen) awaiting tell
+  // Local prompt echo of a keystroke lands within a few ms of the key. Output arriving
+  // within this window of the user's last keystroke is treated as that echo — typing your
+  // own command line isn't the agent "thinking", so it must not start the spinner. Measured
+  // from EACH keystroke (which resets it), so continuous typing never trips working, however
+  // slow; a real command/agent keeps emitting past the window and pulses normally. Only gates
+  // the idle→working ENTRY — once working, keystrokes don't disturb the settle timers.
+  const ECHO_GRACE_MS = 250
   // Does the settled pane show an explicit input affordance in its visible tail? Reads
   // the last few rendered rows (the cursor parks at the prompt) and runs the anchored
   // patterns in pulse-detect.js. Pure/synchronous — the deterministic floor, no model.
@@ -161,6 +169,14 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       const r = tabEl.getBoundingClientRect()
       const after = e.clientX > r.left + r.width / 2
       tabBar.insertBefore(dragging.tabEl, after ? tabEl.nextSibling : tabEl)
+    })
+    // Accept the drop. The DOM is already reordered by dragover; without a drop
+    // handler that preventDefaults, the browser thinks the drop was rejected and
+    // animates the drag image back to its origin — the "ghost tab" that snaps
+    // back even though the tabs are already in their new spots.
+    tabEl.addEventListener('drop', (e) => {
+      if (dragId == null) return
+      e.preventDefault()
     })
   }
   // Rebuild the sessions Map in the current tab DOM order. Each tab carries its
@@ -686,6 +702,32 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (next) selectCell(next.id)
   }
 
+  // Move the ACTIVE tab itself by ±1 in tab order, reordering it among its
+  // siblings — as opposed to stepActive, which moves the SELECTION. Clamps at the
+  // ends (nudging past the first/last slot does nothing) rather than wrapping, so
+  // it reads like dragging the tab. The active pane stays active and keeps driving
+  // its PTY; grid/stack/flow follow the new order the same way a drag-reorder does.
+  function moveActive(dir) {
+    const order = [...sessions.values()]
+    if (order.length < 2) return
+    const idx = order.findIndex((s) => s.id === activeId)
+    if (idx < 0) return
+    const target = idx + dir
+    if (target < 0 || target >= order.length) return
+    const [moved] = order.splice(idx, 1)
+    order.splice(target, 0, moved)
+    // Rebuild the Map and DOM to match, mirroring reorderFromDom. Re-inserting each
+    // tab before the trailing "+" button keeps that button last.
+    sessions.clear()
+    for (const s of order) {
+      sessions.set(s.id, s)
+      tabBar.insertBefore(s.tabEl, newTabBtn)
+    }
+    flowIndex = target
+    applyLayout()
+    fitAll()
+  }
+
   // Jump straight to the Nth terminal (0-based) in tab order. Out-of-range
   // indices are ignored, so Cmd+9 with only three tabs does nothing.
   function activateIndex(i) {
@@ -714,6 +756,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       }
     } else if (next === 'working') {
       s.unseen = false
+      // Fresh working phase → pick the ONE pattern this stint will show, and restart its clock.
+      // (A pane created already-working uses the thinker's initial pick; this covers re-waking.)
+      s.thinker.pick()
+      s.workT = 0
     }
     // Leaving the awaiting state (resumed working, settled to idle) makes any awaiting
     // notification + title flag posted for this pane stale — tell the host to clear that
@@ -743,6 +789,16 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     s.tabDot.className = cls // dots style: the in-tab status dot
     s.cellDot.className = cls
     s.stubDot.className = cls
+    // Two states, that's it: working (the spinner loop animates the figure) or resting (the
+    // static full figure, painted here on the edge). The spinner loop only repaints
+    // `.dot.working` and early-returns when nothing is working, so the LAST pane to settle
+    // would otherwise keep a stale animation frame — this is the one funnel every state change
+    // routes through, so paint the resting figure here.
+    if (s.state !== 'working') {
+      paint(s.tabDot.firstElementChild, RESTING_GRID)
+      paint(s.cellDot.firstElementChild, RESTING_GRID)
+      paint(s.stubDot.firstElementChild, RESTING_GRID)
+    }
     // A just-in-time reminder of what the state means, surfaced on hover — beginner
     // only, so Expert stays a bare shell. The status-bar fleet count carries the full
     // Pulse legend; this is just the hover gloss.
@@ -803,6 +859,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // DOM and updated so flipping the setting needs no re-render. See updateIndicators.
     const tabDot = document.createElement('span')
     tabDot.className = 'dot idle'
+    tabDot.appendChild(makeFigure()) // SVG dot matrix; the animation ticker drives it while working
     const tabLabel = document.createElement('span')
     tabLabel.className = 'term-tab-label'
     tabLabel.textContent = displayName
@@ -821,6 +878,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     cellHeader.className = 'cell-header'
     const cellDot = document.createElement('span')
     cellDot.className = 'dot idle'
+    cellDot.appendChild(makeFigure())
     const cellLabel = document.createElement('span')
     cellLabel.className = 'cell-label'
     cellLabel.textContent = displayName
@@ -847,6 +905,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     stub.style.setProperty('--term-color', color)
     const stubDot = document.createElement('span')
     stubDot.className = 'dot idle'
+    stubDot.appendChild(makeFigure())
     const stubLabel = document.createElement('span')
     stubLabel.className = 'stub-label'
     stubLabel.textContent = displayName
@@ -884,6 +943,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       // auto-fires on open, so it starts working. A plain shell just sits at its prompt,
       // so it starts idle and won't pulse until the user drives it (see PTY onData).
       state: command ? 'working' : 'idle',
+      thinker: createThinker(), // this pane's working animator — one pattern per working phase
+      workT: 0, // frames since the current working phase began (drives thinker.draw); reset on pick
       unseen: false, // came to rest (awaiting) while you were looking elsewhere → come-look
       idleTimer: null, // debounce handle: classifies the pane on settle after IDLE_AFTER_MS
       quietTimer: null, // slower settle timer for the conservative alt-screen awaiting tell
@@ -900,7 +961,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       //                     separate from lastSummaryHash so a live re-label never suppresses
       //                     the at-rest verdict (and its awaiting-edge promotion) that follows
       summarizing: false, // a Layer-B request is in flight for this pane
+      lastSummaryAt: 0, // timestamp of the last Layer-B call — drives the settle cooldown
+      summaryDeferTimer: null, // coalesces a burst of settles into one trailing summary call
       used: false, // true once the user types or a command runs — then we won't auto-cd it
+      lastInputAt: 0, // timestamp of the last genuine keystroke; PTY output arriving right
+      //                 after it is the prompt ECHOING what you typed, not work (see onData)
       isShell: !command, // plain shell vs an agent preset — gates command capture
       lineBuf: '', // keystroke accumulator for the last-command heuristic
       baseName: displayName, // fallback label shown when nothing better is known
@@ -974,6 +1039,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       api.term.input(id, data) // forward EVERYTHING to the PTY — answers included
       if (!userInput) return
       s.used = true
+      s.lastInputAt = Date.now() // mark "just typed" so the echo of these keys doesn't pulse
       s.follow = true // typing/paste means "show me what I'm doing" — re-engage sticky-bottom
       if (s.launcher) dismissPaneLauncher(s) // typing into the pane = "I'll drive it myself"
       if (s.isShell) captureCommand(s, data)
@@ -1299,12 +1365,20 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       measureMarquee(s.cellLabel)
     })
   }
-  // Strip a leading decorative status glyph (dingbat / emoji / arrow + optional variation
-  // selector) that some agents prefix to their OSC title — Claude Code leads with a rotating
-  // sparkle (✳ ✻ ✶ …). We already render our own braille working-spinner to the left of the
-  // label, so the agent's glyph just clashes with it (and flickers as it rotates). Plain words
-  // lead instead. Only a leading glyph RUN is removed; a normal title is untouched.
-  const LEAD_GLYPH = /^(?:[⌀-➿⬀-⯿️‍]|\p{Extended_Pictographic})+\s*/u
+  // Strip a leading decorative status glyph that some agents prefix to their OSC title.
+  // We already render our OWN Pulse indicator (the braille spinner / amber dot) to the left
+  // of the label, so the agent's glyph reads as a SECOND, untrusted indicator wedged between
+  // ours and the text — exactly the "indicators all over the place" problem. The strip covers
+  // the families agents actually use as title leads:
+  //   • bullets / middle-dots / leaders   ·  •  ‣  ․  ‧  ⁃  ∙  ⋅  ・  ･   (U+00B7, U+2022…, etc.)
+  //   • geometric shapes                  ●  ○  ◦  ▪  ▸  …               (U+25A0–U+25FF)
+  //   • dingbats / sparkles               ✳  ✻  ✶  ➤  …                 (U+2300–U+27BF)
+  //   • misc symbols & arrows             ⬆  ⯈  …                       (U+2B00–U+2BFF)
+  //   • any emoji + its variation selector / ZWJ joiners
+  // Only a LEADING run (plus trailing space) is removed; an interior dot or a normal title is
+  // untouched. Keep this in sync with the spinner glyphs so we never strip our own output.
+  const LEAD_GLYPH =
+    /^(?:[·•‣․‧⁃∙⋅■-◿⌀-➿⬀-⯿・･️‍]|\p{Extended_Pictographic})+\s*/u
   function setAutoTitle(s, raw) {
     const t = (raw || '')
       .replace(/[\x00-\x1f\x7f]/g, '')
@@ -1558,6 +1632,13 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // stays working across the sub-second gaps in a turn and only settles
     // IDLE_AFTER_MS after output truly stops.
     if (s.state !== 'working') {
+      // Don't let the prompt's echo of your own keystrokes start the spinner: output within
+      // ECHO_GRACE_MS of the last key you pressed is almost certainly that echo, not work.
+      // This is the fix for "the spinner flickers as I type and vanishes when I stop" — typing
+      // a command line isn't the agent thinking. A real command/agent keeps emitting past the
+      // window and pulses then. Only the idle→working ENTRY is gated (we're not yet working,
+      // so there are no settle timers to preserve by falling through).
+      if (Date.now() - s.lastInputAt < ECHO_GRACE_MS) return
       // Keep the last summary visible through the new working stint. It's a "what is this
       // pane on" hint, and a few seconds stale beats blinking the "— summary" tail off on
       // EVERY output burst (an agent works in sub-heartbeat bursts, so clearing here made
@@ -1606,6 +1687,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     s.idleTimer = null
     clearTimeout(s.quietTimer)
     s.quietTimer = null
+    clearTimeout(s.summaryDeferTimer) // no trailing summary for a dead pane
+    s.summaryDeferTimer = null
     updateIndicators(s)
     s.tabEl.classList.add('exited')
     // Clear any stale OSC title (programs may leave one set on exit); the resolver
@@ -1649,12 +1732,33 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (!pulseEnabled || !api.pulse?.summarize) return
     if (s.summarizing) return // one request per pane at a time
     if (live && s.state !== 'working') return // heartbeat only labels panes still working
+    // Per-pane settle cooldown. The settle path fires on EVERY >800ms quiet gap, and a busy
+    // agent pauses constantly (between tool calls, while thinking), so without this a single
+    // working pane drives ~15 model calls a minute — frequent enough to keep a local GPU/CPU
+    // from ever idling (the heat users hit; the model being "free" in dollars misled us into
+    // calling it freely). The label doesn't need refreshing that often. Throttle settle
+    // re-labels to one per MIN_SUMMARY_GAP_MS and coalesce a burst into ONE trailing call, so
+    // the final at-rest verdict (and its awaiting promotion) still lands — just deferred a few
+    // seconds. The 30s heartbeat is already slow, so it's exempt (it only stamps the clock).
+    if (!live) {
+      const since = performance.now() - s.lastSummaryAt
+      if (since < MIN_SUMMARY_GAP_MS) {
+        clearTimeout(s.summaryDeferTimer)
+        s.summaryDeferTimer = setTimeout(() => {
+          s.summaryDeferTimer = null
+          // Only worth a call if the pane is still at rest; resumed work re-labels via heartbeat.
+          if (s.status !== 'exited' && s.state !== 'working') summarize(s)
+        }, MIN_SUMMARY_GAP_MS - since)
+        return
+      }
+    }
     const tail = tailOf(s)
     if (!tail) return
     const h = hashStr(tail)
     // The heartbeat dedups on its OWN hash so a no-op live re-label never marks the screen
     // as "summarised" and suppresses the at-rest verdict (with its awaiting promotion).
     if (h === (live ? s.lastLiveHash : s.lastSummaryHash)) return
+    s.lastSummaryAt = performance.now() // stamp every real call so a settle waits behind a heartbeat too
     s.summarizing = true
     let res = null
     try {
@@ -1697,13 +1801,21 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     applyTitle(s)
   }
 
+  // Minimum gap between settle-path model calls for one pane. The settle debounce
+  // (IDLE_AFTER_MS) only smooths sub-second output bursts; this throttles the much coarser
+  // "agent paused to run a tool" gaps that otherwise fire a fresh call every few seconds.
+  // Comfortably under the heartbeat so a still-working pane's label stays live, but high
+  // enough to collapse the settle storm that was driving the heat.
+  const MIN_SUMMARY_GAP_MS = 12000
+
   // Pulse working heartbeat. A pane that keeps emitting output never hits the settle path,
   // so without this its header would sit frozen — for an agent, on the program's static OSC
   // title ("claude") — for the whole turn. On a slow tick, re-summarise every pane that's
-  // still working so the label tracks what it's doing live. Cheap: the local model is free,
-  // an unchanged screen is skipped by the per-pane hash (lastLiveHash), and main caps global
-  // concurrency at 3 and supersedes stale queued calls. Tune the period for liveness vs. call
-  // volume. (The fast settle path still owns the at-rest / awaiting edge.)
+  // still working so the label tracks what it's doing live. Kept light: an unchanged screen
+  // is skipped by the per-pane hash (lastLiveHash), the settle cooldown thins the call
+  // stream, and main caps global concurrency (MAX_CONCURRENT) and supersedes stale queued
+  // calls. Tune the period for liveness vs. call volume. (The fast settle path still owns
+  // the at-rest / awaiting edge.)
   const WORKING_PULSE_MS = 30000
   const heartbeatTimer = setInterval(() => {
     if (!pulseEnabled) return
@@ -1711,6 +1823,24 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       if (s.status !== 'exited' && s.state === 'working') summarize(s, { live: true })
     }
   }, WORKING_PULSE_MS)
+
+  // ---- working-figure animation ticker ----
+  // One global ticker advances every WORKING pane's own thinker and paints the frame into its
+  // three dot figures (tab / cell-header / stub). Each pane shows the ONE pattern picked for
+  // this working phase (in setState on the rest→work edge); resting figures are painted once on
+  // the edge (updateIndicators), not here. Reduced motion freezes on the full static figure.
+  const FRAME_MS = 130 // animation cadence — slowed slightly for a calmer, more readable figure
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)')
+  const animTimer = setInterval(() => {
+    if (document.hidden) return // background window: don't burn CPU
+    for (const s of sessions.values()) {
+      if (s.state !== 'working') continue
+      const grid = reduceMotion.matches ? STATIC_GRID : s.thinker.draw(++s.workT)
+      paint(s.tabDot.firstElementChild, grid)
+      paint(s.cellDot.firstElementChild, grid)
+      paint(s.stubDot.firstElementChild, grid)
+    }
+  }, FRAME_MS)
 
   // OS window resizes need no special handling: shrinking/growing the window
   // changes every visible pane's body size, which the per-pane ResizeObserver above
@@ -1841,7 +1971,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       clearTimeout(s.idleTimer)
       clearTimeout(s.titleTimer)
       clearTimeout(s.quietTimer)
-      s.idleTimer = s.titleTimer = s.quietTimer = null
+      clearTimeout(s.summaryDeferTimer)
+      s.idleTimer = s.titleTimer = s.quietTimer = s.summaryDeferTimer = null
     }
     // Module-owned intervals and window-level listeners. Without clearing these a
     // re-instantiation (a future multi-window / workspace refactor) would stack a second
@@ -1850,6 +1981,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // running", so honor it for these too, not just the per-pane timers.
     clearInterval(pulseStatusTimer)
     clearInterval(heartbeatTimer)
+    clearInterval(animTimer)
     window.removeEventListener('keydown', onFlowArrowKey)
     window.removeEventListener('dragover', swallowStrayFileDrag)
     window.removeEventListener('drop', swallowStrayFileDrag)
@@ -1862,5 +1994,5 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (sessions.has(id)) activate(id)
   }
 
-  return { create, newTab, fitActive, fitAll, setLayout, setTheme, setHeaderTheme, applySettings, cdInto, typeIntoActive, stepActive, activateIndex, cycleLayout, closeActive, getState, restore, revealPane, dispose }
+  return { create, newTab, fitActive, fitAll, setLayout, setTheme, setHeaderTheme, applySettings, cdInto, typeIntoActive, stepActive, moveActive, activateIndex, cycleLayout, closeActive, getState, restore, revealPane, dispose }
 }

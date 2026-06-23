@@ -151,6 +151,10 @@ const BASE_DOC_TITLE = document.title
 // agent's name when one pane awaits, a count when several do.
 const awaitNotifs = new Map() // pane id -> Notification
 const awaitNames = new Map() // pane id -> agent name (drives the title flag)
+// Master alert switch (Settings → Notifications). When off, no OS notification and no
+// title/dock flag fire — the only out-of-window alert surfaces — so the app stays
+// silent. The in-pane come-look pulse is a quiet visual cue, not an alert, and stays.
+let notificationsEnabled = true
 function refreshAwaitTitle() {
   if (awaitNames.size === 0) {
     if (document.title !== BASE_DOC_TITLE) document.title = BASE_DOC_TITLE
@@ -161,6 +165,7 @@ function refreshAwaitTitle() {
   }
 }
 function notifyAwait(info) {
+  if (!notificationsEnabled) return // master switch off — stay silent (Settings → Notifications)
   if (document.hasFocus()) return // you're here — the in-pane come-look is enough
   const id = info.id || 'anon'
   const name = info.name || 'Agent'
@@ -243,11 +248,12 @@ keys.register('mod+t', () => terminals.newTab())
 // required so plain arrow keys still reach the shell inside a terminal.
 keys.register('mod+shift+left', () => terminals.stepActive(-1))
 keys.register('mod+shift+right', () => terminals.stepActive(1))
-// Cmd/Ctrl+; / ' are a single-modifier alias for the same cycle: the two keys
-// sit adjacent on the home row, with ; (left) stepping back and ' (right)
-// stepping forward, so it reads spatially like prev/next.
-keys.register('mod+;', () => terminals.stepActive(-1))
-keys.register("mod+'", () => terminals.stepActive(1))
+// Cmd/Ctrl+; / ' MOVE the active tab itself left/right to organise the rail
+// (vs. mod+shift+arrow / mod+[ ] above, which move the selection). The two keys
+// sit adjacent on the home row, with ; (left) nudging the tab back and ' (right)
+// nudging it forward, so it reads spatially like drag-left / drag-right.
+keys.register('mod+;', () => terminals.moveActive(-1))
+keys.register("mod+'", () => terminals.moveActive(1))
 // Cmd/Ctrl+[ / ] are a second alias for the same cycle, matching the
 // back/forward muscle memory the bracket keys carry across macOS ([ = back,
 // ] = forward). They defer to Monaco when an editor is focused so it keeps its
@@ -474,6 +480,13 @@ applyHeaderTheme(headerTheme, headerCustom)
 // theme/mode are mirrored INTO the store by applyTheme/applyMode above (so the panel
 // always shows the current state) and applied live when changed from the panel or
 // another window.
+function applyNotificationSettings(v) {
+  if (!v || typeof v['notifications.enabled'] !== 'boolean') return
+  notificationsEnabled = v['notifications.enabled']
+  // Flipping the master switch off mid-flight should also drop any standing alert/flag
+  // so the silence is immediate, not "from the next agent onward".
+  if (!notificationsEnabled) clearAllAwait()
+}
 function applyEditorTerminalSettings(v) {
   if (!v) return
   editor.applySettings({
@@ -491,9 +504,9 @@ function applyEditorTerminalSettings(v) {
     confirmClose: v['terminal.confirmClose']
   })
 }
-function applyAppearanceSettings(v) {
+function applyAppearanceSettings(v, { skipTheme = false } = {}) {
   if (!v) return
-  if (v['appearance.theme'] && v['appearance.theme'] !== theme) applyTheme(v['appearance.theme'])
+  if (!skipTheme && v['appearance.theme'] && v['appearance.theme'] !== theme) applyTheme(v['appearance.theme'])
   if (v['appearance.mode'] && v['appearance.mode'] !== mode) applyMode(v['appearance.mode'])
   if (v['appearance.tabStatus'] && v['appearance.tabStatus'] !== tabStatus)
     applyTabStatus(v['appearance.tabStatus'])
@@ -508,16 +521,25 @@ function applyAppearanceSettings(v) {
   if ((ht && ht !== headerTheme) || (typeof hc === 'string' && hc !== headerCustom))
     applyHeaderTheme(ht || headerTheme, typeof hc === 'string' ? hc : headerCustom)
 }
-// Initial load: localStorage already drove theme/mode (authoritative at boot, no
-// flash), so only reconcile editor/terminal prefs here — this avoids a load-race
-// where a stale store theme could briefly override the user's saved choice.
+// Initial load: localStorage drove the FIRST paint (authoritative, no flash), but
+// it's only a per-window cache — the central store is the real cross-window source
+// of truth. So once getAll resolves, reconcile every appearance pref from the store
+// (mode, tabStatus, header palette…) so a choice made in the Settings window or
+// another window actually defaults THIS window. Theme is skipped to avoid a jarring
+// full-background flash; localStorage stays authoritative for it (and is kept in
+// sync by the live onChanged mirror below).
 Promise.resolve(api.settings?.getAll?.())
-  .then((snap) => applyEditorTerminalSettings(snap?.values))
+  .then((snap) => {
+    applyEditorTerminalSettings(snap?.values)
+    applyAppearanceSettings(snap?.values, { skipTheme: true })
+    applyNotificationSettings(snap?.values)
+  })
   .catch(() => {})
 // Live changes (Settings panel or another window) apply everything.
 api.settings?.onChanged?.((payload) => {
   applyEditorTerminalSettings(payload?.values)
   applyAppearanceSettings(payload?.values)
+  applyNotificationSettings(payload?.values)
 })
 // Titlebar gear opens (or focuses) the Settings window; the Settings… menu item
 // (⌘,) routes through the same main-process handler.
@@ -562,7 +584,10 @@ const welcome = createWelcome({
     const root = await api.workspace.openPath(dir)
     if (root) await setWorkspace(root)
     else welcome.show() // path was stale and got pruned — re-render recents
-  }
+  },
+  // Dismiss the launch screen without a workspace — land in an empty window and
+  // drive agents from the terminal.
+  onEmptyWindow: () => welcome.hide()
 })
 
 // ---------- Session save / restore (Tier A: layout + tabs, fresh shells) ----------
@@ -728,14 +753,26 @@ dragV(document.getElementById('drag-x'), document.getElementById('sidebar'))
 dragH(document.getElementById('drag-y'), document.getElementById('editor-region'))
 
 // ---------- Boot ----------
-// A window opened via "New Window" carries ?fresh=1 and starts blank (welcome
-// screen) so you can pick a different folder; the launch / dock-activate window
-// reopens the last session.
+// A window opened via "New Window" carries ?fresh=1 and always starts blank (welcome
+// screen) so you can pick a different folder. The launch / dock-activate window obeys
+// the "On Startup" preference: 'welcome' (default) shows the start screen, while
+// 'last-project' reopens the last session.
 const isFreshWindow = new URLSearchParams(location.search).get('fresh') === '1'
 ;(async () => {
-  // Auto-reopen the workspace from last session and restore its layout (skipped
-  // for a fresh window so it doesn't clone the last folder).
-  const lastRoot = isFreshWindow ? null : await api.session.lastRoot()
+  // Resolve the startup preference from the central store (default: show the start
+  // screen). Only 'last-project' triggers the auto-reopen path below.
+  let startupPref = 'welcome'
+  try {
+    const snap = await api.settings?.getAll?.()
+    startupPref = snap?.values?.['appearance.startup'] || 'welcome'
+  } catch {
+    startupPref = 'welcome'
+  }
+  // Auto-reopen the workspace from last session and restore its layout — skipped for
+  // a fresh window (so it doesn't clone the last folder) and when the user prefers the
+  // start screen on launch.
+  const reopenLast = !isFreshWindow && startupPref === 'last-project'
+  const lastRoot = reopenLast ? await api.session.lastRoot() : null
   if (lastRoot) {
     const root = await api.workspace.openPath(lastRoot)
     if (root) {

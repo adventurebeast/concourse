@@ -1,4 +1,4 @@
-import { app, shell, ipcMain, BrowserWindow, screen } from 'electron'
+import { app, shell, ipcMain, BrowserWindow, screen, dialog } from 'electron'
 import { join } from 'path'
 import { createContext } from './context.js'
 import { registerWorkspace } from './ipc-workspace.js'
@@ -11,7 +11,7 @@ import { registerPulse } from './ipc-pulse.js'
 import { registerModel } from './ipc-model.js'
 import { stopLocalServer } from './local-llm.js'
 import { registerShell } from './ipc-shell.js'
-import { registerSettings } from './ipc-settings.js'
+import { registerSettings, updateSetting } from './ipc-settings.js'
 import { registerCommands } from './ipc-commands.js'
 import { initSettings, getRaw } from './settings.js'
 import { createWatchers } from './watcher.js'
@@ -25,6 +25,40 @@ const ctx = createContext()
 const watchers = createWatchers()
 // Tears down the PTYs owned by one window (set once the PTY layer is registered).
 let killPtysForWindow = null
+
+// Set once the user has confirmed an app quit (Cmd+Q / menu Quit), so the window
+// 'close' handlers that fire as part of the quit cascade don't prompt a second time.
+let quitConfirmed = false
+
+// "Are you sure?" guard so a stray Cmd+Q or click on the window's close button can't
+// silently kill running agents. Async (showMessageBox, not the Sync variant) because
+// only the async form returns the "Don't ask me again" checkbox state — when ticked we
+// flip the general.confirmQuit setting off so the prompt never shows again. Callers
+// preventDefault up front, then re-issue the close/quit if this resolves to proceed.
+// Returns true to proceed, false to stay.
+async function confirmExit(win, { quitting }) {
+  const { response, checkboxChecked } = await dialog.showMessageBox(
+    win && !win.isDestroyed() ? win : undefined,
+    {
+      type: 'warning',
+      buttons: ['Cancel', quitting ? 'Quit' : 'Close'],
+      defaultId: 0, // Enter = Cancel — the safe choice
+      cancelId: 0, // Esc = Cancel
+      title: quitting ? 'Quit Concourse?' : 'Close Window?',
+      message: quitting ? 'Quit Concourse?' : 'Close this window?',
+      detail: `Any running terminals and agents in this ${
+        quitting ? 'app' : 'window'
+      } will be stopped.`,
+      checkboxLabel: "Don't ask me again",
+      checkboxChecked: false,
+      noLink: true
+    }
+  )
+  // Honour the checkbox regardless of which button was clicked — it's an independent
+  // preference. updateSetting persists it and broadcasts so an open Settings window updates.
+  if (checkboxChecked) updateSetting('general.confirmQuit', false)
+  return response === 1
+}
 
 // ---- Window bounds persistence --------------------------------------------
 // Remember the window size/position across launches (it reset to 1400x900 every
@@ -88,6 +122,21 @@ function createWindow({ fresh = false } = {}) {
     }
   })
   trackWindowBounds(win)
+  // Confirm before the window's close button (X) tears down its terminals. The dialog
+  // is async, so we cancel this close, ask, and only re-issue win.close() (now flagged
+  // to pass straight through) if confirmed. Skipped during a confirmed app quit (Cmd+Q
+  // already asked once — see before-quit below) and when the setting is off.
+  let allowClose = false
+  win.on('close', (e) => {
+    if (allowClose || quitConfirmed || !getRaw('general.confirmQuit')) return
+    e.preventDefault()
+    confirmExit(win, { quitting: false }).then((ok) => {
+      if (ok && !win.isDestroyed()) {
+        allowClose = true
+        win.close()
+      }
+    })
+  })
   // Capture the id now — after 'closed' the WebContents is gone.
   const wcId = win.webContents.id
 
@@ -246,7 +295,23 @@ app.whenReady().then(async () => {
 // Synchronously drain any staged session/recents writes before we exit, so a
 // force-quit shortly after a layout change still persists it (the async write
 // queue may not get a turn during teardown). See store-io flushSync().
-app.on('before-quit', () => {
+app.on('before-quit', (e) => {
+  // Confirm the quit once, here, before any window is torn down. The dialog is async,
+  // so we cancel this quit, ask, and re-issue app.quit() (now flagged so the second
+  // pass skips the prompt and the cascading window 'close' events stay silent) only if
+  // confirmed. Gate on having a live window so the non-macOS "last window closed →
+  // app.quit()" path (already prompted via the window's own close handler) and the
+  // setting being off don't prompt here.
+  if (!quitConfirmed && getRaw('general.confirmQuit') && BrowserWindow.getAllWindows().length > 0) {
+    e.preventDefault()
+    confirmExit(BrowserWindow.getFocusedWindow(), { quitting: true }).then((ok) => {
+      if (ok) {
+        quitConfirmed = true
+        app.quit()
+      }
+    })
+    return
+  }
   flushSync()
   // Stop the Pulse model server, but only if WE launched it (an externally-owned
   // Ollama — the menubar app, or one you started — is left running).

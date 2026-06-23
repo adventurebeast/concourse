@@ -19,6 +19,10 @@
   white-space: nowrap;
   color: var(--text);
   position: relative;
+  /* Rows are focusable (tabindex) so the explorer can own keyboard focus for ⌘⌫.
+     Selection is shown via .selected + the focus-within ring below, so the default
+     per-row focus outline would just be noise. */
+  outline: none;
 }
 .ft-row:hover {
   background: var(--hover);
@@ -29,6 +33,19 @@
 }
 #file-tree:focus-within .ft-row.selected {
   background: var(--select);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* ---------- External file drop (copy into workspace) ---------- */
+/* The whole tree gets a soft inset ring while a file drag hovers it; the folder
+   the drop would land in is tinted so the target is unambiguous (root over empty
+   space shows just the container ring). */
+#file-tree.ft-drop-active {
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: 4px;
+}
+.ft-row.ft-drop-into {
+  background: var(--select-hi);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 

@@ -1,101 +1,49 @@
-/* ---------- Status dots: two states, working / idle ---------- */
+/* ---------- Pane status: TWO states, WORKING or RESTING ----------
+   One indicator, one meaning. A pane is either WORKING — the braille "thinking" figure
+   animates (spinner.js steps braille-thinker.js into every `.dot.working`) — or RESTING — the
+   figure's static "empty" frame (written on the state edge by updateIndicators). There is no
+   third look: idle and awaiting both read as "resting". The braille glyph IS the whole signal
+   — no circle, no amber, no rings, no colour-coded sub-states. */
 .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
   flex-shrink: 0;
-  background: var(--text-faint);
-  position: relative;
-}
-
-/* ---------- Working: an ASCII "thinking" spinner ----------
-   The ONLY per-pane "working" signal — a braille glyph in the pane's hue, like modern agent
-   CLIs. The CHARACTER is cycled by spinner.js (JS textContent — reliable everywhere); CSS owns
-   the look: big enough to read at a glance, and a gentle scale "breathe" (transform/opacity —
-   always renders) so it feels alive, not a flat tick. The glyph replaces the dot's circle. */
-.dot.working {
-  background: transparent;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: auto;
-  min-width: 17px;
   height: 16px;
+}
+/* The figure is an SVG dot matrix (dot-figure.js) — NOT a braille font glyph (those fall back
+   to a proportional braille font and render garbled). Circles fill with currentColor, so the
+   state colours below just cascade in. Fixed size = a stable slot; nothing shifts work↔rest. */
+.dot .dot-fig {
+  display: block;
+  width: 20px;
+  height: 13px;
+}
+/* Working: the figure animates in the pane's identity hue. */
+.dot.working {
   color: var(--term-color, var(--green));
-  font-size: 14px;
-  line-height: 1;
-  font-weight: 700;
-  letter-spacing: -1.5px; /* tuck the two braille cells together into one 4×4 grid */
 }
-/* Idle: a calm solid dot in the terminal's identity hue. A finished process is also
-   "idle" — the faded `.exited` tab label carries the "ended" cue. */
-.dot.idle {
-  background: var(--term-color, var(--text-faint));
-}
-/* Awaiting: at rest, your move (a prompt, or an agent parked at its turn). A steady
-   solid dot in the "your move" amber — calm, but distinct from idle's identity hue so a
-   wall of dots reads at a glance which one stopped FOR YOU. One state, one colour. */
-.dot.awaiting {
-  background: var(--orange);
-}
-/* Unseen come-look: it went awaiting while you were looking elsewhere. An expanding amber
-   ring "ping" emanates from the dot to pull you back; cleared the instant you focus the
-   pane (activate()). Drawn on ::after (free — only .dot.working uses ::after, and a dot is
-   never both working AND awaiting). The ring's COLOUR is set statically and ONLY
-   transform+opacity — pure numbers — animate, so Chromium tweens them smoothly. (Put a
-   var() INSIDE the keyframe, as before, and the value becomes a "pending-substitution
-   value" that animates DISCRETELY — the ring never tweens and the whole ping is invisible.
-   Same trap the working breathe sidesteps with --pulse-t; see style.css.) */
-.dot.awaiting.unseen::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 1.5px solid var(--orange);
-  animation: dot-await 1.5s ease-out infinite;
-}
-@keyframes dot-await {
-  0%   { transform: scale(0.9); opacity: 0.7; }
-  70%  { opacity: 0; }
-  100% { transform: scale(2.6); opacity: 0; }
+/* Resting: the full figure, greyed out — present and legible, but quiet. */
+.dot:not(.working) {
+  color: var(--text-faint);
 }
 
-/* ---------- Tab status dot ("dots" Pulse style only) ----------
-   The default "pulse" style hides this dot and tints/breathes the whole tab instead
-   (see .term-tab in style.css). The "dots" style shows it: a spinning ring while
-   working, a calm hued dot when idle. The dot is always in the DOM and kept updated,
-   so flipping appearance.tabStatus is a pure CSS switch — no re-render. */
-/* Default style: show the dot ONLY while it carries motion/urgency — the spinning ring for
-   `working`, the amber dot for `awaiting`. Idle tabs hide it (the tab's hue tint already
-   gives identity), keeping a resting fleet calm. The "dots" style shows the idle dot too. */
-.term-tab .dot {
-  display: none;
-}
-.term-tab .dot.working,
-.term-tab .dot.awaiting {
-  display: block;
-}
-/* On the active (full-hue, dark-fill) tab the hue-matched glyph would vanish into the
-   background — paint it white so "working" still reads on the focused tab. */
+/* ---------- Tabs ----------
+   Same two states, visible in both: the animation while working, the calm grey dot at rest. */
+/* On the active (full-hue, dark-fill) tab a dark glyph would vanish — lift both states onto
+   the dark fill: white while working, a soft translucent white at rest. */
 .term-tab.active .dot.working {
   color: #fff;
 }
-/* In "dots" style the active tab's fill is var(--bg-editor) (white in light theme),
-   so the white working glyph above would vanish. Paint it in the pane's identity
-   hue instead so the working signal stays visible on the light active-tab bg
-   (and reads in dark theme too). */
+.term-tab.active .dot:not(.working) {
+  color: rgba(255, 255, 255, 0.45);
+}
+/* In "dots" tab style the active tab's fill is light instead, so dark/hued reads better. */
 html[data-tab-status='dots'] .term-tab.active .dot.working {
   color: var(--term-color, var(--accent));
 }
-html[data-tab-status='dots'] .term-tab .dot {
-  display: block;
-  /* Identity colour at a glance: ring each inactive tab's dot in its terminal's hue
-     so you can still tell agents apart across a wall of tabs. The active tab carries
-     its hue as the underline, so drop its ring (below). */
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--term-color, transparent) 22%, transparent);
-}
-html[data-tab-status='dots'] .term-tab.active .dot {
-  box-shadow: none;
+html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
+  color: var(--text-faint);
 }
 
 /* ---------- Tab labels / rename ---------- */
@@ -398,7 +346,12 @@ html:not([data-tab-status='dots']) .term-cell[data-state='awaiting']:not(.active
 .cell-body {
   flex: 1;
   min-height: 0;
-  padding: 6px 10px;
+  /* Extra bottom padding is a deliberate buffer: the FitAddon subtracts this
+     padding when computing row count, so the last row lands ABOVE the gap — and
+     because overflow clips at the padding-box edge, the gap also absorbs the
+     half-row of sub-pixel/transient overflow that was clipping the bottom line
+     (agent input box / status row) flush against the fold. */
+  padding: 6px 10px 14px;
   overflow: hidden;
   background: var(--bg-editor);
   /* Positioning context for the beginner empty-pane launcher overlay. */

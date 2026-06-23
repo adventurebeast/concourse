@@ -59,6 +59,11 @@ contextBridge.exposeInMainWorld('api', {
     // Write the bytes of a dropped, pathless item (e.g. an image dragged from a
     // web page) to a temp file and return its absolute path. See ipc-fs.js.
     saveDrop: (name, type, bytes) => ipcRenderer.invoke('fs:saveDrop', name, type, bytes),
+    // Copy a dropped external file/folder (by its real path) into the workspace,
+    // under `destDir`. Returns the clash-resolved absolute path created.
+    importDrop: (destDir, srcPath) => ipcRenderer.invoke('fs:importDrop', destDir, srcPath),
+    // Copy a dropped pathless item (web-page image bytes) into the workspace.
+    importBytes: (destDir, name, type, bytes) => ipcRenderer.invoke('fs:importBytes', destDir, name, type, bytes),
     // The workspace watcher fired — something changed on disk outside the app.
     // The renderer responds by refreshing the file tree. See src/main/watcher.js.
     onChanged: (cb) => ipcRenderer.on('fs:changed', () => cb()),

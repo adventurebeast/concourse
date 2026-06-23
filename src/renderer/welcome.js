@@ -10,10 +10,15 @@ function prettyDir(p) {
   return norm.replace(/^\/(Users|home)\/[^/]+/, '~')
 }
 
-export function createWelcome({ onOpenDialog, onOpenPath } = {}) {
+export function createWelcome({ onOpenDialog, onOpenPath, onEmptyWindow } = {}) {
   const overlay = document.getElementById('welcome-overlay')
   const recentsEl = document.getElementById('welcome-recents')
   const openBtn = document.getElementById('welcome-open')
+  const emptyBtn = document.getElementById('welcome-empty')
+
+  emptyBtn?.addEventListener('click', () => {
+    if (typeof onEmptyWindow === 'function') onEmptyWindow()
+  })
 
   openBtn.addEventListener('click', async () => {
     if (typeof onOpenDialog === 'function') await onOpenDialog()

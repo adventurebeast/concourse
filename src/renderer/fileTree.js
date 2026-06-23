@@ -265,6 +265,7 @@ export function createFileTree({ onOpenFile }) {
   function makeRow({ entry, depth }) {
     const row = document.createElement('div')
     row.className = 'ft-row'
+    row.tabIndex = 0 // focusable so the explorer can own keyboard focus (⌘⌫ to delete)
     row.dataset.path = entry.path
     row.dataset.dir = entry.isDir ? '1' : '0'
     row.style.paddingLeft = 4 + depth * 12 + 'px'
@@ -350,7 +351,13 @@ export function createFileTree({ onOpenFile }) {
     selected = path
     for (const el of container.querySelectorAll('.ft-row.selected')) el.classList.remove('selected')
     const row = container.querySelector(`.ft-row[data-path="${cssEscape(path)}"]`)
-    if (row) row.classList.add('selected')
+    if (row) {
+      row.classList.add('selected')
+      // Pull keyboard focus into the explorer so ⌘⌫ targets this row. preventScroll
+      // keeps the tree from jumping. Opening a file refocuses the editor afterward,
+      // which is fine — the row stays visibly selected either way.
+      row.focus({ preventScroll: true })
+    }
   }
 
   async function toggleFolder(path) {
@@ -805,6 +812,99 @@ export function createFileTree({ onOpenFile }) {
     if (!root) return
     selected = null
     openContextMenu(e.clientX, e.clientY, { name: basename(root), path: root, isDir: true })
+  })
+
+  // ---------- Keyboard: ⌘⌫ deletes the highlighted entry ----------
+  // Routes through the same confirm dialog as the context-menu Delete. Scoped to
+  // when the explorer owns focus so it never hijacks the editor's or a terminal's
+  // own ⌘⌫ (delete-to-line-start).
+  function findEntry(path) {
+    const list = childrenCache.get(dirname(path))
+    return (list || []).find((entry) => entry.path === path) || null
+  }
+  document.addEventListener('keydown', (e) => {
+    if (!e.metaKey || e.ctrlKey || e.altKey) return
+    if (e.key !== 'Backspace' && e.key !== 'Delete') return
+    if (!selected || confirmEl) return
+    const ae = document.activeElement
+    const inExplorer = ae === document.body || (ae && ae.closest && ae.closest('#explorer-panel'))
+    if (!inExplorer) return
+    const entry = findEntry(selected)
+    if (!entry) return
+    e.preventDefault()
+    confirmDelete(entry)
+  })
+
+  // ---------- Drag external files in: copy them into the workspace ----------
+  // Drop a file/folder from Finder (or an image dragged from a web page) onto the
+  // explorer and it's COPIED into the targeted folder — the folder row under the
+  // cursor, the parent of a file row, or the workspace root over empty space.
+  // Mirrors VS Code. Internal app DnD carries no files, so the `dragHasFiles`
+  // guard ignores it; preventDefault here also keeps the global stray-drop
+  // swallower (terminals.js) from cancelling a real drop on the explorer.
+  function dragHasFiles(e) {
+    const t = e.dataTransfer && e.dataTransfer.types
+    return !!t && (t.includes ? t.includes('Files') : [...t].includes('Files'))
+  }
+  // The folder a drop lands in: the folder row under the cursor, the parent of a
+  // file row, or the root over empty space.
+  function dropDirFor(target) {
+    const row = target && target.closest && target.closest('.ft-row[data-path]')
+    if (!row) return root
+    return row.dataset.dir === '1' ? row.dataset.path : dirname(row.dataset.path)
+  }
+  let dropHoverRow = null
+  function clearDropHover() {
+    container.classList.remove('ft-drop-active')
+    if (dropHoverRow) dropHoverRow.classList.remove('ft-drop-into')
+    dropHoverRow = null
+  }
+  container.addEventListener('dragover', (e) => {
+    if (!root || !dragHasFiles(e)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    container.classList.add('ft-drop-active')
+    // Highlight the specific folder row a drop would land in (none → root).
+    const row = e.target.closest && e.target.closest('.ft-row[data-dir="1"]')
+    if (row !== dropHoverRow) {
+      if (dropHoverRow) dropHoverRow.classList.remove('ft-drop-into')
+      dropHoverRow = row || null
+      if (dropHoverRow) dropHoverRow.classList.add('ft-drop-into')
+    }
+  })
+  container.addEventListener('dragleave', (e) => {
+    // Ignore the dragleave that fires when crossing between child rows.
+    if (e.relatedTarget && container.contains(e.relatedTarget)) return
+    clearDropHover()
+  })
+  container.addEventListener('drop', async (e) => {
+    if (!root || !dragHasFiles(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    // Resolve the destination and read the DataTransfer synchronously — it goes
+    // dead the moment we await below.
+    const dir = dropDirFor(e.target)
+    const files = e.dataTransfer ? [...e.dataTransfer.files] : []
+    clearDropHover()
+    if (!files.length) return
+    const created = []
+    for (const f of files) {
+      try {
+        const src = api.pathForFile?.(f)
+        if (src) {
+          created.push(await api.fs.importDrop(dir, src))
+        } else if (f.type.startsWith('image/')) {
+          // Pathless image dragged from a web page: copy its bytes in.
+          const bytes = new Uint8Array(await f.arrayBuffer())
+          created.push(await api.fs.importBytes(dir, f.name, f.type, bytes))
+        }
+      } catch { /* unreadable / perms / clash-bound: skip this one, keep the rest */ }
+    }
+    if (!created.length) return
+    if (dir !== root) expanded.add(dir)
+    await refresh()
+    // Reveal where the drop landed by selecting the last item copied in.
+    selectRow(created[created.length - 1])
   })
 
   return { load, refresh, applyGitStatus }

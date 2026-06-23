@@ -22,6 +22,34 @@
 
 export const SETTINGS_GROUPS = [
   {
+    id: 'general',
+    label: 'General',
+    settings: [
+      {
+        key: 'general.confirmQuit',
+        label: 'Confirm Before Quitting',
+        description:
+          'Ask "Are you sure?" before quitting (⌘Q) or closing a window, so you can\'t lose running agents by accident.',
+        type: 'boolean',
+        default: true
+      }
+    ]
+  },
+  {
+    id: 'notifications',
+    label: 'Notifications',
+    settings: [
+      {
+        key: 'notifications.enabled',
+        label: 'Notifications & Alerts',
+        description:
+          'Master switch for every alert: the desktop notification and the dock/title “awaiting you” flag that fire when an agent comes to rest while this window is in the background. Turn off to silence them all (the in-pane Pulse colour still shows quietly).',
+        type: 'boolean',
+        default: true
+      }
+    ]
+  },
+  {
     id: 'appearance',
     label: 'Appearance',
     settings: [
@@ -45,6 +73,17 @@ export const SETTINGS_GROUPS = [
         options: [
           { value: 'beginner', label: 'Beginner' },
           { value: 'expert', label: 'Expert' }
+        ]
+      },
+      {
+        key: 'appearance.startup',
+        label: 'On Startup',
+        description: 'Show the start screen, or reopen the project from your last session.',
+        type: 'enum',
+        default: 'welcome',
+        options: [
+          { value: 'welcome', label: 'Show start screen' },
+          { value: 'last-project', label: 'Reopen last project' }
         ]
       },
       {

@@ -15,6 +15,15 @@ function broadcast(key) {
   }
 }
 
+// Set a value from inside the main process (not via renderer IPC) and broadcast the
+// change so any open Settings window reflects it live. Used by the quit-confirm
+// dialog's "Don't ask me again" checkbox.
+export async function updateSetting(key, value) {
+  const changed = await setSetting(key, value)
+  if (changed) broadcast(key)
+  return changed
+}
+
 export function registerSettings() {
   // The declarative registry that drives the Settings UI (labels, types, options).
   ipcMain.handle('settings:schema', () => SETTINGS_GROUPS)
