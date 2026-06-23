@@ -69,12 +69,16 @@ export function createSearch({ getRoot, onOpenFile } = {}) {
     let cursor = leading
     for (const [start, end] of ranges) {
       const s = Math.max(start, leading)
+      // Clamp end too, so a match that falls entirely inside the trimmed
+      // leading whitespace doesn't produce an empty span and mis-advance cursor.
+      const e = Math.max(end, leading)
+      if (e <= s) continue // zero-width after clamping (match was all indentation)
       if (s > cursor) frag.appendChild(document.createTextNode(text.slice(cursor, s)))
       const hit = document.createElement('span')
       hit.className = 'search-hit'
-      hit.textContent = text.slice(s, end)
+      hit.textContent = text.slice(s, e)
       frag.appendChild(hit)
-      cursor = end
+      cursor = e
     }
     if (cursor < text.length) frag.appendChild(document.createTextNode(text.slice(cursor)))
     return frag
@@ -90,6 +94,14 @@ export function createSearch({ getRoot, onOpenFile } = {}) {
       hint.textContent = message
       body.appendChild(hint)
     }
+  }
+
+  // Shown while a query is in flight so stale results don't linger and a valid
+  // pending query never flashes 'No results found.'.
+  function renderPending() {
+    body.innerHTML = ''
+    summary.hidden = false
+    summary.textContent = 'Searching…'
   }
 
   function render(result) {
@@ -195,6 +207,9 @@ export function createSearch({ getRoot, onOpenFile } = {}) {
       return
     }
     const token = ++runToken
+    // Clear stale results and show a pending state before awaiting, so the panel
+    // never keeps showing the previous query's hits while this one is in flight.
+    renderPending()
     let result
     try {
       result = await api.search.find(query, opts)

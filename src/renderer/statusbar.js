@@ -1,4 +1,4 @@
-import { showToast } from './toast.js'
+import { showToastOnce } from './toast.js'
 
 // Bottom status bar: a single glanceable strip that ties together the three
 // things you otherwise have to go hunting for — the git state of the workspace
@@ -79,8 +79,18 @@ export function createStatusBar({ onOpenScm } = {}) {
       return
     }
     const tipParts = []
+    // Any state we don't render a bucket for (e.g. 'done'/'error') would
+    // silently vanish while still counting toward total, so the dots wouldn't
+    // sum to the terminal count. Fold every non-bucketed state into idle so the
+    // buckets always add up.
+    const bucketKeys = new Set(BUCKETS.map((b) => b.key))
+    let extraIdle = 0
+    for (const k of Object.keys(counts)) {
+      if (!bucketKeys.has(k)) extraIdle += counts[k] || 0
+    }
     for (const b of BUCKETS) {
-      const n = counts[b.key] || 0
+      let n = counts[b.key] || 0
+      if (b.key === 'idle') n += extraIdle
       if (!n) continue
       const stat = document.createElement('span')
       stat.className = 'fleet-stat'
@@ -110,7 +120,9 @@ export function createStatusBar({ onOpenScm } = {}) {
     document.removeEventListener('keydown', onKey, true)
   }
   function onDocDown(e) {
-    if (legendEl && !legendEl.contains(e.target) && !fleetEl.contains(e.target)) closeLegend()
+    // legendEl may already be detached if a close raced this listener — bail.
+    if (!legendEl) return
+    if (!legendEl.contains(e.target) && !fleetEl.contains(e.target)) closeLegend()
   }
   function onKey(e) {
     if (e.key === 'Escape') closeLegend()
@@ -134,6 +146,9 @@ export function createStatusBar({ onOpenScm } = {}) {
     legendEl.style.bottom = window.innerHeight - bar.top + 6 + 'px'
     // Defer so this same click doesn't immediately close it via the doc listener.
     setTimeout(() => {
+      // A rapid open→close in the same tick can fire this after closeLegend ran;
+      // bail if the legend is already gone so we don't re-attach orphan listeners.
+      if (!legendEl) return
       document.addEventListener('mousedown', onDocDown, true)
       document.addEventListener('keydown', onKey, true)
     }, 0)
@@ -173,7 +188,9 @@ export function createStatusBar({ onOpenScm } = {}) {
     // A configured provider that just went unreachable: notify once + offer Settings.
     if (!live && !pulseDownNotified) {
       pulseDownNotified = true
-      showToast(`Pulse can't reach ${provider} — using basic pane detection until it's back.`, {
+      // showToastOnce de-dupes identical messages across windows, so N windows
+      // hitting the same outage show one toast, not N copies.
+      showToastOnce(`Pulse can't reach ${provider} — using basic pane detection until it's back.`, {
         kind: 'warn',
         action: { label: 'Settings', onClick: () => window.api?.window?.openSettings?.() }
       })
@@ -192,6 +209,9 @@ export function createStatusBar({ onOpenScm } = {}) {
 
   async function refreshPulse() {
     if (!window.api?.pulse?.status) return
+    // If the chip has been torn out of the DOM, there's nothing to paint — bail
+    // so the poll doesn't keep firing IPC against a dead view.
+    if (pulseEl && !pulseEl.isConnected) return
     try {
       setPulse(await window.api.pulse.status())
     } catch {
@@ -199,15 +219,26 @@ export function createStatusBar({ onOpenScm } = {}) {
     }
   }
   refreshPulse()
-  setInterval(refreshPulse, 10000)
+  const pulseTimer = setInterval(refreshPulse, 10000)
 
   // ---- clock --------------------------------------------------------------
   function tick() {
+    // Skip if the clock element is gone (view torn down) — avoid touching a
+    // detached node every 15s.
+    if (clockEl && !clockEl.isConnected) return
     const d = new Date()
     clockEl.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
   tick()
-  setInterval(tick, 15000)
+  const clockTimer = setInterval(tick, 15000)
 
-  return { setGit, setFleet }
+  // Teardown: cancel the poll/clock intervals so a disposed status bar doesn't
+  // keep firing. No caller needs this today — it just honours the contract and
+  // makes the timers cancellable.
+  function dispose() {
+    clearInterval(pulseTimer)
+    clearInterval(clockTimer)
+  }
+
+  return { setGit, setFleet, dispose }
 }

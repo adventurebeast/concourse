@@ -35,7 +35,7 @@
   --tone-light-l: 0.930; --tone-light-c: 0.32;  /* resting header fill         */
   --tone-mid-l: 0.860;   --tone-mid-c: 0.55;    /* awaiting (steady, lifted)   */
   --tone-vivid-l: 0.520; --tone-vivid-c: 1.00;  /* focused accents (white text)*/
-  --pulse-l1: 0.880;     --pulse-c1: 0.50;      /* breathe PEAK (light deepens)*/
+  --tone-base: #ffffff; /* light-theme color-mix target for the --tone-* tints */
   /* Active/focused identity fill — shared by the active TAB and the focused pane's HEADER
      so they read as one system. It's the terminal's own identity hue at FULL strength
      (--term-color) — the SAME saturated colour already used for pane outlines, status dots
@@ -84,7 +84,7 @@
   --tone-light-l: 0.340; --tone-light-c: 0.40;
   --tone-mid-l: 0.420;   --tone-mid-c: 0.60;
   --tone-vivid-l: 0.520; --tone-vivid-c: 1.00;
-  --pulse-l1: 0.430;     --pulse-c1: 0.55;      /* breathe PEAK (dark brightens) */
+  --tone-base: #1c1c1c; /* dark-theme color-mix target for the --tone-* tints */
 }
 
 * {
@@ -172,6 +172,15 @@ body {
 }
 .title-btn.active {
   color: var(--accent);
+}
+/* Keyboard focus — drawn inside so it isn't clipped (matches .term-tab idiom). */
+.title-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.title-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Experience-mode toggle: a labelled, colour-coded pill so it's obvious which
@@ -303,6 +312,11 @@ body {
 .activity-btn.active {
   color: var(--text);
   border-left-color: var(--accent);
+}
+/* Keyboard focus — drawn inside so it isn't clipped (matches .term-tab idiom). */
+.activity-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* ---------- Sidebar ---------- */
@@ -521,8 +535,14 @@ body {
   gap: 2px;
   overflow-x: auto;
 }
+/* A thin horizontal scrollbar so overflowed tabs (and the '+' button past them)
+   stay reachable with a mouse when many tabs crowd a narrow window. */
 .term-tabs::-webkit-scrollbar {
-  height: 0;
+  height: 6px;
+}
+.term-tabs::-webkit-scrollbar-thumb {
+  background: var(--hover);
+  border-radius: 3px;
 }
 .panel-controls {
   display: flex;
@@ -556,57 +576,19 @@ body {
      a snap (the working rule below turns this off so the per-frame breathe stays crisp). */
   transition: background 0.25s ease, color 0.1s ease, border-color 0.1s ease;
 }
-/* ---------- Pulse: the whole tab is the status indicator ----------
-   working = the identity tint slowly breathes (the calm successor to the spinning
-   dot); idle = a steady tint.
+/* ---------- Pulse: spinning dot for "working", steady tint for state ----------
+   The working signal is MOTION — the spinning status dot in each tab/header (see
+   terminals.css `.dot.working`) — not a colour breathe. We tried breathing the whole
+   tab via an animated registered <number> (--pulse-t) and it never worked: a per-element
+   keyframe RESTARTS at its trough every time bursty agent output flips a pane
+   idle→working (>IDLE_AFTER_MS gap), so a busy tab sat pinned at "idle"-looking. A
+   single global clock on <html> was meant to dodge the restart but couldn't be confirmed
+   to render. A rotating spinner sidesteps the whole problem: rotation restarting at 0° is
+   visually seamless, so burst-driven state flips are invisible. The tab/header just hold a
+   STEADY --tone-* tint per state (idle = wash, working/awaiting = mid). No element
+   animation on these surfaces, nothing to restart.
 
-   TWO load-bearing rules — don't "simplify" either away:
-
-   1) We do NOT animate `background` directly between two colours. A keyframe value that
-      contains var(--term-color) is a "pending-substitution value" CSS cannot interpolate —
-      the animation silently steps DISCRETELY (the old "it just blinks" bug). Instead we
-      animate ONE registered <number>, --pulse-t (0→1→0, which interpolates because @property
-      gives it a type), and derive each surface's background from it every frame with
-      calc()/oklch() in a normal declaration. The easing is real.
-
-   2) The animation runs on a SINGLE GLOBAL clock (html.has-working, below), NOT per tab.
-      --pulse-t is `inherits: true`, so every working tab/header reads the clock's live
-      phase. This is the fix for the long-standing "the pulse doesn't actually work": with a
-      per-element animation, agents emitting output in BURSTS flip a pane working→idle→working
-      on every >IDLE_AFTER_MS gap, and each return RESTARTS the keyframe at --pulse-t 0 — so
-      the breathe never climbs off its trough and a working tab looks idle. A shared clock has
-      no restart: a pane entering `working` joins the breathe mid-phase. (The trough is still
-      pinned to each surface's idle tint — --tone-wash for tabs, --tone-light for headers — so
-      working↔idle flips are seamless; only the RESTART pathology is gone.)
-
-   Colour travels an OKLCH tonal ramp (see the :root scale), not sRGB color-mix toward
-   transparent — so the "light" end is genuinely light + desaturated and the breathe spans a
-   wide, perceptually-even, clearly-visible range. 4.5s ease-in-out reads as a calm breath. */
-@property --pulse-t { syntax: '<number>'; inherits: true; initial-value: 0; }
-@property --pulse-l { syntax: '<number>'; inherits: true; initial-value: 0.74; }  /* lightness 0..1 */
-@property --pulse-c { syntax: '<number>'; inherits: true; initial-value: 0.55; }  /* chroma multiplier */
-/* The breathe is a 4-stop tonal sweep Base → Light → Dark → Base, driven by LIGHTNESS (a
-   grayscale axis), NOT saturation. We animate registered <number>s (--pulse-l/--pulse-c) and
-   each working surface derives its background as oklch(from <hue> --pulse-l calc(c*--pulse-c) h)
-   every frame. The keyframes use LITERAL numbers, never var(): a var() inside a keyframe is a
-   "pending-substitution value" CSS interpolates DISCRETELY, which would step the sweep.
-
-   The band is THEME-bound, and that alone decides the label colour: LIGHT mode keeps dark
-   labels, so the tab stays in a LIGHT band (high L) where dark text reads; DARK mode keeps
-   light labels, so the tab stays in a DARK band (low L). Two keyframe sets, one per theme. */
-/* We animate a registered <number> --pulse-t (0→1→0, interpolates smoothly because @property
-   types it) and derive the background from it via color-mix in a normal declaration — the
-   proven-to-render pattern. The working tab pulses between a LIGHT and a DARK shade of its own
-   identity hue (mix toward white ↔ toward black), keeping the hue throughout. */
-@keyframes pulse-clock {
-  0%, 100% { --pulse-t: 0; }
-  50%      { --pulse-t: 1; }
-}
-/* ONE global clock on <html> (so tabs AND pane headers inherit its phase), running ONLY while
-   ≥1 pane works (JS toggles .has-working from emitFleet). It never stops/restarts, so a pane
-   entering `working` joins the sweep MID-PHASE instead of snapping to the start — THE fix for
-   "the pulse doesn't actually work" (the old per-tab animation reset on every output burst,
-   pinning every working tab at its trough). All working panes breathe in unison. */
+   The --tone-* tokens below stay load-bearing for those steady tints. */
 /* The --tone-* tokens are declared HERE, on the elements that carry --term-color, so each
    resolves against its OWN hue. (A :root declaration would resolve against the absent
    --term-color → --accent → one blue hue inherited by everyone — the documented trap in
@@ -615,27 +597,57 @@ body {
 .term-tab,
 .term-cell,
 .term-stub {
-  --tone-wash:  oklch(from var(--term-color, var(--accent)) var(--tone-wash-l)  calc(c * var(--tone-wash-c))  h);
-  --tone-light: oklch(from var(--term-color, var(--accent)) var(--tone-light-l) calc(c * var(--tone-light-c)) h);
-  --tone-mid:   oklch(from var(--term-color, var(--accent)) var(--tone-mid-l)   calc(c * var(--tone-mid-c))   h);
-  --tone-vivid: oklch(from var(--term-color, var(--accent)) var(--tone-vivid-l) calc(c * var(--tone-vivid-c)) h);
+  /* Tones via color-mix toward the theme's base (white in light, near-black in dark) — the
+     RENDER-PROVEN path. (The old oklch(from …) relative-colour syntax did not render reliably
+     here and washed every tone out — the "colours all fucked up" bug.) Mixed per-pane so each
+     resolves against its OWN --term-color. */
+  --tone-wash:  color-mix(in srgb, var(--term-color, var(--accent)) 12%, var(--tone-base, #fff));
+  --tone-light: color-mix(in srgb, var(--term-color, var(--accent)) 20%, var(--tone-base, #fff));
+  --tone-mid:   color-mix(in srgb, var(--term-color, var(--accent)) 42%, var(--tone-base, #fff));
+  --tone-vivid: var(--term-color, var(--accent));
+  /* Focused fill (active tab + focused pane header). Softened OFF the full hue (--tone-vivid)
+     so the pane you're driving reads calmer, leaning on the same soft ramp as every other
+     state. ONE knob: default = --tone-mid; raise toward var(--term-color) for punchier focus,
+     lower toward --tone-light for softer. NOTE: at this softer fill the label can no longer be
+     hard white — focused text uses var(--text) (theme-aware) so it reads on light AND dark. */
+  --tone-focus: var(--tone-mid);
 }
 .term-tab[data-state='working'] {
-  animation: pulse-clock 5s ease-in-out infinite;
-  background: color-mix(in srgb, var(--term-color, var(--accent)) 60%,
-    color-mix(in srgb, white, black calc(var(--pulse-t) * 100%)));
-  transition: color 0.1s ease, border-color 0.1s ease;
+  /* No background tint — the braille spinner + the shimmering label (below) carry "working". */
 }
-/* Active/focused tab breathes while working by gently brightening its full-hue fill —
-   driven by the same eased --pulse-t, so NO second colour is invented. Trough (--pulse-t 0)
-   == brightness(1) == the resting fill ⇒ seamless restart. Higher specificity than the
-   plain .active rule, so it wins while working. */
-html:not([data-tab-status='dots']) .term-tab.active[data-state='working'] {
-  animation: pulse-clock 5s ease-in-out infinite;
-  background: color-mix(in srgb, var(--term-color, var(--accent)) 60%,
-    color-mix(in srgb, white, black calc(var(--pulse-t) * 100%)));
-  filter: none;
-  color: #fff;
+/* While working, the agent's NAME shimmers in its hue — a bright band sweeps across the label
+   (the modern "thinking" cue, the gallery's "agent-shimmer"). Pure-white crest at 50% for the
+   premium Linear/Claude look; scoped off the active tab (its label is white on the full-hue
+   fill). background-clip:text is broadly supported — unlike the colour-space tricks we dropped. */
+@keyframes thinking-shimmer {
+  0%   { background-position: 160% 0; }
+  100% { background-position: -60% 0; }
+}
+html:not([data-tab-status='dots']) .term-tab[data-state='working']:not(.active) .term-tab-label {
+  background: linear-gradient(100deg,
+    var(--term-color, var(--accent)) 28%,
+    #fff 50%,
+    var(--term-color, var(--accent)) 72%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-shimmer 1.7s ease-in-out infinite;
+}
+/* The FOCUSED working tab shimmers too — any working tab shimmers, focused or not. The focused
+   fill is now the SOFT --tone-focus (not the full hue), so the label sweeps the same hue→white→hue
+   crest the unfocused tabs use — it reads on the lighter fill where a dimmed-white band would wash out. */
+html:not([data-tab-status='dots']) .term-tab.active[data-state='working'] .term-tab-label {
+  background: linear-gradient(100deg,
+    var(--term-color, var(--accent)) 28%,
+    #fff 50%,
+    var(--term-color, var(--accent)) 72%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: none; /* with transparent glyphs the inherited shadow would ghost (esp. .lbl-sub) */
+  animation: thinking-shimmer 1.7s ease-in-out infinite;
 }
 /* Awaiting (your move): the agent came to rest needing you. Steady — it does NOT breathe
    (that's "working") — but lifted a touch above the idle tint so a wall of tabs still
@@ -644,7 +656,7 @@ html:not([data-tab-status='dots']) .term-tab.active[data-state='working'] {
   background: var(--tone-mid); /* steady, clearly lifted above the idle wash — does NOT breathe */
 }
 .term-tab.active[data-state='awaiting'] {
-  background: color-mix(in srgb, var(--term-color, var(--accent)) 26%, var(--bg-editor));
+  background: var(--tone-focus);
 }
 /* Unseen come-look: it went awaiting while you were elsewhere. A slow amber underline
    glow pulses to pull you back — inset, so the tab strip's overflow never clips it — and
@@ -715,32 +727,27 @@ html:not([data-tab-status='dots']) .term-tab[data-unseen='1']::before {
    PULSE style only — the "dots" style keeps plain light tabs, so every active-fill rule is
    scoped :not([data-tab-status='dots']). */
 html:not([data-tab-status='dots']) .term-tab.active {
-  color: #fff;
-  background: var(--term-color, var(--accent));
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); /* keep the white label legible on lighter hues */
-  border-color: transparent; /* the dark fill IS the focus marker — drop the hard frame */
+  color: var(--text); /* theme-aware: the soft --tone-focus fill no longer holds hard white */
+  background: var(--tone-focus);
+  border-color: transparent; /* the lifted fill IS the focus marker — drop the hard frame */
   margin-bottom: -1px; /* cover the strip's bottom border so there's no seam under it */
   padding-bottom: 1px;
 }
-/* Active + awaiting stays a steady dark fill — you're already looking at it, so the pane
+/* Active + awaiting stays the steady focus fill — you're already looking at it, so the pane
    itself carries the "your move" cue; no need to recolour the focused tab. */
 html:not([data-tab-status='dots']) .term-tab.active[data-state='awaiting'] {
-  background: var(--term-color, var(--accent));
+  background: var(--tone-focus);
 }
-/* Hovering the focused tab just brightens its full-hue fill a touch — never falls back to
-   the light inactive-hover wash (which would wreck the white label). */
+/* Hovering the focused tab just brightens its fill a touch — never falls back to the light
+   inactive-hover wash. */
 html:not([data-tab-status='dots']) .term-tab.active:hover {
-  background: var(--term-color, var(--accent));
+  background: var(--tone-focus);
   filter: brightness(1.08);
-  color: #fff;
-}
-/* Close glyph rides on the dark fill — keep it light. */
-html:not([data-tab-status='dots']) .term-tab.active .close {
-  color: rgba(255, 255, 255, 0.82);
+  color: var(--text);
 }
 html:not([data-tab-status='dots']) .term-tab.active .close:hover {
-  color: #fff;
-  background: color-mix(in srgb, #fff 16%, transparent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 16%, transparent);
 }
 /* A finished shell that's also focused stays DIMMED, not vivid — a dead process shouldn't
    blast a dark identity colour just because it's the selected tab. */
@@ -867,21 +874,12 @@ html[data-tab-status='dots'] .term-tab.active {
   .term-tab-add {
     transition: none;
   }
-  /* Stop the global clock (both theme variants) and replace every breathe with a static,
-     clearly stronger tone so working still reads as distinct from idle — with no motion. */
-  html.has-working,
-  html[data-theme='dark'].has-working {
+  /* Stop the spinning status dot and the unseen "come-look" ping — the working tint
+     (--tone-mid, set steadily for every theme) still reads as distinct from idle, with
+     no motion. The dot stays visible (a static ring); only its rotation is dropped. */
+  .dot.working::after,
+  .dot.awaiting.unseen::after {
     animation: none;
-  }
-  .term-tab[data-state='working'] {
-    background: var(--tone-mid);
-  }
-  .term-cell[data-state='working']:not(.active) .cell-header {
-    background: var(--tone-mid);
-  }
-  html:not([data-tab-status='dots']) .term-tab.active[data-state='working'] {
-    background: var(--term-color, var(--accent));
-    filter: none;
   }
 }
 #term-panes {
@@ -941,8 +939,12 @@ html[data-tab-status='dots'] .term-tab.active {
   cursor: pointer;
 }
 .status-action.clickable:hover {
-  background: var(--bg-hover, rgba(127, 127, 127, 0.14));
+  background: var(--hover);
   color: var(--text);
+}
+.status-action.clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* Git change counts beside the branch. */
@@ -1019,7 +1021,10 @@ html[data-tab-status='dots'] .term-tab.active {
    time coach marks point back here. Never auto-pops (click only). */
 .pulse-legend {
   position: fixed;
-  z-index: 1200;
+  /* Above the workbench chrome (status bar etc.) but BELOW the modal overlays
+     (command palette / llm-setup z:1000, confirm overlays z:1100) so it never
+     floats over a modal's dim backdrop. */
+  z-index: 900;
   width: 286px;
   padding: 12px 14px;
   display: flex;

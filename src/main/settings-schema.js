@@ -48,6 +48,19 @@ export const SETTINGS_GROUPS = [
         ]
       },
       {
+        key: 'appearance.defaultLayout',
+        label: 'Default Layout',
+        description: 'Which terminal layout a newly opened workspace starts in. Existing workspaces keep their last-used layout.',
+        type: 'enum',
+        default: 'tabs',
+        options: [
+          { value: 'tabs', label: 'Tabs (one terminal)' },
+          { value: 'grid', label: 'Grid (all terminals)' },
+          { value: 'stack', label: 'Master-stack (primary + rail)' },
+          { value: 'flow', label: 'Album flow (centre + side previews)' }
+        ]
+      },
+      {
         key: 'appearance.tabStatus',
         label: 'Tab Status Style',
         description: 'How a tab shows whether its agent is working.',

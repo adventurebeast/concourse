@@ -33,11 +33,40 @@
   color: var(--accent);
   display: inline-flex;
 }
-.welcome-heading {
-  font-size: 30px;
-  font-weight: 200;
-  letter-spacing: 5px;
-  color: var(--text);
+
+/* Box-drawing "CONCOURSE" wordmark (U+2550 block). A bright band sweeps across
+   the glyphs via a clipped gradient — same shimmer language as Pulse. */
+.welcome-ascii {
+  margin: 0 0 2px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: clamp(10px, 2.4vw, 13px);
+  line-height: 1.04;
+  white-space: pre;
+  background: linear-gradient(
+    100deg,
+    var(--accent) 0%,
+    var(--accent) 42%,
+    color-mix(in srgb, var(--accent) 35%, #fff) 50%,
+    var(--accent) 58%,
+    var(--accent) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: welcome-sheen 4.5s linear infinite;
+}
+@keyframes welcome-sheen {
+  from { background-position: 160% 0; }
+  to   { background-position: -160% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .welcome-ascii {
+    animation: none;
+    color: var(--accent);
+    -webkit-text-fill-color: var(--accent);
+  }
 }
 .welcome-tagline {
   font-size: 13px;

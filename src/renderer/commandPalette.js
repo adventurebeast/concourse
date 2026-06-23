@@ -83,7 +83,7 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
   overlay.id = 'cmd-palette'
   overlay.hidden = true
   overlay.innerHTML = `
-    <div class="cmd-card" role="dialog" aria-label="Command palette">
+    <div class="cmd-card" role="dialog" aria-modal="true" aria-label="Command palette">
       <div class="cmd-head">
         <span class="cmd-head-icon">${icon('wand', 16)}</span>
         <input class="cmd-search" type="text" placeholder="Search commands, scripts & history…" spellcheck="false" />
@@ -107,6 +107,9 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
   // listCommands isn't wired, e.g. in isolation), so the palette degrades to the
   // curated cheatsheet alone.
   let dynamic = { favorites: [], project: [], history: [] }
+  // Bumped on every close(); open() captures it before awaiting load() so a stale
+  // in-flight fetch from a previous open can't repaint a freshly-reopened palette.
+  let openGen = 0
 
   async function load() {
     if (!listCommands) return
@@ -280,14 +283,17 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
 
   // ---- Open / close ----------------------------------------------------------
   async function open() {
+    const gen = ++openGen // claim this open; a later close()/open() invalidates it
     overlay.hidden = false
     search.value = ''
     render('') // paint cached content immediately
     search.focus()
     await load() // then refresh from disk and repaint
+    if (gen !== openGen) return // closed (or reopened) while load() was in flight
     if (!overlay.hidden) render(search.value)
   }
   function close() {
+    openGen++ // invalidate any in-flight open() so it can't repaint after we close
     overlay.hidden = true
   }
   function toggle() {
@@ -319,6 +325,12 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
     } else if (e.key === 'Escape') {
       e.preventDefault()
       close()
+    } else if (e.key === 'Tab') {
+      // Modal focus trap: the search input is the only real focus target (rows are
+      // mouse/arrow-driven, the heart buttons are tabindex="-1"), so Tab/Shift+Tab
+      // would walk focus OUT of the card to the workbench behind the backdrop. Keep
+      // focus here instead.
+      e.preventDefault()
     }
   })
   // Click on the dimmed backdrop (outside the card) closes.

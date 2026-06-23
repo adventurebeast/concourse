@@ -326,9 +326,15 @@ export function createFileTree({ onOpenFile }) {
 
   function render() {
     closeInlineEdit()
+    // The scroll container (#file-tree) resets scrollTop to 0 when we blow away
+    // and rebuild its contents, snapping the explorer back to the top on every
+    // expand/collapse/refresh. Capture the position before the rebuild and
+    // restore it after so the user keeps their place.
+    const prevScroll = container.scrollTop
     container.innerHTML = ''
     if (!root) return
     container.appendChild(buildChildrenEls(root, 0))
+    container.scrollTop = prevScroll
   }
 
   // Ensure children for `root` and every expanded folder are cached, then render.
@@ -555,8 +561,11 @@ export function createFileTree({ onOpenFile }) {
       }
     })
     input.addEventListener('blur', () => {
-      // Blur cancels (matches VS Code when empty; commit on Enter).
-      setTimeout(cancel, 0)
+      // Blur commits a typed name (same path as Enter) so a focus steal — a
+      // click elsewhere or an fs-watcher refresh()/render() that tears down the
+      // inline row — doesn't silently discard a half-typed name. An empty value
+      // (or an unchanged rename) still cancels via commit()'s own guard.
+      setTimeout(commit, 0)
     })
   }
 

@@ -80,6 +80,13 @@
 .term-tab.active .dot.working {
   color: #fff;
 }
+/* In "dots" style the active tab's fill is var(--bg-editor) (white in light theme),
+   so the white working glyph above would vanish. Paint it in the pane's identity
+   hue instead so the working signal stays visible on the light active-tab bg
+   (and reads in dark theme too). */
+html[data-tab-status='dots'] .term-tab.active .dot.working {
+  color: var(--term-color, var(--accent));
+}
 html[data-tab-status='dots'] .term-tab .dot {
   display: block;
   /* Identity colour at a glance: ring each inactive tab's dot in its terminal's hue
@@ -338,7 +345,7 @@ html[data-tab-status='dots'] .term-tab.active .dot {
   color: var(--text);
   /* Resting headers wear the LIGHT tonal tint — genuinely lighter and far less saturated
      than the old 16% vibrant mix, so identity reads as a calm wash, not a colour bar. The
-     focused header overrides to the vivid fill; a working unfocused header breathes (below). */
+     focused header overrides to the --tone-focus fill; a working unfocused header breathes (below). */
   background: var(--tone-light);
   border-bottom: 1px solid var(--border);
   /* Gentle settle when a working header returns to rest (the working rule turns this off). */
@@ -365,7 +372,7 @@ html[data-tab-status='dots'] .term-tab.active .dot {
    so the grid / stack / flow fleet views are as glanceable as the tab strip — you see which
    panes are live at a distance, not by hunting for a tiny spinning dot. Travels light → peak
    in OKLCH; trough == --tone-light == the resting header, so settling is seamless. Focused
-   panes are excluded — they wear the vivid fill (below) and the cursor is already there. */
+   panes are excluded — they wear the --tone-focus fill (below) and the cursor is already there. */
 /* Working headers carry NO tint either — the braille spinner + the shimmering label are the
    working signal, matching the tabs. (thinking-shimmer keyframes live in style.css.) */
 html:not([data-tab-status='dots']) .term-cell[data-state='working']:not(.active) .cell-label {
@@ -390,26 +397,20 @@ html:not([data-tab-status='dots']) .term-cell[data-state='awaiting']:not(.active
    through a :root --active-fill var — --term-color is per-pane, so a :root reference
    resolves to the blue accent for every pane; see style.css.) */
 .term-cell.active .cell-header {
-  background: var(--term-color, var(--accent));
-  color: #fff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); /* keep the white label legible on lighter hues */
+  background: var(--tone-focus); /* softened off the full hue — matches the active tab fill */
+  color: var(--text); /* theme-aware: the soft fill no longer holds hard white */
   border-bottom-color: transparent;
 }
 .term-cell.active .cell-header .close:hover {
-  background: color-mix(in srgb, #fff 18%, transparent);
-}
-/* Focused header wears the dark full-hue fill, so its working glyph goes white to stay
-   visible (same reason as the active tab dot). */
-.term-cell.active .cell-header .dot.working {
-  color: #fff;
+  background: color-mix(in srgb, var(--text) 18%, transparent);
 }
 /* …and the focused header's label shimmers while working, matching the focused tab — a
    dimmed-white → pure-white band sweeps the white label over the hue fill. */
 html:not([data-tab-status='dots']) .term-cell.active[data-state='working'] .cell-label {
   background: linear-gradient(100deg,
-    rgba(255, 255, 255, 0.68) 28%,
+    var(--term-color, var(--accent)) 28%,
     #fff 50%,
-    rgba(255, 255, 255, 0.68) 72%);
+    var(--term-color, var(--accent)) 72%);
   background-size: 220% 100%;
   -webkit-background-clip: text;
           background-clip: text;

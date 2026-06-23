@@ -134,6 +134,15 @@ function makeNumber(s) {
     // a correction — so without this the field could keep showing a rejected value.
     if (typeof s.min === 'number') n = Math.max(s.min, n)
     if (typeof s.max === 'number') n = Math.min(s.max, n)
+    // Snap to the step grid so a typed off-grid value (e.g. 12.7 with step 0.5)
+    // doesn't get persisted verbatim. Anchor the grid on min (or 0 when unset) and
+    // round to the step's decimal precision to shake off float drift.
+    if (typeof s.step === 'number' && s.step > 0) {
+      const base = typeof s.min === 'number' ? s.min : 0
+      const decimals = (String(s.step).split('.')[1] || '').length
+      n = Math.round((n - base) / s.step) * s.step + base
+      n = parseFloat(n.toFixed(decimals + 2))
+    }
     inp.value = n
     values[s.key] = n
     api.settings.set(s.key, n)
@@ -180,7 +189,14 @@ function makeSecret(s) {
   }
   // A blank field never overwrites a stored key (main treats '' as "unchanged").
   inp.addEventListener('change', () => {
-    if (!inp.value) return
+    if (!inp.value) {
+      // Typed-then-emptied leaves nothing to save: flash a transient "unchanged" hint
+      // (via title) so the blank-field no-op doesn't feel like a silent swallow. The
+      // no-clobber behaviour is untouched — we still return without writing.
+      inp.title = 'No change saved — field was empty'
+      setTimeout(() => (inp.title = ''), 2000)
+      return
+    }
     api.settings.set(s.key, inp.value)
     inp.value = ''
     secretsSet[s.key] = true
@@ -336,6 +352,9 @@ resetAllBtn.addEventListener('click', async () => {
   secretsSet = snap.secretsSet
   applyTheme()
   syncControls()
+  // Reset doesn't clear the search box, so re-run the active filter — otherwise rows
+  // hidden by a prior query stay hidden and the panel looks empty after reset.
+  applyFilter(search.value)
 })
 
 // ---------- live updates from other windows / the workbench ----------

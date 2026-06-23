@@ -143,7 +143,16 @@ function runSetupDialog() {
       }
     }
 
+    // Once a terminal view (done/error) is shown, lock it in. Both the 'done'/'error'
+    // progress event AND the provision() promise resolving can reach for these renders;
+    // without a guard they double-render, or one path's success flips the other path's
+    // error out from under the user. Only the FIRST terminal view wins — mirrors how
+    // finish() is settled-guarded.
+    let viewSettled = false
+
     const renderDone = () => {
+      if (viewSettled) return
+      viewSettled = true
       card.dataset.phase = 'done'
       card.innerHTML = `
         <div class="llm-setup-head">
@@ -158,6 +167,8 @@ function runSetupDialog() {
     }
 
     const renderError = (message) => {
+      if (viewSettled) return
+      viewSettled = true
       card.dataset.phase = 'error'
       card.innerHTML = `
         <div class="llm-setup-head">
@@ -176,6 +187,9 @@ function runSetupDialog() {
     }
 
     const startDownload = () => {
+      // Fresh attempt (including "Try again" from the error view): re-arm the terminal
+      // view so this run's done/error can render again.
+      viewSettled = false
       renderProgress()
       activeProgress = (p) => {
         if (p.phase === 'error') renderError(p.error)

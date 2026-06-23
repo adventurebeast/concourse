@@ -63,6 +63,17 @@ export function createKeybindings() {
       if (!combo) return
       const handler = bindings.get(combo)
       if (!handler) return
+      // App-level chords fire even inside a terminal (xterm) and the code editor
+      // (Monaco) — that's deliberate, so new-tab / tab-switch keep working while you
+      // type in a shell or a file. But inside the app's OWN form fields (the search
+      // box, the SCM commit message, a tab-rename input, the settings inputs) a chord
+      // like ⌘W or ⌘1 would yank focus out mid-edit. Defer to the field there: let the
+      // keystroke through untouched. xterm/Monaco hold focus in their own helper
+      // <textarea>, so they're explicitly exempted from this guard.
+      const ae = document.activeElement
+      const editable =
+        ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
+      if (editable && !ae.closest('.xterm, .monaco-host, .monaco-editor')) return
       const result = handler(e)
       if (result !== false) {
         e.preventDefault()

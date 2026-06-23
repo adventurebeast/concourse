@@ -30,7 +30,7 @@ const TERM_THEMES = {
 
 // Tabbed + grid terminal multiplexer. Each session is an independent PTY shell;
 // run a CLI coding agent in each and watch them all at once in grid view.
-export function createTerminals({ getRoot, onFleet, onAwait }) {
+export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   const tabBar = document.getElementById('term-tabs')
   const panesEl = document.getElementById('term-panes')
   const controls = document.querySelector('#terminal-region .panel-controls')
@@ -105,7 +105,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       })
       .catch(() => {})
   refreshPulseStatus()
-  setInterval(refreshPulseStatus, 15000)
+  const pulseStatusTimer = setInterval(refreshPulseStatus, 15000)
 
   // ---- inject extra panel controls: one button per layout, always visible ----
   // The button for the current layout is highlighted (.active).
@@ -188,6 +188,12 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     }
     sessions.clear()
     for (const s of ordered) sessions.set(s.id, s)
+    // flowIndex is positional (an index into the rebuilt Map), so after a reorder the
+    // flow centre must be re-derived from activeId — otherwise the centred, interactive,
+    // PTY-driving pane silently swaps to a different agent. Same recompute setLayout('flow')
+    // does on entry, keeping the centred pane and activeId in agreement across reorders.
+    const ai = [...sessions.values()].findIndex((s) => s.id === activeId)
+    if (ai >= 0) flowIndex = ai
     applyLayout()
     fitAll()
   }
@@ -649,7 +655,12 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     // The pane just became the (newly interactive) centre; focus on the next
     // tick once the reflow has settled so the very first click lands the cursor.
     const s = sessions.get(id)
-    if (s) setTimeout(() => s.term.focus(), 0)
+    if (s) setTimeout(() => {
+      // It may have been closed within this tick (a fast Cmd+W / agent exit racing the
+      // reflow); focus() on a disposed xterm throws — re-check it's still live.
+      const live = sessions.get(id)
+      if (live) live.term.focus()
+    }, 0)
   }
   // Step the album flow by ±1 (wraps around) and focus the new centre.
   function stepFlow(dir) {
@@ -704,6 +715,10 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     } else if (next === 'working') {
       s.unseen = false
     }
+    // Leaving the awaiting state (resumed working, settled to idle) makes any awaiting
+    // notification + title flag posted for this pane stale — tell the host to clear that
+    // one pane's surface (it tracks them per-id, so other awaiting panes are untouched).
+    if (prev === 'awaiting' && next !== 'awaiting') onAwaitClear?.(s.id)
     updateIndicators(s)
   }
 
@@ -1072,6 +1087,13 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   function destroy(id) {
     const s = sessions.get(id)
     if (!s) return
+    // A floating menu (the right-click tab menu or the '+' new-tab menu) closed over
+    // this session would act on a dead pane after it's gone — dismiss them now. The
+    // new-tab menu's __close() also unhooks its document listeners.
+    document.getElementById('term-tab-menu')?.remove()
+    document.getElementById('term-new-menu')?.__close?.()
+    // The pane is going away; clear any awaiting notification/title flag it posted.
+    onAwaitClear?.(id)
     clearTimeout(s.titleTimer)
     clearTimeout(s.idleTimer)
     clearTimeout(s.quietTimer)
@@ -1128,10 +1150,13 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     // paneRole sees it as primary when the fit below runs.
     if (layout === 'stack') {
       applyStack()
-      // The clicked tile just became the primary pane; focus on the next tick
-      // once the reflow has settled so a single click lands the cursor
-      // (same as album flow's centerOn).
-      setTimeout(() => s.term.focus(), 0)
+      // The clicked tile just became the primary pane; focus on the next tick once the
+      // reflow has settled so a single click lands the cursor (same as album flow's
+      // centerOn). Re-check the pane is still live — it may be closed within this tick.
+      setTimeout(() => {
+        const live = sessions.get(id)
+        if (live) live.term.focus()
+      }, 0)
     }
     // Switching TO a pane means "show me what's happening here" — and agents stream
     // output into background panes constantly. Re-engage sticky-bottom so the fit
@@ -1178,6 +1203,13 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       s.tabLabel.textContent = v
       s.cellLabel.textContent = v
       s.stubLabel.textContent = v
+      // The label was detached (replaced by the input) during the edit and its content
+      // just changed; re-measure so a stale hover-marquee shift from before the rename
+      // doesn't persist on the restored label.
+      requestAnimationFrame(() => {
+        measureMarquee(s.tabLabel)
+        measureMarquee(s.cellLabel)
+      })
     }
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') commit()
@@ -1515,9 +1547,12 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     // stays working across the sub-second gaps in a turn and only settles
     // IDLE_AFTER_MS after output truly stops.
     if (s.state !== 'working') {
-      s.summaryText = null // live activity: drop the stale resting label
-      s.lastLiveHash = null // new working stint: let the heartbeat re-label from scratch
-      applyTitle(s)
+      // Keep the last summary visible through the new working stint. It's a "what is this
+      // pane on" hint, and a few seconds stale beats blinking the "— summary" tail off on
+      // EVERY output burst (an agent works in sub-heartbeat bursts, so clearing here made
+      // the label fumble in and out of view). The heartbeat replaces it within
+      // WORKING_PULSE_MS; reset its hash so it re-labels this stint from scratch.
+      s.lastLiveHash = null
       setState(s, 'working') // repaints; also clears any awaiting come-look
       // The first time a beginner ever sees a tab start pulsing, explain it — Pulse
       // finally names itself at the exact moment it has meaning. Once ever, never expert.
@@ -1555,6 +1590,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
     s.status = 'exited'
     s.state = 'idle' // a finished process isn't working/awaiting; the faded .exited tab marks "ended"
     s.unseen = false // never leave a dead pane nagging for a come-look
+    onAwaitClear?.(id) // a finished process isn't awaiting — drop any stale notification
     clearTimeout(s.idleTimer) // settled — never leave it pulsing
     s.idleTimer = null
     clearTimeout(s.quietTimer)
@@ -1658,7 +1694,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
   // concurrency at 3 and supersedes stale queued calls. Tune the period for liveness vs. call
   // volume. (The fast settle path still owns the at-rest / awaiting edge.)
   const WORKING_PULSE_MS = 30000
-  setInterval(() => {
+  const heartbeatTimer = setInterval(() => {
     if (!pulseEnabled) return
     for (const s of sessions.values()) {
       if (s.status !== 'exited' && s.state === 'working') summarize(s, { live: true })
@@ -1671,7 +1707,7 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
 
   // Album-flow cycling: ⌥←/→ (Alt+Arrow) steps the centre through the terminals.
   // Alt keeps it clear of anything the focused shell would read from the arrows.
-  window.addEventListener('keydown', (e) => {
+  const onFlowArrowKey = (e) => {
     if (layout !== 'flow' || !e.altKey || e.metaKey || e.ctrlKey) return
     if (e.key === 'ArrowRight') {
       e.preventDefault()
@@ -1680,7 +1716,8 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       e.preventDefault()
       stepFlow(-1)
     }
-  })
+  }
+  window.addEventListener('keydown', onFlowArrowKey)
 
   // Safety net: a file dropped anywhere a handler didn't claim would otherwise make
   // Electron navigate the window to that file (blanking the app). Swallow such stray
@@ -1795,6 +1832,16 @@ export function createTerminals({ getRoot, onFleet, onAwait }) {
       clearTimeout(s.quietTimer)
       s.idleTimer = s.titleTimer = s.quietTimer = null
     }
+    // Module-owned intervals and window-level listeners. Without clearing these a
+    // re-instantiation (a future multi-window / workspace refactor) would stack a second
+    // pulse poll, heartbeat, flow-arrow handler and stray-drop swallower — double-stepping
+    // the flow and re-running drop swallowing N times. dispose() promises "nothing
+    // running", so honor it for these too, not just the per-pane timers.
+    clearInterval(pulseStatusTimer)
+    clearInterval(heartbeatTimer)
+    window.removeEventListener('keydown', onFlowArrowKey)
+    window.removeEventListener('dragover', swallowStrayFileDrag)
+    window.removeEventListener('drop', swallowStrayFileDrag)
   }
 
   // Bring a pane to the foreground by id — used by the awaiting OS-notification's click

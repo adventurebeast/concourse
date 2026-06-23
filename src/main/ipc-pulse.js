@@ -72,24 +72,34 @@ const SCHEMA = {
 const SYSTEM = [
   'You watch ONE pane in a wall of many terminal panes running CLI coding agents',
   '(such as Claude Code) and shells. The user keeps lots of panes open and cannot recall',
-  'what each one is doing. Your MAIN job: in ONE sentence, say WHAT this pane is working',
-  'on — the feature, task, file, or problem in progress — so they can pick up where they',
+  'what each one is doing. Your ONLY job: in ONE sentence, name the WORK in this pane —',
+  'the feature, file, command, or problem being worked on — so they can pick up where they',
   'left off at a glance. Judge only from the visible output; do not invent activity.',
   '',
-  'summary — THE important output. ONE sentence, <=14 words, describing the WORK and where',
-  '          it stands: the feature being built, the bug being chased, the file or command',
-  '          in play. Read the CONTENT of the pane (its messages and output), not just the',
-  '          last line. Be specific, with real names. Do NOT describe status — never write',
-  '          "working", "waiting", "idle", "done", "running", or "awaiting input": the user',
-  '          already sees that. Present tense, no trailing period. Use "" only for a truly',
-  '          empty, unused pane.',
+  'summary — THE important output. ONE sentence, <=14 words, naming the WORK itself: the',
+  '          feature being built, the bug being chased, the files or commands in play, with',
+  '          REAL names from the output. Weight the MOST RECENT lines: describe what the',
+  '          pane is on NOW, not where the conversation started. Read the CONTENT, not just',
+  '          the last line.',
+  '',
+  '          NEVER describe the agent or its status. Do not start with "Agent", "The agent",',
+  '          "User", or "This pane". Do not say it is "working", "waiting", "idle", "done",',
+  '          "running", "awaiting input", "in a safe state", "experiencing issues", or',
+  '          "requires/needs intervention" — the user already sees status from the colour.',
+  '          Write the WORK as the subject. Present tense, no trailing period. Use "" only',
+  '          for a truly empty, unused pane.',
   '',
   'state — a coarse secondary tag; the user already sees status, so spend no effort here.',
   '        Pick one: working | awaiting | done | error | idle. (awaiting = at a prompt that',
   '        needs the human, including an agent parked at its own input box.)',
   '',
   'Respond with ONLY a JSON object {"summary": "...", "state": "..."} — no prose, no code',
-  'fence. Every summary is about the WORK, even when the pane is at rest:',
+  'fence. The summary names the WORK; never the status. Rewrite a status sentence into the',
+  'work it is about:',
+  '  BAD  "Agent is in a safe state, waiting for user input to continue"',
+  '  BAD  "Agent is experiencing issues with style.css and terminals.css, requires manual fix"',
+  '  GOOD "Fixing the terminal colours in style.css and terminals.css"',
+  '',
   '  "● I updated the login flow to call /token/refresh and added auth.test.js.\\n>" ->',
   '     {"summary": "Adding token refresh to the login flow, with a test", "state": "awaiting"}',
   '  "Indexing repository... 1240/3000 files" ->',
@@ -116,6 +126,41 @@ function buildUserText({ tail, baseName, lastCommand, branch }) {
 // Both backends return raw model text; one parser turns it into a validated verdict.
 // Tolerant of a code fence or stray prose (smaller local models add them) by grabbing
 // the outermost { … } before parsing.
+// Deterministic backstop for the one failure the prompt can't fully train out of a tiny
+// (0.5b) model: narrating the AGENT'S STATUS instead of the WORK ("Agent is experiencing
+// issues with style.css …", "The agent is in a safe state, waiting for input"). The label
+// must read as WHAT the pane is on, so strip a leading status-subject preamble and let the
+// work phrase that follows stand on its own.
+function dropStatusPreamble(summary) {
+  let s = summary
+  // "Agent is …", "The agent is currently …", "I am …", "It is …", "This pane is …" — remove
+  // the status subject + linking verb so the verb describing the work becomes the head. The
+  // linking verb is REQUIRED so a real work-summary that merely starts with "Terminal" or
+  // "Pane" (no "is/was") is left untouched. The leading bare "Currently …" is also dropped.
+  s = s
+    .replace(/^\s*(?:the\s+)?(?:agent|assistant|user|terminal|pane|tab|this\s+pane|it|i)\b\s+(?:is|am|are|was|were|has\s+been|appears\s+to\s+be|seems\s+to\s+be)\s+(?:currently\s+)?/i, '')
+    .replace(/^\s*currently\s+/i, '')
+  // Upcase the new first letter so "experiencing issues …" reads cleanly.
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+// Normalise a raw summary from a small (0.5b) local model before it becomes a label: drop a
+// "summary:" key echo and surrounding quotes/backticks the model wraps it in, and collapse
+// the stray newlines/runs of whitespace it sometimes leaves mid-string.
+function sanitizeSummary(s) {
+  return s
+    .replace(/^\s*summary\s*[:\-–]\s*/i, '')
+    .replace(/^[\s"'`]+|[\s"'`]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+// A tiny model sometimes returns ONLY a status word as the "summary" despite the prompt's
+// ban — that's never a work label, so we blank it rather than show "Working" as the summary.
+// Anchored + single trailing token so a real label that NAMES work ("Waiting on /token") is
+// left intact.
+const STATUS_ONLY = /^(?:working|idle|done|running|active|busy|pending|waiting|awaiting(?:\s+input)?|in\s+progress)\.?$/i
+
 function parseVerdict(text) {
   if (typeof text !== 'string') return null
   const stripped = text.replace(/```(?:json)?/gi, '')
@@ -130,12 +175,16 @@ function parseVerdict(text) {
   }
   const state = STATES.includes(parsed.state) ? parsed.state : null
   if (!state) return null
-  return {
-    state,
-    // Strip a trailing period/ellipsis the prompt forbids but a small model sometimes
-    // still emits — keeps the one-line label clean.
-    summary: typeof parsed.summary === 'string' ? parsed.summary.trim().replace(/[.\s]+$/, '') : ''
+  let summary = ''
+  if (typeof parsed.summary === 'string') {
+    // sanitise (key echo / wrapping quotes / whitespace) -> strip a trailing period the
+    // prompt forbids but a small model still emits -> drop any "Agent is …" status preamble.
+    let s = sanitizeSummary(parsed.summary).replace(/[.\s]+$/, '').trim()
+    s = dropStatusPreamble(s)
+    if (STATUS_ONLY.test(s)) s = '' // pure status word survived: not a work label
+    summary = s
   }
+  return { state, summary }
 }
 
 // fetch with a hard wall-clock timeout; returns null instead of throwing.

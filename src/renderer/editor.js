@@ -234,7 +234,19 @@ export function createEditor() {
     return null
   }
 
+  // Closing a file tab with unsaved edits must never silently discard them. Guard the
+  // real teardown (doCloseTab) behind a Save / Don't Save / Cancel dialog; clean (or
+  // read-only) tabs close straight through. See confirmCloseDirty below.
   function closeTab(key) {
+    const tab = tabs.get(key)
+    if (!tab) return
+    if (tab.kind === 'file' && tab.dirty && !tab.readOnly) {
+      confirmCloseDirty(tab, () => doCloseTab(key))
+      return
+    }
+    doCloseTab(key)
+  }
+  function doCloseTab(key) {
     const tab = tabs.get(key)
     if (!tab) return
 
@@ -264,6 +276,79 @@ export function createEditor() {
       }
     }
     syncWelcome()
+  }
+
+  // Save / Don't Save / Cancel before discarding a dirty buffer. No window.confirm
+  // (it would block the whole renderer); reuses the terminal confirm overlay styling
+  // so it needs no new CSS. One dialog at a time; Escape / Cancel / click-away backs
+  // out, Save commits first and only closes if the write succeeds.
+  let closeConfirmOverlay = null
+  function confirmCloseDirty(tab, proceed) {
+    if (closeConfirmOverlay) {
+      closeConfirmOverlay.querySelector('.tc-cancel')?.focus()
+      return
+    }
+    const overlay = document.createElement('div')
+    overlay.className = 'term-confirm-overlay'
+    const box = document.createElement('div')
+    box.className = 'term-confirm'
+    const title = document.createElement('div')
+    title.className = 'tc-title'
+    // baseName is plain (a real path), but build with textContent regardless.
+    title.textContent = `Save changes to “${baseName(tab.path)}”?`
+    const msg = document.createElement('div')
+    msg.className = 'tc-msg'
+    msg.textContent = 'Your changes will be lost if you don’t save them.'
+    box.append(title, msg)
+    const actions = document.createElement('div')
+    actions.className = 'tc-actions'
+    const cancel = document.createElement('button')
+    cancel.className = 'btn tc-cancel'
+    cancel.textContent = 'Cancel'
+    const dont = document.createElement('button')
+    dont.className = 'btn tc-danger'
+    dont.textContent = 'Don’t Save'
+    const saveBtn = document.createElement('button')
+    saveBtn.className = 'btn'
+    saveBtn.textContent = 'Save'
+    actions.append(cancel, dont, saveBtn)
+    box.appendChild(actions)
+    overlay.appendChild(box)
+    document.body.appendChild(overlay)
+    closeConfirmOverlay = overlay
+    saveBtn.focus()
+
+    const finish = () => {
+      if (closeConfirmOverlay !== overlay) return
+      closeConfirmOverlay = null
+      overlay.remove()
+      document.removeEventListener('keydown', onKey, true)
+    }
+    const saveThenClose = () => {
+      finish()
+      saveTab(tab).then((ok) => {
+        if (ok) proceed() // a failed write keeps the tab open + dirty (toast already shown)
+      })
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        finish()
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        saveThenClose()
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    cancel.addEventListener('click', finish)
+    overlay.addEventListener('mousedown', (e) => {
+      if (e.target === overlay) finish()
+    })
+    dont.addEventListener('click', () => {
+      finish()
+      proceed()
+    })
+    saveBtn.addEventListener('click', saveThenClose)
   }
 
   function buildTabEl({ marker, label, key, title }) {
@@ -466,13 +551,15 @@ export function createEditor() {
   }
 
   // ---------- Public: save ----------
-  async function save() {
-    if (!activeKey) return
-    const tab = tabs.get(activeKey)
-    if (!tab || tab.kind !== 'file') return
+  // Write ONE specific file tab to disk. Returns true on success (or for a no-op
+  // read-only / non-file tab), false if the write failed — callers that gate a close
+  // on the save (confirmCloseDirty) must not proceed on failure. Keeping the tab dirty
+  // + toasting on error beats silently dropping the change.
+  async function saveTab(tab) {
+    if (!tab || tab.kind !== 'file') return true
     // Never write back read-only tabs (read-error / binary previews); their
     // model holds a placeholder notice, not the real file contents.
-    if (tab.readOnly) return
+    if (tab.readOnly) return true
     const value = tab.model.getValue()
     try {
       await api.fs.writeFile(tab.path, value)
@@ -481,7 +568,7 @@ export function createEditor() {
       // of silently swallowing the failure.
       const reason = (err && err.message) ? err.message : String(err)
       showToast('Could not save ' + baseName(tab.path) + ': ' + reason, { kind: 'error' })
-      return
+      return false
     }
     setDirty(tab, false)
     for (const cb of saveListeners) {
@@ -491,6 +578,20 @@ export function createEditor() {
         /* ignore listener errors */
       }
     }
+    return true
+  }
+  async function save() {
+    if (!activeKey) return
+    await saveTab(tabs.get(activeKey))
+  }
+  // Any open file tab with unsaved edits? main.js consults this in beforeunload to
+  // trigger the native "unsaved changes" prompt so quitting/reloading can't silently
+  // drop in-memory edits (the session blob only persists path/line, not buffer text).
+  function hasUnsavedTabs() {
+    for (const tab of tabs.values()) {
+      if (tab.kind === 'file' && tab.dirty && !tab.readOnly) return true
+    }
+    return false
   }
 
   function onSave(cb) {
@@ -549,5 +650,5 @@ export function createEditor() {
 
   syncWelcome()
 
-  return { openFile, openDiff, save, onSave, onTabsChange, setTheme, applySettings, listOpenFiles }
+  return { openFile, openDiff, save, onSave, onTabsChange, setTheme, applySettings, listOpenFiles, hasUnsavedTabs }
 }

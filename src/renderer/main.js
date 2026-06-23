@@ -131,7 +131,10 @@ const terminals = createTerminals({
   // come-look pulse always fires (in terminals.js); when this window is in the
   // BACKGROUND we ALSO post an OS notification, so you get pulled back without having to
   // babysit the bar — the whole point of Pulse (see docs/pulse-engine.md).
-  onAwait: (info) => notifyAwait(info)
+  onAwait: (info) => notifyAwait(info),
+  // A pane left the awaiting state (resumed working, went idle, or was closed) before
+  // you came back: its notification / title flag is now stale, so drop just that one.
+  onAwaitClear: (id) => clearAwait(id)
 })
 
 // ---------- Pulse awaiting notifications ----------
@@ -141,24 +144,43 @@ const terminals = createTerminals({
 // window forward and reveals the exact pane. Everything degrades silently: if OS
 // notifications are unsupported or denied, the title-bar flag below still flips.
 const BASE_DOC_TITLE = document.title
-let awaitNotif = null
+// ONE notification per awaiting pane, keyed by pane id, so several agents finishing
+// close together don't clobber each other — the common fleet case Pulse exists for.
+// (The old single shared handle force-closed the previous pane's unread note and the
+// title showed only the most-recent agent.) The title flag mirrors the whole set: the
+// agent's name when one pane awaits, a count when several do.
+const awaitNotifs = new Map() // pane id -> Notification
+const awaitNames = new Map() // pane id -> agent name (drives the title flag)
+function refreshAwaitTitle() {
+  if (awaitNames.size === 0) {
+    if (document.title !== BASE_DOC_TITLE) document.title = BASE_DOC_TITLE
+  } else if (awaitNames.size === 1) {
+    document.title = `🔔 ${[...awaitNames.values()][0] || 'Agent'} — awaiting you`
+  } else {
+    document.title = `🔔 ${awaitNames.size} agents awaiting you`
+  }
+}
 function notifyAwait(info) {
   if (document.hasFocus()) return // you're here — the in-pane come-look is enough
+  const id = info.id || 'anon'
+  const name = info.name || 'Agent'
   // Always-available fallback surface (works even if notifications are blocked): flag
-  // the window/dock title until you return. Cleared on the next window focus (below).
-  document.title = `🔔 ${info.name || 'Agent'} — awaiting you`
+  // the window/dock title until you return. Cleared on focus / when the pane settles.
+  awaitNames.set(id, name)
+  refreshAwaitTitle()
   try {
     if (typeof Notification === 'undefined' || Notification.permission === 'denied') return
     const show = () => {
-      awaitNotif?.close?.()
-      awaitNotif = new Notification(`${info.name || 'Agent'} · awaiting you`, {
+      awaitNotifs.get(id)?.close?.() // replace only THIS pane's prior note, never another's
+      const n = new Notification(`${name} · awaiting you`, {
         body: info.summary || 'It finished its turn and is waiting for you.'
       })
-      awaitNotif.onclick = () => {
+      n.onclick = () => {
         api.window?.focusSelf?.()
         if (info.id) terminals.revealPane(info.id)
         window.focus()
       }
+      awaitNotifs.set(id, n)
     }
     if (Notification.permission === 'granted') show()
     else Notification.requestPermission().then((p) => p === 'granted' && show()).catch(() => {})
@@ -166,11 +188,27 @@ function notifyAwait(info) {
     /* notifications unsupported — the come-look pulse + title flag still carry it */
   }
 }
-// Returning to the window clears the awaiting title flag (and dismisses any open note).
-window.addEventListener('focus', () => {
+// One pane stopped awaiting (resumed working / went idle / closed) before you returned —
+// drop just its note + title entry, leaving any other awaiting panes' notifications intact.
+function clearAwait(id) {
+  if (id == null) return
+  awaitNotifs.get(id)?.close?.()
+  awaitNotifs.delete(id)
+  awaitNames.delete(id)
+  refreshAwaitTitle()
+}
+// Returning to the window clears every awaiting flag/note at once.
+function clearAllAwait() {
+  for (const n of awaitNotifs.values()) n?.close?.()
+  awaitNotifs.clear()
+  awaitNames.clear()
   if (document.title !== BASE_DOC_TITLE) document.title = BASE_DOC_TITLE
-  awaitNotif?.close?.()
-  awaitNotif = null
+}
+window.addEventListener('focus', clearAllAwait)
+// Some returns surface as a visibility change without a focus event — cover both, but
+// only when we genuinely have focus so a background tab-reveal doesn't clear prematurely.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && document.hasFocus()) clearAllAwait()
 })
 
 // Command palette (⌘K): TYPES a command onto the active prompt (the user presses
@@ -217,7 +255,11 @@ keys.register("mod+'", () => terminals.stepActive(1))
 // they switch tabs. The .monaco-host guard is deliberately narrow: xterm holds
 // focus in its own helper <textarea>, so a generic input/textarea check would
 // wrongly disable switching while you're inside a terminal.
-const inEditor = () => !!document.activeElement?.closest('.monaco-host')
+// Broadened past .monaco-host so a focused Monaco overflow widget (the find or suggest
+// box, which can render in a container appended outside the mount) still counts as
+// "in the editor" — there Cmd+[ / Cmd+] keep their native outdent/indent.
+const inEditor = () =>
+  !!document.activeElement?.closest('.monaco-host, .monaco-editor, .editor-widget')
 keys.register('mod+[', () => {
   if (inEditor()) return false
   terminals.stepActive(-1)
@@ -233,11 +275,10 @@ for (let n = 1; n <= 9; n++) {
 // Cmd/Ctrl+W closes the active terminal (routes through the confirm dialog).
 keys.register('mod+w', () => terminals.closeActive())
 keys.register('mod+k', () => palette.toggle())
-// Layout modes: a single cycler plus direct keys. tabs/grid/flow sit on the
-// adjacent U I P keys; Cmd+Shift+L taps through them in order. Stack uses
-// U-I-O-P is the layout row: tabs / grid / stack / flow. The menu's
-// "Open Folder…" moved to Cmd+Shift+O so plain Cmd+O stays free for the
-// master-stack layout here (menu accelerators fire before the renderer).
+// Layout modes: a single cycler plus direct keys. The layout row is U-I-O-P:
+// tabs / grid / stack / flow; Cmd+Shift+L cycles through them in that order. The
+// menu's "Open Folder…" moved to Cmd+Shift+O so plain Cmd+O stays free for the
+// stack layout here (menu accelerators fire before the renderer).
 keys.register('mod+shift+l', () => terminals.cycleLayout(1))
 keys.register('mod+u', () => terminals.setLayout('tabs'))
 keys.register('mod+i', () => terminals.setLayout('grid'))
@@ -322,12 +363,18 @@ document.getElementById('editor-tabs').addEventListener('click', (e) => {
 
 // Document viewer follows the open documents: showing the editor when a document
 // is open, and reverting to terminals-only mode once every document is closed.
-editor.onTabsChange((count) => setTerminalsOnly(count === 0))
+// Suppressed during restoreSession: each restored file fires onTabsChange (0→1, 1→2…),
+// which would force the editor visible mid-restore and fight the saved terminalsOnly
+// preference applied at the very end. The explicit call there is authoritative.
+let restoringSession = false
+editor.onTabsChange((count) => {
+  if (!restoringSession) setTerminalsOnly(count === 0)
+})
 
 // ---------- Theme (light default, dark optional, persisted) ----------
 const THEME_KEY = 'concourse-theme'
 let theme = localStorage.getItem(THEME_KEY) || 'light'
-function applyTheme(mode) {
+function applyTheme(mode, { persist = true } = {}) {
   theme = mode === 'dark' ? 'dark' : 'light'
   document.documentElement.dataset.theme = theme
   editor.setTheme(theme === 'dark' ? 'vs-dark' : 'vs')
@@ -339,14 +386,17 @@ function applyTheme(mode) {
   btn.dataset.tip = tip
   localStorage.setItem(THEME_KEY, theme)
   // Mirror into the central settings store so the Settings window and any other
-  // window reflect the change. The store only broadcasts on a real change and
-  // applyTheme is a no-op when the value already matches, so this can't loop.
-  Promise.resolve(api.settings?.set?.('appearance.theme', theme)).catch(() => {})
+  // window reflect the change. Skipped on the boot application (persist:false) — there
+  // localStorage is authoritative, so writing it back would only fire a redundant
+  // cross-window settings:changed broadcast (and let the last-booted window's value win
+  // over the store). The store only broadcasts on a real change and applyTheme is a
+  // no-op when the value already matches, so a user-driven change can't loop.
+  if (persist) Promise.resolve(api.settings?.set?.('appearance.theme', theme)).catch(() => {})
 }
 document.getElementById('toggle-theme').addEventListener('click', () => {
   applyTheme(theme === 'dark' ? 'light' : 'dark')
 })
-applyTheme(theme)
+applyTheme(theme, { persist: false })
 
 // ---------- Experience mode (beginner default, expert optional, persisted) ----------
 // Two "lanes": beginner is calmer and more guided for people new to IDEs; expert
@@ -355,7 +405,7 @@ applyTheme(theme)
 // The one behavioral hook today: beginner terminals get a friendlier prompt.
 const MODE_KEY = 'concourse-mode'
 let mode = localStorage.getItem(MODE_KEY) || 'beginner'
-function applyMode(next) {
+function applyMode(next, { persist = true } = {}) {
   mode = next === 'expert' ? 'expert' : 'beginner'
   document.documentElement.dataset.mode = mode
   const btn = document.getElementById('toggle-mode')
@@ -371,13 +421,14 @@ function applyMode(next) {
   btn.setAttribute('title', tip)
   btn.dataset.tip = tip
   localStorage.setItem(MODE_KEY, mode)
-  // Mirror into the central settings store (see applyTheme above for why this is loop-safe).
-  Promise.resolve(api.settings?.set?.('appearance.mode', mode)).catch(() => {})
+  // Mirror into the central settings store (see applyTheme above for why this is
+  // loop-safe and why the boot call skips the write).
+  if (persist) Promise.resolve(api.settings?.set?.('appearance.mode', mode)).catch(() => {})
 }
 document.getElementById('toggle-mode').addEventListener('click', () => {
   applyMode(mode === 'expert' ? 'beginner' : 'expert')
 })
-applyMode(mode)
+applyMode(mode, { persist: false })
 
 // ---------- Tab status style (pulse default, dots optional, persisted) ----------
 // How a terminal tab signals "working": the default 'pulse' tints the whole tab and
@@ -387,13 +438,14 @@ applyMode(mode)
 // echoed into the central store so the Settings window stays in sync.
 const TAB_STATUS_KEY = 'concourse-tab-status'
 let tabStatus = localStorage.getItem(TAB_STATUS_KEY) || 'pulse'
-function applyTabStatus(next) {
+function applyTabStatus(next, { persist = true } = {}) {
   tabStatus = next === 'dots' ? 'dots' : 'pulse'
   document.documentElement.dataset.tabStatus = tabStatus
   localStorage.setItem(TAB_STATUS_KEY, tabStatus)
-  Promise.resolve(api.settings?.set?.('appearance.tabStatus', tabStatus)).catch(() => {})
+  // Boot call skips the write (localStorage is authoritative); see applyTheme above.
+  if (persist) Promise.resolve(api.settings?.set?.('appearance.tabStatus', tabStatus)).catch(() => {})
 }
-applyTabStatus(tabStatus)
+applyTabStatus(tabStatus, { persist: false })
 
 // ---------- Terminal header palette (identity colours, persisted) ----------
 // Which palette the terminal identity headers use (appearance.headerTheme) and the
@@ -445,6 +497,12 @@ function applyAppearanceSettings(v) {
   if (v['appearance.mode'] && v['appearance.mode'] !== mode) applyMode(v['appearance.mode'])
   if (v['appearance.tabStatus'] && v['appearance.tabStatus'] !== tabStatus)
     applyTabStatus(v['appearance.tabStatus'])
+  // Default terminal layout is a "next time you open a workspace" preference, not a
+  // live switch — cache it so terminals.js reads it (flash-free) at the next boot /
+  // workspace open. The current workspace keeps its layout; the layout buttons remain
+  // the live, per-workspace control.
+  if (v['appearance.defaultLayout'])
+    localStorage.setItem('concourse-default-layout', v['appearance.defaultLayout'])
   const ht = v['appearance.headerTheme']
   const hc = v['appearance.customHeaderColors']
   if ((ht && ht !== headerTheme) || (typeof hc === 'string' && hc !== headerCustom))
@@ -564,8 +622,15 @@ document.addEventListener('visibilitychange', () => {
 // Final save on unload. The async save can't be relied on to complete during
 // unload, so push the blob over the synchronous channel; the main process stages
 // it and the before-quit flush drains it (see ipc-session.js + index.js).
-window.addEventListener('beforeunload', () => {
+window.addEventListener('beforeunload', (e) => {
   if (currentRoot) api.session.saveSync(currentRoot, gatherSession())
+  // The session blob persists only path/line, never in-memory edits — so a quit/reload
+  // with a dirty editor tab would silently drop the changes. Trigger the native
+  // "unsaved changes" confirmation so the user can cancel and save first.
+  if (editor.hasUnsavedTabs()) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
 })
 
 // Upgrade an older session blob to the current schema. A versionless blob is
@@ -587,26 +652,43 @@ async function restoreSession(blob) {
   const ts = blob && blob.terminals
   if (!ts || !terminals.restore(ts)) terminals.create()
 
-  const files = (blob && blob.editor && blob.editor.files) || []
-  let activePath = null
-  for (const f of files) {
-    if (!f || !f.path) continue
-    await editor.openFile(f.path, { line: f.line || 1 })
-    if (f.active) activePath = f.path
-  }
-  if (activePath) await editor.openFile(activePath) // re-focus the tab that was active
+  // Each restored file fires onTabsChange; suppress the terminals-only reaction to those
+  // (see the onTabsChange wiring above) so the saved preference applied at the end wins.
+  restoringSession = true
+  try {
+    const files = (blob && blob.editor && blob.editor.files) || []
+    let activePath = null
+    for (const f of files) {
+      if (!f || !f.path) continue
+      await editor.openFile(f.path, { line: f.line || 1 })
+      if (f.active) activePath = f.path
+    }
+    if (activePath) await editor.openFile(activePath) // re-focus the tab that was active
 
-  const ui = (blob && blob.ui) || {}
-  if (ui.sidebarWidth) $('sidebar').style.width = ui.sidebarWidth + 'px'
-  if (ui.editorHeight) $('editor-region').style.height = ui.editorHeight + 'px'
-  if (ui.view && ui.view !== 'explorer') {
-    document.querySelector(`.activity-btn[data-view="${ui.view}"]`)?.click()
+    const ui = (blob && blob.ui) || {}
+    // Clamp restored sizes against the CURRENT window — a blob saved on a larger display
+    // (or before the window shrank) could otherwise restore a sidebar/editor bigger than
+    // the viewport, pushing the terminal region out of view. The drag handlers enforce
+    // these floors live (170 / 60); a restored blob must respect them too.
+    if (ui.sidebarWidth) {
+      const maxW = Math.max(170, Math.floor(window.innerWidth * 0.6))
+      $('sidebar').style.width = Math.min(Math.max(170, ui.sidebarWidth), maxW) + 'px'
+    }
+    if (ui.editorHeight) {
+      const maxH = Math.max(60, $('main').offsetHeight - 100)
+      $('editor-region').style.height = Math.min(Math.max(60, ui.editorHeight), maxH) + 'px'
+    }
+    if (ui.view && ui.view !== 'explorer') {
+      document.querySelector(`.activity-btn[data-view="${ui.view}"]`)?.click()
+    }
+    if (ui.sidebarHidden) $('toggle-sidebar').click()
+    if (ui.panelHidden) $('toggle-panel').click()
+    // Opening files flips terminals-only off; honor the saved preference last.
+    setTerminalsOnly(ui.terminalsOnly !== undefined ? ui.terminalsOnly : files.length === 0)
+    terminals.fitAll()
+  } finally {
+    restoringSession = false
   }
-  if (ui.sidebarHidden) $('toggle-sidebar').click()
-  if (ui.panelHidden) $('toggle-panel').click()
-  // Opening files flips terminals-only off; honor the saved preference last.
-  setTerminalsOnly(ui.terminalsOnly !== undefined ? ui.terminalsOnly : files.length === 0)
-  terminals.fitAll()
 }
 
 // ---------- Resizable panes ----------

@@ -116,6 +116,13 @@
   background: var(--border-strong);
   color: var(--text);
 }
+/* Keyboard focus — reveal the (hover-hidden) close and ring it so a keyboard
+   user can see and reach it (matches the .term-tab focus-ring idiom). */
+.etab .etab-close:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 
 /* Dirty indicator: a filled dot replacing the close button until hover. */
 .etab .etab-dot {
@@ -131,10 +138,12 @@
 .etab.dirty .etab-dot {
   display: block;
 }
-.etab.dirty:hover .etab-dot {
+.etab.dirty:hover .etab-dot,
+.etab.dirty:focus-within .etab-dot {
   display: none;
 }
-.etab.dirty:hover .etab-close {
+.etab.dirty:hover .etab-close,
+.etab.dirty:focus-within .etab-close {
   opacity: 1;
 }
 .etab:not(.dirty) .etab-dot {
