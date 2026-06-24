@@ -324,11 +324,10 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
 /* Working headers carry NO tint and NO label shimmer — the braille spinner alone is the
    working signal in the pane header. (The shimmer didn't render reliably here, so the label
    stays a plain solid colour; the tab strip keeps its shimmer.) */
-/* Awaiting (your move) — a steady, lifted tone, distinct from both idle and the breathe.
-   (The amber status dot still carries the precise "needs you" cue; this just lifts the bar.) */
-html:not([data-tab-status='dots']) .term-cell[data-state='awaiting']:not(.active) .cell-header {
-  background: var(--tone-mid);
-}
+/* Headers mirror the tabs: TWO states only — dark (focused) and light (unfocused). The
+   braille spinner carries "working" and the amber status dot carries "needs you", so an
+   unfocused `awaiting` header no longer lifts its tint; it stays the resting light tone
+   like every other unfocused header. Only the focused pane wears the dark fill (below). */
 /* The FOCUSED pane wears the full-strength identity fill with a white label — the same
    `var(--term-color)` fill the active TAB uses, so a pane's header and its tab read as one
    system, and it stays unmistakable amid the lighter unfocused headers. (Don't route this

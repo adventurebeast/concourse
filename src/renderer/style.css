@@ -649,12 +649,11 @@ html:not([data-tab-status='dots']) .term-tab.active[data-state='working'] .term-
   text-shadow: none; /* with transparent glyphs the inherited shadow would ghost (esp. .lbl-sub) */
   animation: thinking-shimmer 1.7s ease-in-out infinite;
 }
-/* Awaiting (your move): the agent came to rest needing you. Steady — it does NOT breathe
-   (that's "working") — but lifted a touch above the idle tint so a wall of tabs still
-   shows at a glance which one stopped for you. The agent's identity hue is preserved. */
-.term-tab[data-state='awaiting'] {
-  background: var(--tone-mid); /* steady, clearly lifted above the idle wash — does NOT breathe */
-}
+/* Tab background is now TWO states only: dark (focused) and light (unfocused). The
+   working spinner + label shimmer carry "working", and the amber come-look underline
+   (data-unseen) carries "stopped for you while you were away" — so `awaiting` no longer
+   recolours the tab. An unfocused awaiting tab stays the light wash like every other
+   unfocused tab; the focused one keeps the dark focus fill. */
 .term-tab.active[data-state='awaiting'] {
   background: var(--tone-focus);
 }
