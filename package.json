@@ -1,7 +1,7 @@
 {
   "name": "concourse",
-  "version": "0.0.18",
-  "description": "A stupidly simple IDE built for driving AI coding agents.",
+  "version": "0.0.19",
+  "description": "A lightweight, ultrafast IDE built for driving AI coding agents.",
   "main": "./out/main/index.js",
   "type": "module",
   "author": "adventurebeast",

@@ -18,11 +18,15 @@ Run Claude Code, Codex, and every other terminal-native agent side by side — w
 
 ---
 
-Coding agents live in the terminal. One is easy. Ten is chaos — a wall of scrollback, no idea which one is stuck on a prompt, which one finished, which one went off the rails.
+Concourse is the simplest way to run a whole fleet of AI coding agents at once. Keep your terminals organized, switch between them in a keystroke, and keep track of what they're all doing — without drowning in scrollback.
 
-Concourse is the workbench built for that reality. It treats the **terminal multiplexer as the product**, not an afterthought bolted onto an editor. Spawn an army of agents, lay them out so you can see them, and let **Pulse** tell you in plain language what each one is doing — so your attention goes only where it's needed.
+Run as many agents as you like, lay them out so you can see them all, and let **Pulse** tell you in plain language what each one is doing — so you know at a glance which one needs you and which are fine on their own.
+
+It's a full IDE — explorer, editor, git, search — but **terminal-first, not editor-first**. The AI agents do the coding now, so the terminals where they work are the main view; the code editor is there for when you want to read or tweak what they wrote, not the center of gravity.
 
 It's agent-agnostic by design. Anything you can run in a shell — `claude`, `codex`, an SSH session, a long build — is a first-class pane.
+
+And it's built to be **ultrafast, lightweight, and easy on your system**: a vanilla-JS renderer with no UI framework, only a handful of runtime dependencies, and a footprint-capped local Pulse model — so the workbench stays snappy and leaves your machine's resources for the agents you're actually running.
 
 > **Two ways to work, one app.** Concourse ships with **Beginner** and **Expert** modes. Beginners get a calm, friendly surface with plain-language labels and a clean prompt. Experts get conventional shell naming and their own untouched environment. Switch anytime.
 
@@ -125,6 +129,39 @@ Concourse is a full workbench, not just a terminal grid:
 - **Welcome & Recents** — reopen recent projects in a click; the last workspace and its layout restore automatically on launch.
 - **Session restore** — tab labels, layout, open editor tabs, and panel sizes come back per workspace. (Live process state intentionally does not — agents are relaunched fresh.)
 
+## Commands & shortcuts
+
+Everything is a keystroke away — drive the whole fleet without reaching for the mouse. (`⌘` is `Ctrl` on Linux/Windows.)
+
+**Layouts & panes**
+
+| Shortcut | Action |
+| --- | --- |
+| `⌘U` · `⌘I` · `⌘O` · `⌘P` | Switch layout — Tabs · Grid · Stack · Flow |
+| `⌘⇧L` | Cycle through the layouts |
+| `⌘1`–`⌘9` | Jump straight to pane 1–9 |
+| `⌘⇧←` / `⌘⇧→` | Previous / next pane (also `⌘[` / `⌘]`) |
+| `⌘;` / `⌘'` | Move the active pane left / right in the rail |
+| `⌘T` | New terminal (agent launcher in Beginner mode) |
+| `⌘W` | Close the active pane |
+
+**Workbench**
+
+| Shortcut | Action |
+| --- | --- |
+| `⌘K` | Command palette — favorites, project scripts, frequent commands |
+| `⌘B` | Toggle the sidebar |
+| `⌘J` | Toggle the bottom panel |
+| `⌘⇧F` | Jump to Search |
+| `⌘,` | Settings |
+| `⌘⇧O` | Open folder |
+| `⌘N` / `⌘⇧N` | New file / new window |
+| `⌘S` | Save (editor) |
+| `⌘Enter` | Commit (Source Control) |
+| `⌘F` | Find (editor) |
+
+The **command palette** (`⌘K`) goes further than hotkeys: start typing and it surfaces your ♥ favorites, the open project's npm / just / make scripts, and your most-used shell commands ranked by how often you actually run them. Pick one and it types the command onto the active prompt — you press Enter — so the terminal stays a plain display and Concourse never fights the shell. In Beginner mode it also offers a plain-language cheatsheet of everyday commands.
+
 ## Architecture
 
 Per-feature modules with hard contracts: IPC channel names defined in `preload`, DOM IDs in `index.html`, and module interfaces wired together in `renderer/main.js`.
@@ -162,7 +199,7 @@ src/
     *.css               one stylesheet per module
 ```
 
-Built on Electron + Monaco + xterm.js + node-pty — the same core tech as VS Code, without the 2M-line fork.
+Built on Electron + Monaco + xterm.js + node-pty — the same core tech as VS Code, without the 2M-line fork. The renderer is plain JavaScript and CSS, one small module per feature, with no React/Vue/build-time UI framework and only a handful of runtime dependencies — kept deliberately lean so it loads fast and stays out of the agents' way.
 
 ## Roadmap
 
