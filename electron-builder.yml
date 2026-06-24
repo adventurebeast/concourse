@@ -29,8 +29,13 @@ mac:
     - target: dmg
       arch:
         - arm64
-  # Local "stable" build for personal use — no Apple signing/notarization.
+  # Developer beta: no Apple signing/notarization. electron-builder ad-hoc-signs
+  # the arm64 binary so it runs locally; downloaded copies still hit Gatekeeper,
+  # so the README documents the one-time `xattr -dr com.apple.quarantine` step.
   identity: null
+# Versioned, arch-tagged DMG name so each beta drop is distinguishable on the
+# Releases page (e.g. Concourse-0.0.17-arm64.dmg).
+artifactName: ${productName}-${version}-${arch}.${ext}
 # Skip the implicit `npm rebuild` electron-builder runs; native deps were
 # already rebuilt for this Electron by the postinstall electron-rebuild step.
 npmRebuild: false

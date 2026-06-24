@@ -25,6 +25,22 @@ It's agent-agnostic by design. Anything you can run in a shell — `claude`, `co
 
 > **Two ways to work, one app.** Concourse ships with **Beginner** and **Expert** modes. Beginners get a calm, friendly surface with plain-language labels and a clean prompt. Experts get conventional shell naming and their own untouched environment. Switch anytime.
 
+## Install (developer beta)
+
+> **Apple Silicon (M-series) only for now.** On an Intel Mac, run from source — see [Quickstart](#quickstart).
+
+1. Download the latest `Concourse-<version>-arm64.dmg` from [**Releases**](https://github.com/adventurebeast/concourse/releases).
+2. Open the DMG and drag **Concourse** into **Applications**.
+3. This beta is **not signed or notarized by Apple yet**, so macOS Gatekeeper will block it on first launch (*"Concourse is damaged"* or *"cannot be opened because the developer cannot be verified"*). Clear the download quarantine once:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Concourse.app
+   ```
+
+   Then open it normally. (Alternatively: right-click the app → **Open**, or go to **System Settings → Privacy & Security → Open Anyway**.)
+
+You only need to do this once per install. A signed, notarized build — where it just opens on double-click — is coming for the public 1.0.
+
 ## Quickstart
 
 ```bash
@@ -127,6 +143,12 @@ Built on Electron + Monaco + xterm.js + node-pty — the same core tech as VS Co
 - **Deeper mode differences** — more of the UI gated on Beginner vs Expert.
 - **Richer git** — branch switching, push / pull, stash.
 - **Fleet arrangements** — purpose-built layouts for 10+ agents and a queue for pending work.
+
+## License
+
+Concourse is free and open source under the [**GNU AGPL-3.0**](LICENSE). You can use, modify, and share it freely. If you distribute it or run a modified version as a network service, you must make your source available under the same license. (The copyright holder may also offer it under separate commercial terms.)
+
+It bundles third-party components under their own permissive licenses — Electron, Monaco, xterm.js, node-pty (MIT) and llama.cpp / ggml (MIT).
 
 ---
 

@@ -1,10 +1,19 @@
 {
   "name": "concourse",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "description": "A stupidly simple IDE built for driving AI coding agents.",
   "main": "./out/main/index.js",
   "type": "module",
-  "author": "",
+  "author": "adventurebeast",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://github.com/adventurebeast/concourse#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/adventurebeast/concourse.git"
+  },
+  "bugs": {
+    "url": "https://github.com/adventurebeast/concourse/issues"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
