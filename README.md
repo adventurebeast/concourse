@@ -10,8 +10,7 @@ Run Claude Code, Codex, and every other terminal-native agent side by side — w
 
 <br/>
 
-<!-- Drop a screenshot or GIF at docs/hero.png — the grid view with Pulse labels makes the best hero shot. -->
-<img src="docs/hero.png" alt="Concourse — a grid of CLI coding agents with Pulse status labels" width="820" />
+<img src="docs/grid.png" alt="Concourse — a 2×2 grid of CLI coding agents with Pulse status labels" width="820" />
 
 </div>
 
@@ -77,24 +76,39 @@ Every agent runs in a real PTY-backed terminal. The difference is how you arrang
 | **Stack** | `⌘O` | One agent large, the rest compact in a rail |
 | **Flow** | `⌘P` | Album-style — center pane live, neighbors previewed |
 
-Cycle layouts with `⌘⇧L`. Jump to any pane with `⌘1`–`⌘9`, cycle with `⌘⇧←/→`, open a new one with `⌘T`. Drag tabs to reorder; double-click to rename them (`frontend`, `backend`, `tests`). Each pane carries its own identity color across every view.
+Cycle layouts with `⌘⇧L`. Jump to any pane with `⌘1`–`⌘9`, cycle with `⌘⇧←/→`, open a new one with `⌘T`. Drag tabs to reorder; double-click to rename them (`frontend`, `backend`, `tests`). Each pane carries its own identity color across every view. Toggle the sidebar with `⌘B`, the bottom panel with `⌘J`, and call up the command palette with `⌘K`.
+
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/tabs.png" alt="Tabs layout — one agent full-width with the tab bar" width="380" /><br/><sub><b>Tabs</b> — focused work on one agent</sub></td>
+    <td align="center" width="50%"><img src="docs/grid.png" alt="Grid layout — a 2×2 wall of agents" width="380" /><br/><sub><b>Grid</b> — the whole fleet at a glance</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="docs/stack.png" alt="Stack layout — one large pane with a rail of previews" width="380" /><br/><sub><b>Stack</b> — one agent large, the rest in a rail</sub></td>
+    <td align="center" width="50%"><img src="docs/album.png" alt="Flow layout — album-style with neighbors previewed" width="380" /><br/><sub><b>Flow</b> — album-style, neighbors previewed</sub></td>
+  </tr>
+</table>
+
+</div>
 
 ### Pulse — know what every agent is doing
 
 Watching ten scrollbacks is impossible. Pulse does it for you, in two layers:
 
 - **Layer A (free, instant):** a deterministic activity model running in the renderer. Status dots tell you at a glance — **working**, **quiet**, **blocked** (awaiting input, pulsing orange), **done** (green), **error** (red), **idle**. Zero cost, no network.
-- **Layer B (optional, model-powered):** when a pane goes quiet, Concourse summarizes its last screen into a one-line, human-readable label — *"running tests, 2 failing"* or *"waiting: overwrite config.json?"*. Pick a provider:
-  - **Local (zero-config, recommended)** — just run a local server and Pulse auto-detects it. `ollama serve` + `ollama pull llama3.2:3b` is all it takes — fully offline, no key, no env var, and it works for a double-clicked app too. Auto-detect looks for an OpenAI-compatible server at `http://localhost:11434/v1`.
-  - **Local on a custom endpoint** — point Pulse anywhere (a different port, LM Studio, llama.cpp, a remote box) with `CONCOURSE_PULSE_BASE_URL`. This always wins over auto-detect and the Anthropic key.
-  - **Anthropic** — set `ANTHROPIC_API_KEY` (defaults to `claude-haiku-4-5`). Used only when no local server is reachable; a running local server is preferred.
+- **Layer B (optional, model-powered):** when a pane goes quiet, Concourse summarizes its last screen into a one-line, human-readable label — *"adding token refresh to the login flow"* or *"indexing the repository, about 40% done"*. Configure it in **Settings** (`⌘,`) — no env vars required — or through the environment for headless use:
+  - **Local (zero-config, default)** — Pulse runs entirely on your machine: free, offline, no key. If you have **Ollama** installed it's used directly; otherwise the app falls back to a small **bundled llama.cpp server** and fetches a tiny model (`qwen2.5:0.5b`, ~400 MB) on first use. You don't run `ollama serve` or paste a URL — Concourse starts the server itself, so it works even for a double-clicked app that never sees your shell's exported env. The footprint is deliberately capped (2K context, short keep-alive) so Pulse sips resources instead of cooking the machine.
+  - **Local on a custom endpoint** — point Pulse at any OpenAI-compatible server (a different port, LM Studio, llama.cpp, a remote box) in Settings or with `CONCOURSE_PULSE_BASE_URL`. This wins over auto-detect.
+  - **Anthropic** — add an `ANTHROPIC_API_KEY` (in Settings or the env); default model `claude-haiku-4-5`. Used only when no local server is reachable.
   - **None available?** Layer A still runs. Pulse never blocks, never crashes the app, and the API key never touches the renderer.
 
-Override the model with `CONCOURSE_PULSE_MODEL`.
+Override the model in Settings or with `CONCOURSE_PULSE_MODEL`; turn Pulse off entirely in Settings.
 
 ### Beginner and Expert modes
 
-The same app meets you where you are. Beginner mode injects a calm prompt (`folder ❯`), uses friendly tab names, and keeps the surface uncluttered. Expert mode leaves your shell, prompt, and environment exactly as you've configured them and uses conventional naming. The mode is a foundation that more of the UI will branch on over time.
+The same app meets you where you are. Beginner mode injects a calm prompt (`folder ❯`), uses friendly tab names, keeps the surface uncluttered, and turns `⌘T` into an agent launcher (Claude Code / Codex / plain shell). Expert mode leaves your shell, prompt, and environment exactly as you've configured them, uses conventional naming, and opens a bare shell on `⌘T`. The mode is a foundation that more of the UI will branch on over time.
 
 ### The IDE around it
 
@@ -104,6 +118,8 @@ Concourse is a full workbench, not just a terminal grid:
 - **Source Control** — VS Code-style git: branch and ahead/behind in the status bar, staged / changed groups, stage · unstage · discard, a commit box (`⌘Enter`), and click-to-open inline diffs.
 - **Editor** — Monaco with multi-file tabs, dirty indicators, `⌘S` to save, broad syntax highlighting, and read-only git diff tabs.
 - **Search** — fast workspace-wide search with case / whole-word / regex toggles; click a result to jump to the exact line.
+- **Command palette (`⌘K`)** — a type-to-run launcher: your ♥ favorites, the open project's npm / just / make scripts, and your most-used shell commands (frecency-ranked). It types the command onto the active prompt for you to run — and in Beginner mode adds a plain-language cheatsheet.
+- **Settings (`⌘,`)** — choose your Pulse provider and model and manage the local model, all in-app without touching env vars.
 - **Welcome & Recents** — reopen recent projects in a click; the last workspace and its layout restore automatically on launch.
 - **Session restore** — tab labels, layout, open editor tabs, and panel sizes come back per workspace. (Live process state intentionally does not — agents are relaunched fresh.)
 
@@ -115,22 +131,31 @@ Per-feature modules with hard contracts: IPC channel names defined in `preload`,
 src/
   main/                 Electron main process
     index.js            window creation + register*(ctx) wiring
+    menu.js             app menu + Settings window
     context.js          shared workspace-root / window state
     ipc-workspace.js    open / get folder, recents
-    ipc-fs.js           file CRUD
+    ipc-fs.js           file CRUD + file watching
     ipc-git.js          simple-git status / diff / stage / commit
-    ipc-search.js       workspace-wide search
+    ipc-search.js       workspace-wide search (worker-backed)
     ipc-pty.js          node-pty terminals
     ipc-pulse.js        per-pane state + model-powered summaries
+    ipc-commands.js     command-palette sources (favorites / scripts / history)
+    ipc-settings.js     Settings store + window
     ipc-session.js      per-workspace session persistence
+    local-llm.js        local model runtime (Ollama / bundled llama.cpp)
+    …                   plus ipc-model, ipc-shell, recents, watcher
   preload/index.js      window.api contract (built to out/preload/index.mjs)
   renderer/
-    main.js             boot + activity bar + pane resizing + wiring
+    main.js             boot + activity bar + keybindings + pane resizing + wiring
     terminals.js        the multiplexer — tabs, grid, stack, flow, Pulse, attention
     fileTree.js         explorer
     git.js              source control panel
     editor.js           Monaco tabs + diff
     search.js           search panel
+    commandPalette.js   ⌘K command launcher
+    settings.js         Settings window UI
+    localLlmSetup.js    first-run local-model setup
+    beginnerHud.js      Beginner-mode coach / legend
     welcome.js          welcome / recents screen
     *.css               one stylesheet per module
 ```
@@ -139,7 +164,7 @@ Built on Electron + Monaco + xterm.js + node-pty — the same core tech as VS Co
 
 ## Roadmap
 
-- **Curated agent presets** — one-click "new Claude Code / Codex session here" from the new-terminal menu (the spawn infrastructure already exists; the picker UI is next).
+- **Curated agent presets** — Beginner mode's `⌘T` already launches Claude Code / Codex / a shell; bring that picker to Expert mode with saved presets and per-project defaults.
 - **Deeper mode differences** — more of the UI gated on Beginner vs Expert.
 - **Richer git** — branch switching, push / pull, stash.
 - **Fleet arrangements** — purpose-built layouts for 10+ agents and a queue for pending work.
