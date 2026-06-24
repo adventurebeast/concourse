@@ -148,10 +148,18 @@ function pickIdx() {
 // GRID: figure dimensions in dots (6 wide × 4 tall). Used to lay out the SVG dot matrix.
 export const GRID = { w: W, h: H, n: N }
 
-// RESTING_GRID / STATIC_GRID: the FULL figure — every dot on, static. RESTING is what a pane
-// shows when NOT working (CSS greys it); STATIC is the frozen working frame for reduced motion.
+// RESTING_GRID: the FULL figure — every dot on, static. What a pane shows when NOT working
+// (CSS greys it). STATIC_GRID: the frozen working frame for reduced motion — DELIBERATELY a
+// DIFFERENT shape from RESTING_GRID (a centre ellipsis row, not the full block) so that with
+// animation disabled a working pane is still distinguishable from a resting one by SHAPE, not
+// by colour alone (the colour delta collapses to a faint alpha on the active tab). MIN_WORKING_GRID:
+// the non-empty floor for animated frames — several effects render an all-off frame on some ticks
+// (heartbeat is blank ~10 of every 14), which would blink the indicator to "nothing" mid-work;
+// the ticker swaps an empty frame for this single centre dot so a working slot is never empty.
+const at = (x, y) => y * W + x
 export const RESTING_GRID = (() => { const g = blank(); for (let i = 0; i < N; i++) g[i] = 1; return g })()
-export const STATIC_GRID = RESTING_GRID
+export const STATIC_GRID = (() => { const g = blank(); for (const x of [1, 3, 5]) g[at(x, 2)] = 1; return g })()
+export const MIN_WORKING_GRID = (() => { const g = blank(); g[at(2, 2)] = 1; return g })()
 
 // createThinker(): one animator per pane. It holds a single current effect (+ its per-phase
 // scratch state) and draws that ONE pattern. Call pick() on the rest→work edge to advance to

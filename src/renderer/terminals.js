@@ -5,7 +5,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { icon } from './icons.js'
 import { coachOnce } from './toast.js'
 import { matchesAwaitPrompt } from './pulse-detect.js'
-import { RESTING_GRID, STATIC_GRID, createThinker } from './braille-thinker.js' // working-figure engine
+import { RESTING_GRID, STATIC_GRID, MIN_WORKING_GRID, createThinker } from './braille-thinker.js' // working-figure engine
 import { makeFigure, paint } from './dot-figure.js' // SVG dot-matrix renderer for the figure
 import { colorsFor } from './term-palettes.js'
 
@@ -760,6 +760,15 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       // (A pane created already-working uses the thinker's initial pick; this covers re-waking.)
       s.thinker.pick()
       s.workT = 0
+      // Paint frame 0 NOW so the rest→work edge shows an actual working frame immediately,
+      // not the stale full resting block until the ticker's next tick (up to FRAME_MS later) —
+      // and so a pane that wakes while the window is hidden (ticker paused) is already correct
+      // the instant the window returns. updateIndicators below skips the figure while working.
+      paintWorking(s)
+      // Always have a scheduled path back to rest. classifyOutput re-arms this on each visible
+      // burst, but a preset/launcher pane (or any working entry that produces no further visible
+      // change) would otherwise animate forever with no timer ever armed.
+      armSettle(s)
     }
     // Leaving the awaiting state (resumed working, settled to idle) makes any awaiting
     // notification + title flag posted for this pane stale — tell the host to clear that
@@ -794,11 +803,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // `.dot.working` and early-returns when nothing is working, so the LAST pane to settle
     // would otherwise keep a stale animation frame — this is the one funnel every state change
     // routes through, so paint the resting figure here.
-    if (s.state !== 'working') {
-      paint(s.tabDot.firstElementChild, RESTING_GRID)
-      paint(s.cellDot.firstElementChild, RESTING_GRID)
-      paint(s.stubDot.firstElementChild, RESTING_GRID)
-    }
+    if (s.state !== 'working') paintFigure(s, RESTING_GRID)
     // A just-in-time reminder of what the state means, surfaced on hover — beginner
     // only, so Expert stays a bare shell. The status-bar fleet count carries the full
     // Pulse legend; this is just the hover gloss.
@@ -956,6 +961,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       pinning: false, // guard: true only while WE scroll programmatically, so the onScroll
       //               below never mistakes our own re-pin (or a reflow) for a user scroll-up.
       summaryText: null, // last Layer-B label (the model's one-line summary)
+      lastScreenSig: null, // signature of the last VISIBLE screen — drives the settle debounce
+      //                      so output that doesn't change what's on screen (a blinking cursor,
+      //                      OSC-title pings, a no-op redraw) can't pin the pane in `working`
       lastSummaryHash: null, // hash of the last tail summarised at rest — skip no-op repeats
       lastLiveHash: null, // hash of the last tail the working heartbeat summarised — kept
       //                     separate from lastSummaryHash so a live re-label never suppresses
@@ -981,6 +989,15 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     labelResizeObserver.observe(tabLabel) // re-measure the hover-marquee on width changes
     labelResizeObserver.observe(cellLabel)
     updateIndicators(s) // paint the initial working/idle tab tint
+    // A preset pane starts `working` by literal (not via setState), so give it what the
+    // rest→work edge gives every other working pane: an actual first frame (else it shows the
+    // full resting block until the ticker's first tick) and an armed settle (else a preset
+    // whose screen never changes again — a hung or silent command — would animate forever with
+    // no timer to ever bring it to rest). classifyOutput re-arms this on real output.
+    if (command) {
+      paintWorking(s)
+      armSettle(s)
+    }
 
     // Beginner-only empty-pane launcher: greet a brand-new user's first pane with
     // "Launch an agent here" instead of a mute prompt. Never on restored panes
@@ -1622,15 +1639,46 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   api.term.onData(({ id, data }) => {
     const s = sessions.get(id)
     if (!s) return
-    s.term.write(data, () => pinBottom(s))
+    // Classify AFTER the write is parsed into the buffer (the callback), so the working /
+    // settle decision reads the post-write screen. pinBottom keeps scroll-follow regardless.
+    s.term.write(data, () => {
+      pinBottom(s)
+      classifyOutput(s)
+    })
+  })
+  // Decide what an output burst means for the pane's state. Driven off VISIBLE screen change,
+  // not raw bytes: an agent parked at its prompt keeps emitting bytes that don't alter the
+  // rendered screen (a blinking cursor, OSC-title pings, a no-op repaint), and if every such
+  // byte reset the settle debounce the pane would stay `working` forever — the braille spinner
+  // that never rests. So a burst that leaves the screen identical is ignored entirely: no
+  // working entry, no timer reset, letting the already-armed idle timer fire and settle.
+  function classifyOutput(s) {
+    // A deferred write callback can land AFTER the pane exited (xterm flushes its parse queue
+    // async; onExit may have run in between). The exit handler owns the final state — never let
+    // a late burst relight the spinner or arm a timer on a dead pane.
+    if (s.status === 'exited') return
     // A fresh, untouched shell only emits startup chrome — its prompt, or an
     // auto-injected `cd … && clear` from cdInto(). That isn't work, so don't let it
     // start the indicator. Only a pane the user has driven (s.used) or an agent preset
     // (!isShell) counts as working; an unused shell stays idle until used.
     if (s.isShell && !s.used) return
-    // Output ⇒ working (pulse). Each byte resets the settle debounce, so the pane
-    // stays working across the sub-second gaps in a turn and only settles
-    // IDLE_AFTER_MS after output truly stops.
+    // The settle debounce is keyed to the SCREEN, not the byte stream. An unchanged screen
+    // means the program isn't actually doing anything visible (cursor blink / OSC ping /
+    // no-op redraw) — don't keep it working and don't postpone the settle.
+    const sig = screenSig(s)
+    if (sig === s.lastScreenSig) return
+    s.lastScreenSig = sig
+    // A parked decision prompt (y/N, password, a numbered menu) is REST by definition — even
+    // if a counter/clock keeps ticking BESIDE it (an agent's "esc to interrupt · 12s" status,
+    // a live token meter). Such a tail keeps screenSig changing every burst, which would
+    // otherwise re-arm the debounce forever and pin the pane in `working`. Treat it like a
+    // no-change burst: don't re-arm. Just guarantee a settle is scheduled so the idle timer
+    // classifies it as awaiting. (looksAwaitingPrompt is end-anchored — it won't match an
+    // agent's empty input box mid-work, so this can't false-rest an actively working pane.)
+    if (looksAwaitingPrompt(s)) {
+      if (!s.idleTimer) armSettle(s)
+      return
+    }
     if (s.state !== 'working') {
       // Don't let the prompt's echo of your own keystrokes start the spinner: output within
       // ECHO_GRACE_MS of the last key you pressed is almost certainly that echo, not work.
@@ -1650,7 +1698,15 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       // finally names itself at the exact moment it has meaning. Once ever, never expert.
       if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
     }
-    // New output ⇒ not at rest: cancel both settle timers, then re-arm the fast one.
+    // Visible change ⇒ not at rest: (re-)arm the fast settle debounce.
+    armSettle(s)
+  }
+  // Arm (or re-arm) the settle debounce: IDLE_AFTER_MS after the last VISIBLE activity, classify
+  // the pane at rest. Shared by every visible-change burst (classifyOutput) AND the working-entry
+  // edge (setState), so a pane that enters `working` ALWAYS has a scheduled path back to rest —
+  // even a preset/launcher whose screen never changes again would otherwise animate forever with
+  // no timer ever armed (the lazy per-burst arm never fires if nothing visible changes).
+  function armSettle(s) {
     clearTimeout(s.idleTimer)
     clearTimeout(s.quietTimer)
     s.quietTimer = null
@@ -1675,7 +1731,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       }
       summarize(s) // Layer B: refine the label, and may promote idle→awaiting
     }, IDLE_AFTER_MS)
-  })
+  }
   api.term.onExit(({ id }) => {
     const s = sessions.get(id)
     if (!s) return
@@ -1720,6 +1776,30 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function hashStr(str) {
     let h = 0
     for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0
+    return h
+  }
+  // A cheap signature of what's CURRENTLY ON SCREEN: every visible viewport row, hashed.
+  // Used to decide whether an output burst is real work or just noise. An agent parked at
+  // its prompt keeps emitting bytes that DON'T change the rendered screen — a blinking
+  // cursor (drawn by the terminal, not a buffer cell), OSC-title updates, a periodic no-op
+  // repaint — and if every byte reset the settle debounce the pane would stay `working`
+  // forever (the spinner that never rests). The cursor's blink and position aren't part of
+  // the cell text translateToString returns, so a stable screen hashes the same every burst.
+  function screenSig(s) {
+    const buf = s.term.buffer.active
+    const top = buf.baseY // hash the visible viewport (alt-screen TUIs repaint across it)
+    // Seed with the absolute cursor line so output that SCROLLS the buffer counts as activity
+    // even when the visible rows repeat byte-for-byte (a program redrawing the same bottom line
+    // in place while real work scrolls above it). A blinking cursor doesn't move baseY/cursorY,
+    // so this doesn't reintroduce the cursor-blink false-change the screen hash exists to avoid.
+    let h = (buf.baseY + buf.cursorY) | 0
+    for (let i = 0; i < s.term.rows; i++) {
+      const line = buf.getLine(top + i)
+      if (!line) continue
+      const str = line.translateToString(true)
+      for (let j = 0; j < str.length; j++) h = (h * 31 + str.charCodeAt(j)) | 0
+      h = (h * 31 + 10) | 0 // row delimiter so shifted content can't alias to the same hash
+    }
     return h
   }
   // Sends the pane's visible tail to the model and writes back a one-line label. Called
@@ -1824,21 +1904,38 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     }
   }, WORKING_PULSE_MS)
 
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)')
+  // Paint one grid into a pane's three dot figures (tab / cell-header / stub) at once — the
+  // single place that writes the figure, so resting (updateIndicators), the rest→work edge
+  // (setState) and the animation tick all stay in lock-step.
+  function paintFigure(s, grid) {
+    paint(s.tabDot.firstElementChild, grid)
+    paint(s.cellDot.firstElementChild, grid)
+    paint(s.stubDot.firstElementChild, grid)
+  }
+  // Paint the CURRENT working frame for a pane (does not advance the clock — the ticker owns
+  // s.workT++). Reduced motion shows the static figure; otherwise the thinker's frame, with a
+  // single-dot floor so an effect's all-off ticks (heartbeat is blank most of its cycle) never
+  // blink the indicator to "nothing" while the pane is genuinely working.
+  function paintWorking(s) {
+    if (reduceMotion.matches) { paintFigure(s, STATIC_GRID); return }
+    let grid = s.thinker.draw(s.workT)
+    if (!grid.some((v) => v)) grid = MIN_WORKING_GRID
+    paintFigure(s, grid)
+  }
+
   // ---- working-figure animation ticker ----
   // One global ticker advances every WORKING pane's own thinker and paints the frame into its
   // three dot figures (tab / cell-header / stub). Each pane shows the ONE pattern picked for
   // this working phase (in setState on the rest→work edge); resting figures are painted once on
-  // the edge (updateIndicators), not here. Reduced motion freezes on the full static figure.
+  // the edge (updateIndicators), not here. Reduced motion freezes on the static figure.
   const FRAME_MS = 130 // animation cadence — slowed slightly for a calmer, more readable figure
-  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)')
   const animTimer = setInterval(() => {
     if (document.hidden) return // background window: don't burn CPU
     for (const s of sessions.values()) {
       if (s.state !== 'working') continue
-      const grid = reduceMotion.matches ? STATIC_GRID : s.thinker.draw(++s.workT)
-      paint(s.tabDot.firstElementChild, grid)
-      paint(s.cellDot.firstElementChild, grid)
-      paint(s.stubDot.firstElementChild, grid)
+      s.workT++
+      paintWorking(s)
     }
   }, FRAME_MS)
 
