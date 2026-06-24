@@ -1,0 +1,26 @@
+<svg viewBox="0 0 1024 1024" width="1024" height="1024" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<clipPath id="sq"><rect x="40" y="40" width="944" height="944" rx="212"/></clipPath>
+<linearGradient id="cei" gradientUnits="userSpaceOnUse" x1="512" y1="70" x2="512" y2="430"><stop offset="0" stop-color="#cfcfcf"/><stop offset="1" stop-color="#a6a6a6"/></linearGradient>
+<linearGradient id="flo" gradientUnits="userSpaceOnUse" x1="512" y1="954" x2="512" y2="520"><stop offset="0" stop-color="#6c6c6c"/><stop offset="1" stop-color="#9a9a9a"/></linearGradient>
+<linearGradient id="lft" gradientUnits="userSpaceOnUse" x1="70" y1="512" x2="452" y2="512"><stop offset="0" stop-color="#7c7c7c"/><stop offset="1" stop-color="#a0a0a0"/></linearGradient>
+<linearGradient id="rgt" gradientUnits="userSpaceOnUse" x1="954" y1="512" x2="572" y2="512"><stop offset="0" stop-color="#525252"/><stop offset="1" stop-color="#767676"/></linearGradient>
+<radialGradient id="open" cx=".5" cy=".45" r=".75"><stop offset="0" stop-color="#fbfbfb"/><stop offset="1" stop-color="#c4c4c4"/></radialGradient>
+<radialGradient id="glow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#ffffff" stop-opacity=".9"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+</defs>
+<g clip-path="url(#sq)">
+<rect x="40" y="40" width="944" height="944" fill="#181818"/>
+<polygon points="70,70 954,70 572,430 452,430" fill="url(#cei)"/>
+<polygon points="70,954 954,954 572,520 452,520" fill="url(#flo)"/>
+<polygon points="70,70 452,430 452,520 70,954" fill="url(#lft)"/>
+<polygon points="954,70 572,430 572,520 954,954" fill="url(#rgt)"/>
+<ellipse cx="512" cy="468" rx="240" ry="170" fill="url(#glow)"/>
+<rect x="489" y="884" width="46" height="40" rx="11.200000000000001" fill="#f4f4f4"/><rect x="493.5" y="804" width="37" height="31" rx="8.680000000000001" fill="#f4f4f4"/><rect x="497.5" y="736" width="29" height="24" rx="6.720000000000001" fill="#f4f4f4"/><rect x="501" y="678" width="22" height="18" rx="5.040000000000001" fill="#f4f4f4"/><rect x="504" y="632" width="16" height="13" rx="3.6400000000000006" fill="#f4f4f4"/><rect x="506" y="596" width="12" height="10" rx="2.8000000000000003" fill="#f4f4f4"/><rect x="507.5" y="566" width="9" height="7" rx="2" fill="#f4f4f4"/>
+<rect x="452" y="430" width="120" height="90" rx="10" fill="url(#open)"/>
+<g stroke="#000000" stroke-width="2.5" fill="none" opacity=".5">
+<line x1="70" y1="70" x2="452" y2="430"/>
+<line x1="954" y1="70" x2="572" y2="430"/>
+<line x1="70" y1="954" x2="452" y2="520"/>
+<line x1="954" y1="954" x2="572" y2="520"/></g>
+<rect x="40" y="40" width="944" height="6" fill="#fff" opacity=".10"/>
+</g></svg>

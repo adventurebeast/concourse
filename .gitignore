@@ -20,5 +20,7 @@ _launch.md
 .idea/
 
 # Native build artifacts
-build/
+# Keep build/ (electron-builder buildResources: app icons) tracked, but ignore
+# build/bin — the large llama.cpp binaries vendored by `npm run fetch:llama`.
+build/bin/
 *.node
