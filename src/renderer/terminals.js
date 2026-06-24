@@ -2,6 +2,7 @@ import '@xterm/xterm/css/xterm.css'
 import './terminals.css'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { icon } from './icons.js'
 import { coachOnce } from './toast.js'
 import { matchesAwaitPrompt } from './pulse-detect.js'
@@ -784,17 +785,15 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   //   • "pulse" (default) — the whole tab tints in its identity hue and slowly
   //     *breathes* while working; holds a steady tint when awaiting/idle.
   //   • "dots" — a compact dot in the tab spins while working, rests when quiet.
-  // An `awaiting` pane that came to rest while you were elsewhere is also flagged
-  // `unseen` → a soft amber come-look pulse until you focus it. The grid / stack / flow
-  // pane headers always use the dot (no tab strip there). The same value feeds both AND
-  // the fleet summary, so they always agree.
+  // The grid / stack / flow pane headers always use the dot (no tab strip there). The same
+  // value feeds both AND the fleet summary, so they always agree. (An `awaiting` pane that
+  // came to rest while you were elsewhere still fires the OS notification via onAwait below;
+  // it no longer paints any amber "come-look" cue on the tab — that was removed.)
   function updateIndicators(s) {
     s.tabEl.dataset.state = s.state // pulse style: breathing vs steady tab tint
     s.cell.dataset.state = s.state // grid/stack/flow: unfocused header breathes while working
     s.stub.dataset.state = s.state
-    if (s.unseen) s.tabEl.dataset.unseen = '1'
-    else delete s.tabEl.dataset.unseen
-    const cls = 'dot ' + s.state + (s.unseen ? ' unseen' : '')
+    const cls = 'dot ' + s.state
     s.tabDot.className = cls // dots style: the in-tab status dot
     s.cellDot.className = cls
     s.stubDot.className = cls
@@ -936,6 +935,13 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
+    // Make plain http(s):// URLs in output clickable. Gated on ⌘/Ctrl (like VS Code)
+    // so an ordinary click still places the cursor / selects text without opening a
+    // browser. window.open routes through the main process's setWindowOpenHandler,
+    // which opens the URL externally and denies any in-app window.
+    term.loadAddon(new WebLinksAddon((event, uri) => {
+      if (event.metaKey || event.ctrlKey) window.open(uri)
+    }))
     term.open(cellBody)
     fit.fit()
 

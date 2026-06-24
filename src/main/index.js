@@ -26,6 +26,23 @@ const watchers = createWatchers()
 // Tears down the PTYs owned by one window (set once the PTY layer is registered).
 let killPtysForWindow = null
 
+// Open a URL in the user's default browser, but only for safe web schemes.
+// Every window's setWindowOpenHandler funnels through here, so a window.open from
+// any source (a terminal link, an editor preview, an <a target=_blank>) can only
+// ever reach the OS with http/https/mailto — never file:, vscode:, or other
+// protocol-handler URLs that could be abused to launch local apps.
+function openExternalSafely(url) {
+  let scheme
+  try {
+    scheme = new URL(url).protocol
+  } catch {
+    return // unparseable URL — ignore
+  }
+  if (scheme === 'http:' || scheme === 'https:' || scheme === 'mailto:') {
+    shell.openExternal(url)
+  }
+}
+
 // Set once the user has confirmed an app quit (Cmd+Q / menu Quit), so the window
 // 'close' handlers that fire as part of the quit cascade don't prompt a second time.
 let quitConfirmed = false
@@ -162,7 +179,7 @@ function createWindow({ fresh = false } = {}) {
     if (mod && input.key && input.key.toLowerCase() === 'r') event.preventDefault()
   })
   win.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    openExternalSafely(details.url)
     return { action: 'deny' }
   })
   win.on('closed', () => {
@@ -218,7 +235,7 @@ function openSettingsWindow() {
     settingsWin = null
   })
   settingsWin.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    openExternalSafely(details.url)
     return { action: 'deny' }
   })
 

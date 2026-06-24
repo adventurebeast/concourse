@@ -650,37 +650,12 @@ html:not([data-tab-status='dots']) .term-tab.active[data-state='working'] .term-
   animation: thinking-shimmer 1.7s ease-in-out infinite;
 }
 /* Tab background is now TWO states only: dark (focused) and light (unfocused). The
-   working spinner + label shimmer carry "working", and the amber come-look underline
-   (data-unseen) carries "stopped for you while you were away" — so `awaiting` no longer
-   recolours the tab. An unfocused awaiting tab stays the light wash like every other
-   unfocused tab; the focused one keeps the dark focus fill. */
+   working spinner + label shimmer carry "working"; `awaiting` no longer recolours the
+   tab. An unfocused awaiting tab stays the light wash like every other unfocused tab; the
+   focused one keeps the dark focus fill. (The OS notification on the working→awaiting edge
+   still fires — see onAwait in terminals.js — there's just no amber tab bar nagging too.) */
 .term-tab.active[data-state='awaiting'] {
   background: var(--tone-focus);
-}
-/* Unseen come-look: it went awaiting while you were elsewhere. A slow amber underline
-   glow pulses to pull you back — inset, so the tab strip's overflow never clips it — and
-   stops the instant you focus the pane (data-unseen cleared in activate()). Amber, not
-   the identity hue, so "needs you" reads even across a same-colour wall of tabs. Drawn on
-   ::before (an unseen tab is never the active one — focusing clears unseen — so it doesn't
-   clash with the .active::before underline). The colour is STATIC and only its OPACITY
-   animates (a pure number, which interpolates); putting a var() inside the keyframe makes
-   it a pending-substitution value that steps discretely — a hard blink, not a glow (the
-   same trap the --pulse-t breathe above sidesteps). */
-@keyframes tab-await-unseen {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.2; }
-}
-html:not([data-tab-status='dots']) .term-tab[data-unseen='1']::before {
-  content: '';
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 0;
-  height: 2.5px;
-  border-radius: 2px;
-  background: var(--orange);
-  box-shadow: 0 0 6px 0 var(--orange);
-  animation: tab-await-unseen 1.5s ease-in-out infinite;
 }
 /* Hairline divider between adjacent inactive tabs — short, centred, faint. */
 .term-tab::after {
