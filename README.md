@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/icon.png" alt="Concourse app icon" width="128" />
+
 # Concourse
 
 **The command center for your fleet of CLI coding agents.**
