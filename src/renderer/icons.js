@@ -51,6 +51,8 @@ const PATHS = {
   close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   flow:
     '<rect x="2.5" y="7" width="3.5" height="10" rx="1"/><rect x="8.5" y="3.5" width="7" height="17" rx="1"/><rect x="18" y="7" width="3.5" height="10" rx="1"/>',
+  deck:
+    '<rect x="3" y="3" width="18" height="10.5" rx="1"/><rect x="3" y="16" width="5" height="5" rx="1"/><rect x="9.5" y="16" width="5" height="5" rx="1"/><rect x="16" y="16" width="5" height="5" rx="1"/>',
   sun:
     '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
   moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',

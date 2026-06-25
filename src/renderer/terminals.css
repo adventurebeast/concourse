@@ -144,17 +144,34 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
   background: var(--bg-panel);
 }
 
-/* ---------- Master-stack: big primary + rail of live tiles ---------- */
+/* ---------- Master-stack (side rail) & Master-deck (bottom rail) ----------
+   The same layout on two axes: a flex primary (flex:1) beside (stack) or above (deck)
+   a scrollable rail of compact preview tiles. The rail (.term-rail) is its OWN scroll
+   container, so the primary stays put while the rail scrolls; JS fixes each tile to
+   --rail-tile px (sizeRail / appearance.railVisibleTiles) so tiles never shrink below a
+   readable floor — past the visible count the rail overflows instead. */
 #term-panes.stack {
-  display: grid;
-  grid-template-columns: 1fr clamp(200px, 26%, 320px);
-  grid-template-rows: repeat(var(--stack-rows, 1), minmax(96px, 1fr));
-  grid-auto-flow: row;
+  display: flex;
+  flex-direction: row;
   gap: 1px;
   background: var(--border);
-  overflow-y: auto;
+  overflow: hidden;
 }
-#term-panes.stack .term-cell {
+#term-panes.deck {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border);
+  overflow: hidden;
+}
+/* The primary pane is the one cell that's a direct child of #term-panes (the rail's
+   tiles are nested in .term-rail), so it fills whatever the rail doesn't take. */
+#term-panes.stack > .term-cell,
+#term-panes.deck > .term-cell {
+  flex: 1 1 auto;
+}
+#term-panes.stack .term-cell,
+#term-panes.deck .term-cell {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -162,32 +179,68 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
   min-height: 0;
   background: var(--bg-panel);
 }
-/* Rail tiles (everything that isn't the active primary) read as compact,
-   clickable previews — dimmed until hovered, click to promote. */
-#term-panes.stack .term-cell:not(.active) {
+
+/* The rail: hidden until a stack/deck layout moves tiles into it; an empty rail (the
+   lone-pane case) collapses so the primary fills everything. */
+.term-rail {
+  display: none;
+  gap: 1px;
+  background: var(--border);
+}
+#term-panes.stack > .term-rail {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 clamp(200px, 26%, 320px);
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+#term-panes.deck > .term-rail {
+  display: flex;
+  flex-direction: row;
+  flex: 0 0 clamp(110px, 22%, 190px);
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+#term-panes.stack > .term-rail:empty,
+#term-panes.deck > .term-rail:empty {
+  display: none;
+}
+/* Rail tiles + the active session's stub: fixed along the scroll axis (--rail-tile,
+   set by sizeRail), filling the cross axis. flex:0 0 means no grow/shrink, so once the
+   tiles overflow the rail scrolls rather than squeezing everything thinner. */
+.term-rail > .term-cell,
+.term-rail > .term-stub.on {
+  flex: 0 0 var(--rail-tile, 110px);
+  min-width: 0;
+  min-height: 0;
+}
+/* Tiles read as compact, clickable previews — dimmed until hovered, click to promote. */
+.term-rail .term-cell {
   cursor: pointer;
   opacity: 0.78;
   transition: opacity 0.12s ease;
 }
-#term-panes.stack .term-cell:not(.active):hover {
+.term-rail .term-cell:hover {
   opacity: 1;
 }
-#term-panes.stack .term-cell:not(.active) .cell-body {
+.term-rail .term-cell .cell-body {
   /* The rail is for glanceable awareness; the primary is where you interact. */
   pointer-events: none;
 }
-/* Rail stub: holds the active terminal's slot in the rail while its live view is
-   maximized in the primary. Hidden by default; only shown (.on) in stack layout. */
+/* Rail stub: holds the active terminal's slot in the rail while its live view is the
+   primary. Hidden by default; only shown (.on) once placed in the rail. */
 .term-stub {
   display: none;
 }
-#term-panes.stack .term-stub.on {
+.term-rail .term-stub.on {
   display: flex;
   /* The stub fills the active terminal's whole rail slot (so the tint below marks
      which pane is maximized), but its title must sit at the TOP — level with the
-     live rail tiles' headers — not floating in the slot's vertical middle. Wrap +
-     align-content pins the title line to the top; align-items keeps the dot/label
-     centred within that line just like a real cell-header. */
+     live rail tiles' headers — not floating in the slot's middle. Wrap + align-content
+     pins the title line to the top; align-items keeps the dot/label centred within
+     that line just like a real cell-header. */
   flex-wrap: wrap;
   align-content: flex-start;
   align-items: center;
@@ -199,7 +252,7 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
   border-left: 2px solid var(--term-color, var(--accent));
   box-shadow: inset 0 0 0 9999px color-mix(in srgb, var(--term-color, var(--accent)) 8%, transparent);
 }
-#term-panes.stack .term-stub .stub-label {
+.term-rail .term-stub .stub-label {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -208,7 +261,7 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
   font-size: 12px;
   color: var(--fg);
 }
-#term-panes.stack .term-stub .stub-max {
+.term-rail .term-stub .stub-max {
   display: inline-flex;
   opacity: 0.6;
   color: var(--term-color, var(--accent));

@@ -48,7 +48,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     fontFamily: 'Menlo, Monaco, "SF Mono", "Courier New", monospace',
     cursorBlink: true,
     scrollback: 10000,
-    confirmClose: true // show the close-confirmation dialog (terminal.confirmClose)
+    confirmClose: true, // show the close-confirmation dialog (terminal.confirmClose)
+    // Master-stack / master-deck: how many secondary terminals fit in the rail before
+    // it scrolls. Tiles are sized to track/visible so they never shrink below a readable
+    // floor — past this count the rail scrolls instead (appearance.railVisibleTiles).
+    railVisibleTiles: 6
   }
   let activeId = null
   let counter = 0
@@ -57,7 +61,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // has it with no flash). A restored workspace overrides this via setLayout() with
   // its own last-used layout, so per-workspace memory still wins.
   const DEFAULT_LAYOUT_KEY = 'concourse-default-layout'
-  const VALID_LAYOUTS = ['tabs', 'grid', 'stack', 'flow']
+  const VALID_LAYOUTS = ['tabs', 'grid', 'stack', 'deck', 'flow']
   const savedDefaultLayout = localStorage.getItem(DEFAULT_LAYOUT_KEY)
   let layout = VALID_LAYOUTS.includes(savedDefaultLayout) ? savedDefaultLayout : 'tabs'
   let flowIndex = 0 // which session sits in the centre in 'flow' (album) layout
@@ -69,6 +73,14 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   let headerCustom = '' // raw user input for the 'custom' palette
   let activeColors = colorsFor(headerPalette, themeName, headerCustom)
   panesEl.classList.add(layout)
+  // The rail: a dedicated scroll container that holds the secondary terminal tiles in
+  // the master-stack (vertical, right) and master-deck (horizontal, bottom) layouts.
+  // It lives as a child of panesEl but stays display:none (CSS) until one of those
+  // layouts moves tiles into it — so the primary pane can stay put while the rail
+  // scrolls independently. Created once; resetCellStyles re-empties it on every switch.
+  const railEl = document.createElement('div')
+  railEl.className = 'term-rail'
+  panesEl.appendChild(railEl)
 
   // ---- pulse ----
   // Byte flow drives the base state: bytes ⇒ `working`; IDLE_AFTER_MS of silence after
@@ -121,7 +133,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   const LAYOUTS = [
     { mode: 'tabs', icon: 'square', tip: 'Tabs layout (one terminal)' },
     { mode: 'grid', icon: 'grid', tip: 'Grid layout (all terminals)' },
-    { mode: 'stack', icon: 'stack', tip: 'Master-stack layout (primary + rail)' },
+    { mode: 'stack', icon: 'stack', tip: 'Master-stack layout (primary + side rail)' },
+    { mode: 'deck', icon: 'deck', tip: 'Master-deck layout (primary + bottom rail · ⌘J)' },
     { mode: 'flow', icon: 'flow', tip: 'Album flow (centre + side previews · ⌥←/→ to cycle)' }
   ]
   const layoutBtns = new Map()
@@ -485,6 +498,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     panesEl.classList.toggle('grid', mode === 'grid')
     panesEl.classList.toggle('tabs', mode === 'tabs')
     panesEl.classList.toggle('stack', mode === 'stack')
+    panesEl.classList.toggle('deck', mode === 'deck')
     panesEl.classList.toggle('flow', mode === 'flow')
     syncLayoutBtn()
     // Entering flow: centre on whatever is currently active so it doesn't jump.
@@ -498,7 +512,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   }
   // Cycle through the layouts in their on-screen button order. Used by the
   // single-key layout cycler hotkey.
-  const LAYOUT_ORDER = ['tabs', 'grid', 'stack', 'flow']
+  const LAYOUT_ORDER = ['tabs', 'grid', 'stack', 'deck', 'flow']
   function cycleLayout(dir = 1) {
     const i = LAYOUT_ORDER.indexOf(layout)
     const next = LAYOUT_ORDER[((i + dir) % LAYOUT_ORDER.length + LAYOUT_ORDER.length) % LAYOUT_ORDER.length]
@@ -512,20 +526,29 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function applyLayout() {
     if (layout === 'grid') applyGrid()
     else if (layout === 'stack') applyStack()
+    else if (layout === 'deck') applyDeck()
     else if (layout === 'flow') applyFlow()
     else resetCellStyles()
   }
-  // Clear any inline placement / layout classes so the next layout starts clean.
+  // Clear any inline placement / layout classes so the next layout starts clean. Also
+  // flattens every cell + stub back to being a direct child of panesEl in session order
+  // (the master-stack/deck rail reparents some of them into railEl) and re-empties the
+  // rail. Re-appending in Map order preserves the DOM-order == tab-order invariant that
+  // grid/flow rely on; railEl is parked last so it never lands between cells.
   function resetCellStyles() {
     for (const s of sessions.values()) {
       s.cell.style.gridColumn = ''
       s.cell.style.gridRow = ''
       s.cell.style.order = ''
+      s.cell.style.flex = ''
       s.cell.classList.remove('flow-center', 'flow-prev', 'flow-next')
       s.stub.style.gridColumn = ''
       s.stub.style.gridRow = ''
       s.stub.classList.remove('on')
+      panesEl.appendChild(s.cell)
+      panesEl.appendChild(s.stub)
     }
+    panesEl.appendChild(railEl) // empty now → CSS :empty hides it outside stack/deck
   }
   function applyGrid() {
     resetCellStyles()
@@ -539,40 +562,58 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       if (last) last.cell.style.gridColumn = `span ${cols - remainder + 1}`
     }
   }
-  // Master-stack: the active session fills a big primary column on the left;
-  // every other session is a small live tile in a scrollable rail on the right.
-  // Clicking a rail tile promotes it (activate() re-runs this). A two-column CSS
-  // grid does the layout; we place each cell explicitly so insertion order in the
-  // rail is stable and the primary spans the full height.
+  // Master-stack (vertical rail, right) and master-deck (horizontal rail, bottom) are
+  // the same layout on different axes: the active session maximizes into the primary
+  // area (flex:1) and every other session is a small live tile in a scrollable rail.
+  // The active session keeps its slot in the rail too — a compact stub holds it so the
+  // order never reshuffles when you promote a tile (activate() re-runs this). The rail
+  // is its own scroll container (railEl), so the primary stays put while it scrolls;
+  // sizeRail() fixes each tile to track/visible px so tiles never shrink below a floor.
   function applyStack() {
+    applyRail()
+  }
+  function applyDeck() {
+    applyRail()
+  }
+  function applyRail() {
     resetCellStyles()
     const order = [...sessions.values()]
     const n = order.length
     if (!n) return
-    const rows = Math.max(1, n)
-    panesEl.style.setProperty('--stack-rows', rows)
     const active = sessions.get(activeId) || order[0]
-    const alone = n === 1
-    // Every terminal owns a fixed row in the rail (column 2) by its position in
-    // the list, so selecting one never reshuffles the others. The active terminal
-    // maximizes into the primary column (1) and a compact stub holds its rail row
-    // — it stays visible and clickable in the sidebar, just not live there.
-    order.forEach((s, i) => {
-      const isActive = s === active
-      if (isActive) {
-        s.cell.style.gridColumn = alone ? '1 / -1' : '1'
-        s.cell.style.gridRow = `1 / span ${rows}`
-        // When alone there's no rail to occupy; skip the stub entirely.
-        if (!alone) {
-          s.stub.classList.add('on')
-          s.stub.style.gridColumn = '2'
-          s.stub.style.gridRow = `${i + 1} / span 1`
-        }
+    // Alone: the primary fills everything and the rail stays empty (CSS :empty hides it).
+    if (n < 2) return
+    // The active session's live cell becomes the primary (a direct child of panesEl,
+    // sitting before the rail). Every session — including the active one, via its stub
+    // — gets a tile in the rail, in stable session order, so selecting never reshuffles.
+    panesEl.insertBefore(active.cell, railEl)
+    for (const s of order) {
+      if (s === active) {
+        s.stub.classList.add('on')
+        railEl.appendChild(s.stub)
       } else {
-        s.cell.style.gridColumn = '2'
-        s.cell.style.gridRow = `${i + 1} / span 1`
+        railEl.appendChild(s.cell)
       }
-    })
+    }
+    sizeRail()
+  }
+  // Fix each rail tile to track/visible px along the scroll axis so exactly
+  // railVisibleTiles fit before the rail scrolls — past that, tiles keep their size and
+  // the rail overflows instead of shrinking everything. Re-run on layout change, pane
+  // add/remove, settings change, and container resize (panesResizeObserver below).
+  const RAIL_TILE_MIN = { stack: 70, deck: 150 } // px floor per axis (vertical/horizontal)
+  function sizeRail() {
+    if (layout !== 'stack' && layout !== 'deck') return
+    const n = sessions.size
+    if (n < 2) return
+    const horizontal = layout === 'deck'
+    const track = horizontal ? panesEl.clientWidth : panesEl.clientHeight
+    if (!track) return // panel collapsed / not yet measurable — RO re-runs us later
+    const visible = Math.max(1, Math.round(termSettings.railVisibleTiles) || 1)
+    const slots = Math.min(visible, n)
+    const gap = 1 // matches the rail's CSS gap
+    const tile = Math.max(RAIL_TILE_MIN[layout], Math.floor((track - (slots - 1) * gap) / slots))
+    panesEl.style.setProperty('--rail-tile', tile + 'px')
   }
 
   // Album flow: the centred session is large and interactive; its neighbours sit
@@ -1180,10 +1221,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       sess.cell.classList.toggle('focused', on)
       sess.tabEl.classList.toggle('active', on)
     }
-    // In master-stack the active session IS the primary pane, so re-flow first so
+    // In master-stack/deck the active session IS the primary pane, so re-flow first so
     // paneRole sees it as primary when the fit below runs.
-    if (layout === 'stack') {
-      applyStack()
+    if (layout === 'stack' || layout === 'deck') {
+      applyLayout()
       // The clicked tile just became the primary pane; focus on the next tick once the
       // reflow has settled so a single click lands the cursor (same as album flow's
       // centerOn). Re-check the pane is still live — it may be closed within this tick.
@@ -1423,7 +1464,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function paneRole(s) {
     if (layout === 'tabs') return s.id === activeId ? 'primary' : 'hidden'
     if (layout === 'grid') return 'primary' // every grid cell is a real working surface
-    if (layout === 'stack') return s.id === activeId ? 'primary' : 'preview'
+    if (layout === 'stack' || layout === 'deck') return s.id === activeId ? 'primary' : 'preview'
     if (layout === 'flow') {
       if (s.cell.classList.contains('flow-center')) return 'primary'
       if (s.cell.classList.contains('flow-prev') || s.cell.classList.contains('flow-next')) return 'preview'
@@ -1585,6 +1626,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   const labelResizeObserver = new ResizeObserver((entries) => {
     for (const entry of entries) measureMarquee(entry.target)
   })
+  // The rail's tile size is a function of the panes container's size, so re-derive it
+  // whenever that box changes — window resize, panel drag, sidebar toggle. sizeRail()
+  // is a cheap no-op outside stack/deck, so observing unconditionally is fine.
+  const panesResizeObserver = new ResizeObserver(() => sizeRail())
+  panesResizeObserver.observe(panesEl)
 
   // ---- pty output -> terminal: drives the two-state (working/idle) indicator ----
   api.term.onData(({ id, data }) => {
@@ -1973,6 +2019,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (typeof opts.cursorBlink === 'boolean') termSettings.cursorBlink = opts.cursorBlink
     if (typeof opts.scrollback === 'number') termSettings.scrollback = opts.scrollback
     if (typeof opts.confirmClose === 'boolean') termSettings.confirmClose = opts.confirmClose
+    if (typeof opts.railVisibleTiles === 'number' && opts.railVisibleTiles > 0) {
+      termSettings.railVisibleTiles = opts.railVisibleTiles
+      sizeRail() // re-derive rail tile size live (no-op outside stack/deck)
+    }
     for (const s of sessions.values()) {
       if (fontChanged) {
         s.term.options.fontSize = termSettings.fontSize
@@ -2030,6 +2080,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     clearInterval(pulseStatusTimer)
     clearInterval(heartbeatTimer)
     clearInterval(animTimer)
+    panesResizeObserver.disconnect()
     window.removeEventListener('keydown', onFlowArrowKey)
     window.removeEventListener('dragover', swallowStrayFileDrag)
     window.removeEventListener('drop', swallowStrayFileDrag)

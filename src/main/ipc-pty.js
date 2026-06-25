@@ -7,6 +7,7 @@ import pty from 'node-pty'
 import { confine } from './paths.js'
 import { extractCommands } from './command-capture.js'
 import { recordCommand } from './command-history.js'
+import { getRaw } from './settings.js'
 
 // Private, per-app directory for the generated shell rc/init files. We write them
 // under userData (not the world-readable os.tmpdir()) with 0o700 so another local
@@ -36,6 +37,57 @@ function rcDir() {
     }
   }
   return dir
+}
+
+// The user's real login shell. process.env.SHELL is the right answer when present,
+// but a packaged app launched from Finder/Dock/`open` inherits the bare launchd
+// env where SHELL is UNSET — and falling straight back to /bin/zsh forced a
+// bash user into zsh (wrong prompt) AND skipped their bash profile, so PATH
+// additions like ~/.local/bin (where `claude` lives) vanished. os.userInfo()
+// reads the shell from the system password DB (getpwuid), so it recovers the true
+// login shell even with no SHELL var; /bin/zsh stays only as a last resort.
+function loginShell() {
+  if (process.env.SHELL) return process.env.SHELL
+  try {
+    const s = os.userInfo().shell
+    if (s && s !== '/dev/null') return s
+  } catch {
+    // No passwd entry (rare/sandboxed) — fall through to the OS default.
+  }
+  return '/bin/zsh'
+}
+
+// Named shells → the first install path that actually exists, so the friendly
+// "Bash"/"Zsh" Settings choices map to a real binary wherever it lives (system,
+// Homebrew, …) without the user typing a path.
+const SHELL_PATHS = {
+  bash: ['/bin/bash', '/opt/homebrew/bin/bash', '/usr/local/bin/bash', '/usr/bin/bash'],
+  zsh: ['/bin/zsh', '/opt/homebrew/bin/zsh', '/usr/local/bin/zsh', '/usr/bin/zsh']
+}
+function firstExisting(paths) {
+  for (const p of paths) {
+    try {
+      if (fs.existsSync(p)) return p
+    } catch {
+      // unreadable path — keep looking
+    }
+  }
+  return null
+}
+
+// The shell binary a new pane should launch, honoring the `terminal.shell`
+// setting and ALWAYS degrading to the auto-detected login shell when a choice is
+// unusable (a Custom path that doesn't exist, a named shell that isn't installed)
+// — a bad setting must never leave the user unable to open a terminal.
+function resolveShell() {
+  if (os.platform() === 'win32') return 'powershell.exe'
+  const choice = getRaw('terminal.shell') || 'auto'
+  if (choice === 'custom') {
+    const p = (getRaw('terminal.shellPath') || '').trim()
+    return p && firstExisting([p]) ? p : loginShell()
+  }
+  if (SHELL_PATHS[choice]) return firstExisting(SHELL_PATHS[choice]) || loginShell()
+  return loginShell() // 'auto' (default) or anything unrecognized
 }
 
 // Does the user customize their own shell prompt? If so we leave it alone.
@@ -139,6 +191,12 @@ async function shellInitSetup(shellPath, friendly) {
       return { env: { ZDOTDIR: zdir } }
     }
 
+    // Beyond here we generate a BASH rcfile. A custom/unknown shell (fish, nushell,
+    // …) has its own rc and prompt syntax that a bash --rcfile would corrupt, so
+    // bail to a plain login shell (caller keeps `-l`): no friendly prompt and no
+    // capture hook for those, which is the expected trade for "bring your own shell".
+    if (!/bash/.test(shellPath)) return null
+
     // bash: a login shell ignores --rcfile, so spawn interactive non-login and
     // replicate login by sourcing /etc/profile + the user's profile + .bashrc,
     // then add capture and (optionally) set PS1 last. With --rcfile, bash sources
@@ -189,14 +247,14 @@ export function registerPty(ctx) {
   // of any one terminal — compute it ONCE at startup instead of re-scanning the
   // rc files on every spawn (10 rapid terminals = 10 redundant disk scans).
   const isWinHost = os.platform() === 'win32'
-  const hostShell = isWinHost ? 'powershell.exe' : process.env.SHELL || '/bin/zsh'
+  const hostShell = isWinHost ? 'powershell.exe' : resolveShell()
   const hasCustomPrompt = isWinHost ? true : userHasCustomPrompt(hostShell)
 
   ipcMain.on('term:create', async (_e, { id, cwd, friendlyPrompt = true }) => {
     const wc = _e.sender
     const wcId = wc.id
     const isWin = os.platform() === 'win32'
-    const shellPath = isWin ? 'powershell.exe' : process.env.SHELL || '/bin/zsh'
+    const shellPath = isWin ? 'powershell.exe' : resolveShell()
     // Login shell (-l) so it sources the user's profile (/etc/profile, ~/.bash_profile,
     // ~/.zprofile…) — gives the normal prompt (PS1), aliases, and PATH like Terminal/Cursor.
     let args = isWin ? [] : ['-l']

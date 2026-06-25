@@ -95,9 +95,22 @@ export const SETTINGS_GROUPS = [
         options: [
           { value: 'tabs', label: 'Tabs (one terminal)' },
           { value: 'grid', label: 'Grid (all terminals)' },
-          { value: 'stack', label: 'Master-stack (primary + rail)' },
+          { value: 'stack', label: 'Master-stack (primary + side rail)' },
+          { value: 'deck', label: 'Master-deck (primary + bottom rail)' },
           { value: 'flow', label: 'Album flow (centre + side previews)' }
         ]
+      },
+      {
+        key: 'appearance.railVisibleTiles',
+        label: 'Rail Tiles Before Scroll',
+        description:
+          'In Master-stack and Master-deck layouts, how many secondary terminals fit in the rail before it scrolls. Fewer means larger tiles.',
+        type: 'number',
+        default: 6,
+        min: 2,
+        max: 20,
+        step: 1,
+        unit: 'tiles'
       },
       {
         key: 'appearance.tabStatus',
@@ -188,6 +201,29 @@ export const SETTINGS_GROUPS = [
     id: 'terminal',
     label: 'Terminal',
     settings: [
+      {
+        key: 'terminal.shell',
+        label: 'Shell',
+        description:
+          'Which shell new terminals launch. Automatic uses your login shell (recommended) — it works even when Concourse is opened from Finder/Dock, where the system hides $SHELL. Pick a named shell, or Custom… to run any other shell by path.',
+        type: 'enum',
+        default: 'auto',
+        options: [
+          { value: 'auto', label: 'Automatic (login shell)' },
+          { value: 'bash', label: 'Bash' },
+          { value: 'zsh', label: 'Zsh' },
+          { value: 'custom', label: 'Custom…' }
+        ]
+      },
+      {
+        key: 'terminal.shellPath',
+        label: 'Custom Shell Path',
+        description:
+          'Used only when Shell is “Custom…”. Full path to the shell binary. Concourse leaves a custom shell’s startup files untouched, so its prompt and PATH are whatever you’ve configured (the per-project command history hook is skipped). Invalid paths fall back to your login shell.',
+        type: 'text',
+        default: '',
+        placeholder: '/opt/homebrew/bin/fish'
+      },
       {
         key: 'terminal.fontSize',
         label: 'Font Size',

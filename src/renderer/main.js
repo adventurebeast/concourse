@@ -278,16 +278,19 @@ keys.register('mod+k', () => palette.toggle())
 // Layout modes: a single cycler plus direct keys. The layout row is U-I-O-P:
 // tabs / grid / stack / flow; Cmd+Shift+L cycles through them in that order. The
 // menu's "Open Folder…" moved to Cmd+Shift+O so plain Cmd+O stays free for the
-// stack layout here (menu accelerators fire before the renderer).
+// stack layout here (menu accelerators fire before the renderer). Master-deck sits
+// off the row on Cmd+J (its rail is the horizontal twin of stack's vertical one).
 keys.register('mod+shift+l', () => terminals.cycleLayout(1))
 keys.register('mod+u', () => terminals.setLayout('tabs'))
 keys.register('mod+i', () => terminals.setLayout('grid'))
 keys.register('mod+o', () => terminals.setLayout('stack'))
+keys.register('mod+j', () => terminals.setLayout('deck'))
 keys.register('mod+p', () => terminals.setLayout('flow'))
 // Workbench toggles (VS Code conventions). These drive the existing toolbar
-// buttons so the .active states and resizers stay in sync.
+// buttons so the .active states and resizers stay in sync. Panel toggle moved to
+// Cmd+Shift+J — plain Cmd+J now switches to the master-deck layout (above).
 keys.register('mod+b', () => document.getElementById('toggle-sidebar').click())
-keys.register('mod+j', () => document.getElementById('toggle-panel').click())
+keys.register('mod+shift+j', () => document.getElementById('toggle-panel').click())
 // Cmd/Ctrl+Shift+F jumps to the search view. (Cmd+S save and Cmd+F find are
 // handled by the editor / Monaco directly when an editor is focused.)
 keys.register('mod+shift+f', () => document.querySelector('.activity-btn[data-view="search"]').click())
@@ -495,7 +498,8 @@ function applyEditorTerminalSettings(v) {
     fontFamily: v['terminal.fontFamily'],
     cursorBlink: v['terminal.cursorBlink'],
     scrollback: v['terminal.scrollback'],
-    confirmClose: v['terminal.confirmClose']
+    confirmClose: v['terminal.confirmClose'],
+    railVisibleTiles: v['appearance.railVisibleTiles']
   })
 }
 function applyAppearanceSettings(v, { skipTheme = false } = {}) {
