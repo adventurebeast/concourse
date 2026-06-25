@@ -17,6 +17,7 @@
       <stop offset="1" stop-color="#d6ecff"/>
     </linearGradient>
   </defs>
+  <g transform="translate(512,512) scale(1.035) translate(-512,-512)">
   <g clip-path="url(#squircle)">
     <rect x="88" y="88" width="848" height="848" fill="url(#bg)"/>
     <ellipse cx="512" cy="296" rx="290" ry="225" fill="url(#vglow)"/>
@@ -32,5 +33,6 @@
       <circle cx="12" cy="6.7" r="0.18" fill="currentColor" stroke="none"/>
     </g>
     <rect x="88" y="88" width="848" height="8" fill="#ffffff" opacity="0.10"/>
+  </g>
   </g>
 </svg>
