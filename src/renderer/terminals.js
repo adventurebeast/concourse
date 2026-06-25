@@ -319,64 +319,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     setTimeout(() => document.addEventListener('mousedown', dismiss, { once: true }), 0)
   }
 
-  // The new-tab affordance ('+' button and Cmd+T). In beginner mode it offers
-  // AGENTS, not a bare shell — so after the first agent the natural next move is a
-  // second one and the fleet actually forms. Expert mode is untouched: '+' spawns a
-  // plain shell exactly as before. Reuses the .term-menu floating-menu styling and
-  // the right-click menu's outside-click dismissal idiom.
+  // The new-tab affordance ('+' button and Cmd+T): just open a new tab — no menu.
+  // The very first pane still greets beginners with the empty-pane agent launcher
+  // (gated on sessions.size === 0 in create()); a plain new pane is all the '+' owes.
   function newTab() {
-    if (document.documentElement.dataset.mode === 'expert') return create({})
-    openNewTabMenu(newTabBtn)
-  }
-  function openNewTabMenu(anchorEl) {
-    const existing = document.getElementById('term-new-menu')
-    if (existing) {
-      existing.__close() // a second click on '+' toggles the menu shut
-      return
-    }
-    const menu = document.createElement('div')
-    menu.className = 'term-menu'
-    menu.id = 'term-new-menu'
-    // Persistent outside-click listener (not {once}) so clicking the menu's own
-    // padding doesn't consume it and leave the menu un-dismissable; cleaned up on close.
-    const onDown = (e) => {
-      if (!menu.contains(e.target) && e.target !== anchorEl) close()
-    }
-    const close = () => {
-      document.removeEventListener('mousedown', onDown, true)
-      document.removeEventListener('keydown', onKey, true)
-      menu.remove()
-    }
-    const onKey = (e) => {
-      if (e.key === 'Escape') close()
-    }
-    menu.__close = close
-    // Claude is the anchor agent; Codex secondary; a plain shell is always one click
-    // away. The list is intentionally short and NOT a closed whitelist — anything
-    // you can type in a shell still works in the "Plain shell" option.
-    const items = [
-      { label: 'Run Claude Code', glyph: 'wand', run: () => create({ name: 'Claude', command: 'claude' }) },
-      { label: 'Run Codex', glyph: 'code', run: () => create({ name: 'Codex', command: 'codex' }) },
-      { label: 'Plain shell', glyph: 'terminal', run: () => create({ bare: true }) }
-    ]
-    for (const it of items) {
-      const row = document.createElement('div')
-      row.className = 'term-menu-item'
-      row.innerHTML = `<span class="tmi-icon">${icon(it.glyph, 13)}</span>${it.label}`
-      row.addEventListener('click', () => {
-        close()
-        it.run()
-      })
-      menu.append(row)
-    }
-    document.body.appendChild(menu)
-    const r = anchorEl.getBoundingClientRect()
-    menu.style.left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 8) + 'px'
-    menu.style.top = r.bottom + 4 + 'px'
-    setTimeout(() => {
-      document.addEventListener('mousedown', onDown, true)
-      document.addEventListener('keydown', onKey, true)
-    }, 0)
+    return create({})
   }
 
   // ---- empty-pane agent launcher (beginner mode) ----
@@ -1176,11 +1123,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function destroy(id) {
     const s = sessions.get(id)
     if (!s) return
-    // A floating menu (the right-click tab menu or the '+' new-tab menu) closed over
-    // this session would act on a dead pane after it's gone — dismiss them now. The
-    // new-tab menu's __close() also unhooks its document listeners.
+    // The right-click tab menu closed over this session would act on a dead pane
+    // after it's gone — dismiss it now.
     document.getElementById('term-tab-menu')?.remove()
-    document.getElementById('term-new-menu')?.__close?.()
     // The pane is going away; clear any awaiting notification/title flag it posted.
     onAwaitClear?.(id)
     clearTimeout(s.titleTimer)

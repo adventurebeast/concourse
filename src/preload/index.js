@@ -63,7 +63,8 @@ contextBridge.exposeInMainWorld('api', {
     // under `destDir`. Returns the clash-resolved absolute path created.
     importDrop: (destDir, srcPath) => ipcRenderer.invoke('fs:importDrop', destDir, srcPath),
     // Copy a dropped pathless item (web-page image bytes) into the workspace.
-    importBytes: (destDir, name, type, bytes) => ipcRenderer.invoke('fs:importBytes', destDir, name, type, bytes),
+    importBytes: (destDir, name, type, bytes) =>
+      ipcRenderer.invoke('fs:importBytes', destDir, name, type, bytes),
     // The workspace watcher fired — something changed on disk outside the app.
     // The renderer responds by refreshing the file tree. See src/main/watcher.js.
     onChanged: (cb) => ipcRenderer.on('fs:changed', () => cb()),
@@ -148,14 +149,13 @@ contextBridge.exposeInMainWorld('api', {
     onChanged: (cb) => ipcRenderer.on('settings:changed', (_e, payload) => cb(payload))
   },
 
-  // Command palette sources — handlers in src/main/ipc-commands.js. list() returns
-  // { favorites, project, history } scoped to the window's open folder; favorite()
-  // / unfavorite() toggle ♥ favorites (favorite with { project: true } pins to the
-  // open folder); onChanged() fires in every window when favorites change.
+  // Command palette sources — handlers in src/main/ipc-commands.js. All scoped to
+  // the window's open folder: list() returns { favorites, project, history };
+  // favorite() pins a command to the open project; unfavorite() removes one;
+  // onChanged() fires in every window when favorites change.
   commands: {
     list: () => ipcRenderer.invoke('commands:list'),
-    favorite: (cmd, label, opts = {}) =>
-      ipcRenderer.invoke('commands:favorite', { cmd, label, project: !!opts.project }),
+    favorite: (cmd, label) => ipcRenderer.invoke('commands:favorite', { cmd, label }),
     unfavorite: (id) => ipcRenderer.invoke('commands:unfavorite', id),
     onChanged: (cb) => ipcRenderer.on('commands:changed', () => cb())
   }

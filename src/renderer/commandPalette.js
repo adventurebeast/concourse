@@ -2,13 +2,15 @@ import './commandPalette.css'
 import { icon } from './icons.js'
 
 // Command palette (⌘K). Two layers:
-//   • Dynamic sources from the main process (api.commands), shown in EVERY mode:
-//       ♥ Favorites  → pinned commands (project-pinned first, then global)
+//   • Dynamic sources from the main process (api.commands), all scoped to the
+//     open folder and shown in EVERY mode:
+//       ♥ Favorites  → commands you pinned in this project
 //       This project → npm scripts / justfile / Makefile of the open folder
-//       Frequent     → your shell history, frecency-ranked and de-noised
+//       Frequent     → commands you've run in this project's panes, frecency-
+//                      ranked and de-noised (captured via the shell hook)
 //     This is the "call up the command I always run" surface — far better than
-//     Up-Arrow: visible, searchable, ranked by what you actually use, and you can
-//     ♥ the ones that matter so they're always on top.
+//     Up-Arrow: visible, searchable, ranked by what you actually use here, and you
+//     can ♥ the ones that matter so they're always on top.
 //   • A hand-curated beginner cheatsheet (below), shown in beginner mode only.
 // Picking a command TYPES it onto the active prompt but does NOT run it — the user
 // reads it and presses Enter themselves, so the terminal stays a dumb display and
@@ -141,23 +143,18 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
     list.innerHTML = ''
     rows = []
 
-    // 1) Favorites — project-pinned first, then global.
-    const favs = [...dynamic.favorites].sort(
-      (a, b) => (b.projectScoped ? 1 : 0) - (a.projectScoped ? 1 : 0)
-    )
+    // 1) Favorites — pinned to this project (see commands:favorite). Any older
+    // global favorites still surface here too; they just aren't badged.
     appendGroup(
       'Favorites',
-      favs
+      dynamic.favorites
         .filter((f) => match(f.cmd, f.label))
         .map((f) => ({
           cmd: f.cmd,
           label: f.label || f.cmd,
           icon: 'wand',
-          // Carry this record's own id: a command can be favorited both globally AND
-          // pinned to the project (two records, same cmd), so the heart must target
-          // THIS row's id, not a cmd→id lookup that would collapse the two.
-          favId: f.id,
-          badge: f.projectScoped ? 'project' : null
+          // Carry this record's own id so the heart unfavorites exactly this row.
+          favId: f.id
         })),
       favById
     )
@@ -233,7 +230,7 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       `<span class="cmd-row-text">${labelHtml}</span>` +
       badge +
       `<button class="cmd-fav${faved ? ' on' : ''}" type="button" tabindex="-1" title="${
-        faved ? 'Remove favorite' : 'Favorite (⇧-click to pin to this project)'
+        faved ? 'Remove favorite' : 'Favorite for this project'
       }" aria-label="favorite">${faved ? '♥' : '♡'}</button>`
 
     const idx = rows.length
@@ -242,7 +239,7 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
     const favBtn = row.querySelector('.cmd-fav')
     favBtn.addEventListener('click', (e) => {
       e.stopPropagation() // never let the heart also "choose" the row
-      toggleFavorite(it, favId, e.shiftKey)
+      toggleFavorite(it, favId)
     })
     list.appendChild(row)
     rows.push({ el: row, item: it, favId })
@@ -262,15 +259,16 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
     if (typeInto) typeInto(it.cmd)
   }
 
-  // Toggle a ♥. Plain click/⌥↵ → global favorite; ⇧-click → pinned to this
-  // project. The main process broadcasts commands:changed → refresh() re-renders
-  // (in this and any other open window); we also reload here for instant feedback.
-  async function toggleFavorite(it, favId, projectScoped) {
+  // Toggle a ♥. Favorites are pinned to the current project (main scopes them to
+  // the open folder). The main process broadcasts commands:changed → refresh()
+  // re-renders (in this and any other open window); we also reload here for
+  // instant feedback.
+  async function toggleFavorite(it, favId) {
     try {
       if (favId) {
         if (unfavorite) await unfavorite(favId)
       } else if (favorite) {
-        await favorite(it.cmd, it.label, { project: !!projectScoped })
+        await favorite(it.cmd, it.label)
       } else {
         return
       }
@@ -320,7 +318,7 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       const r = rows[active]
       if (!r) return
       if (e.altKey)
-        toggleFavorite(r.item, r.favId, false) // ⌥↵ favorites instead of running
+        toggleFavorite(r.item, r.favId) // ⌥↵ favorites instead of running
       else choose(r.item)
     } else if (e.key === 'Escape') {
       e.preventDefault()

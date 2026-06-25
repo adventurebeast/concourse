@@ -5,6 +5,8 @@ import path from 'path'
 import crypto from 'crypto'
 import pty from 'node-pty'
 import { confine } from './paths.js'
+import { extractCommands } from './command-capture.js'
+import { recordCommand } from './command-history.js'
 
 // Private, per-app directory for the generated shell rc/init files. We write them
 // under userData (not the world-readable os.tmpdir()) with 0o700 so another local
@@ -64,42 +66,74 @@ function shq(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'"
 }
 
-// Configure the calm beginner prompt (`folder ❯`) through the shell's own init
-// files instead of typing a command into the live shell.
+// Shell-integration capture: emit each command the user runs as an invisible OSC
+// marker (ESC ] 5151 ; base64(cmd) BEL) on the terminal's output stream, which
+// the main process reads back to build the per-project "Frequent" list (see
+// command-capture.js / command-history.js). Because the hook fires only for real
+// shell commands, anything typed into a foreground program — Claude, vim, a REPL —
+// is that program's stdin, never a shell command, so it is never captured. The
+// command is base64'd so its body can't corrupt or split the marker.
+//
+// zsh: a preexec hook gets the command line as $1, before it runs.
+const ZSH_CAPTURE =
+  "_concourse_capture() { printf '\\033]5151;%s\\007' \"$(printf '%s' \"$1\" | base64 | tr -d '\\n')\" }\n" +
+  'autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook preexec _concourse_capture 2>/dev/null || preexec_functions=(_concourse_capture $preexec_functions)\n'
+// bash has no preexec, so read the just-run command off history at each prompt;
+// a guard against the unchanged last entry avoids double-counting a bare Enter.
+const BASH_CAPTURE =
+  '_concourse_capture() {\n' +
+  '  local c\n' +
+  "  c=$(HISTTIMEFORMAT= history 1 2>/dev/null | sed 's/^ *[0-9][0-9]* *//')\n" +
+  '  if [ -n "$c" ] && [ "$c" != "$_concourse_last" ]; then _concourse_last="$c"; ' +
+  "printf '\\033]5151;%s\\007' \"$(printf '%s' \"$c\" | base64 | tr -d '\\n')\"; fi\n" +
+  '}\n' +
+  'PROMPT_COMMAND="_concourse_capture${PROMPT_COMMAND:+;$PROMPT_COMMAND}"\n'
+
+// Seed the shell's own init files with two things: the command-capture hook
+// (always) and — when `friendly` is true — the calm beginner prompt (`folder ❯`).
 //
 // We used to inject ` PS1=… PROMPT=… && clear\r` as shell input once the PTY
 // looked idle. That raced the shell's own startup output: when several panes
 // restore at once the shells stutter, the idle heuristic fires mid-startup, and
 // the bytes interleave — the setup line tears apart (`%1~`→`clear1~`, `clear`
-// never runs). Seeding an init file sets the prompt before the first prompt is
-// ever drawn, so there is nothing to race.
+// never runs). Seeding an init file sets things up before the first prompt is
+// ever drawn, so there is nothing to race — and it's the only reliable spot to
+// install the capture hook without typing into the live shell.
+//
+// `friendly` is false when the user runs their own prompt (or asked for the raw
+// prompt): we then forward/source their real rc untouched and only add capture.
 //
 // Returns spawn overrides ({ args?, env? }) to merge in, or null to fall back to
-// a plain login shell (bare prompt) if anything goes wrong.
+// a plain login shell if anything goes wrong.
 //
-// The rc/init files are generated ONCE per shellPath and reused for every PTY:
-// their contents don't depend on the cwd, only on the shell, so writing them on
-// each spawn was pure waste (and a write race when 10 panes restore at once).
-// We memoize the in-flight promise so concurrent callers share a single write.
-async function friendlyPromptSetup(shellPath) {
+// The rc/init files are generated ONCE per (shell, friendly) pair and reused for
+// every PTY: their contents don't depend on the cwd, so writing them on each
+// spawn was pure waste (and a write race when 10 panes restore at once). We
+// memoize the in-flight promise so concurrent callers share a single write.
+async function shellInitSetup(shellPath, friendly) {
   try {
     const home = os.homedir()
     const dir = rcDir()
 
     if (/zsh/.test(shellPath)) {
       // zsh reads its rc files from $ZDOTDIR (default $HOME). Point it at a
-      // private per-shell dir, forward each real rc file, set PROMPT after the
-      // user's .zshrc, then restore ZDOTDIR so .zlogin and any child shells use
-      // the real one. randomUUID keeps the path unpredictable.
+      // private per-shell dir, forward each real rc file, add the capture hook
+      // and (optionally) set PROMPT after the user's .zshrc, then restore ZDOTDIR
+      // so .zlogin and any child shells use the real one. randomUUID keeps the
+      // path unpredictable.
       const zdir = path.join(dir, `zsh-${crypto.randomUUID()}`)
       await fs.promises.mkdir(zdir, { recursive: true, mode: 0o700 })
       const realZ = process.env.ZDOTDIR || home
-      const fwd = (f) => `[ -f ${shq(path.join(realZ, f))} ] && source ${shq(path.join(realZ, f))}\n`
+      const fwd = (f) =>
+        `[ -f ${shq(path.join(realZ, f))} ] && source ${shq(path.join(realZ, f))}\n`
       await fs.promises.writeFile(path.join(zdir, '.zshenv'), fwd('.zshenv'), { mode: 0o600 })
       await fs.promises.writeFile(path.join(zdir, '.zprofile'), fwd('.zprofile'), { mode: 0o600 })
       await fs.promises.writeFile(
         path.join(zdir, '.zshrc'),
-        fwd('.zshrc') + "PROMPT='%1~ ❯ '\n" + `export ZDOTDIR=${shq(realZ)}\n`,
+        fwd('.zshrc') +
+          (friendly ? "PROMPT='%1~ ❯ '\n" : '') +
+          ZSH_CAPTURE +
+          `export ZDOTDIR=${shq(realZ)}\n`,
         { mode: 0o600 }
       )
       return { env: { ZDOTDIR: zdir } }
@@ -107,7 +141,8 @@ async function friendlyPromptSetup(shellPath) {
 
     // bash: a login shell ignores --rcfile, so spawn interactive non-login and
     // replicate login by sourcing /etc/profile + the user's profile + .bashrc,
-    // then set PS1 last. With --rcfile, bash sources ONLY this file.
+    // then add capture and (optionally) set PS1 last. With --rcfile, bash sources
+    // ONLY this file.
     const rc = path.join(dir, `bash-${crypto.randomUUID()}.bashrc`)
     await fs.promises.writeFile(
       rc,
@@ -116,7 +151,8 @@ async function friendlyPromptSetup(shellPath) {
         `elif [ -f ${shq(path.join(home, '.bash_login'))} ]; then source ${shq(path.join(home, '.bash_login'))};\n` +
         `elif [ -f ${shq(path.join(home, '.profile'))} ]; then source ${shq(path.join(home, '.profile'))}; fi\n` +
         `[ -f ${shq(path.join(home, '.bashrc'))} ] && source ${shq(path.join(home, '.bashrc'))}\n` +
-        "PS1='\\W ❯ '\n",
+        (friendly ? "PS1='\\W ❯ '\n" : '') +
+        BASH_CAPTURE,
       { mode: 0o600 }
     )
     return { args: ['--rcfile', rc, '-i'] }
@@ -125,15 +161,16 @@ async function friendlyPromptSetup(shellPath) {
   }
 }
 
-// Memoize the friendly-prompt setup per shell so the rc files are written ONCE
+// Memoize the init setup per (shell, friendly) so the rc files are written ONCE
 // (the first spawn) and every later PTY — including 10 that fire near-instantly —
 // reuses the same generated files instead of racing to rewrite them.
-const promptSetupByShell = new Map() // shellPath -> Promise<{args?,env?}|null>
-function getFriendlyPromptSetup(shellPath) {
-  let p = promptSetupByShell.get(shellPath)
+const initSetupByKey = new Map() // "<shell>|<friendly>" -> Promise<{args?,env?}|null>
+function getShellInitSetup(shellPath, friendly) {
+  const key = `${shellPath}|${friendly}`
+  let p = initSetupByKey.get(key)
   if (!p) {
-    p = friendlyPromptSetup(shellPath)
-    promptSetupByShell.set(shellPath, p)
+    p = shellInitSetup(shellPath, friendly)
+    initSetupByKey.set(key, p)
   }
   return p
 }
@@ -176,16 +213,19 @@ export function registerPty(ctx) {
       COLORTERM: 'truecolor'
     }
 
-    // Give newbies a calm, friendly prompt (`folder ❯`) instead of the default
-    // `Mac:dir user$`. We only do this when the user hasn't set up their own
-    // prompt — a custom PS1/framework is left untouched. The prompt is seeded via
-    // the shell's init files (see friendlyPromptSetup) rather than injected as
-    // live input, so it never races the shell's startup output.
-    if (!isWin && friendlyPrompt && !hasCustomPrompt) {
-      // Await the once-per-shell rc generation so even the first spawn — and any
-      // burst of spawns sharing the same in-flight promise — gets the friendly
-      // prompt; the rc files are written ONCE, not per spawn.
-      const setup = await getFriendlyPromptSetup(shellPath)
+    // Seed the shell's init files (see shellInitSetup): always installs the
+    // command-capture hook that feeds the per-project palette history, and gives
+    // newbies a calm `folder ❯` prompt instead of the default `Mac:dir user$`.
+    // The friendly prompt is only applied when the user hasn't set up their own
+    // (a custom PS1/framework is left untouched) and the renderer asked for it;
+    // capture is installed either way. Seeding init files rather than injecting
+    // live input means none of this races the shell's startup output.
+    if (!isWin) {
+      const friendly = friendlyPrompt && !hasCustomPrompt
+      // Await the once-per-(shell,friendly) rc generation so even the first spawn
+      // — and any burst of spawns sharing the same in-flight promise — gets the
+      // setup; the rc files are written ONCE, not per spawn.
+      const setup = await getShellInitSetup(shellPath, friendly)
       if (setup) {
         if (setup.args) args = setup.args
         if (setup.env) Object.assign(env, setup.env)
@@ -220,8 +260,23 @@ export function registerPty(ctx) {
 
     // Route output back to the window that created this shell. Guard against a
     // destroyed WebContents (the window closed while the PTY was still draining).
+    // En route, pull out any command-capture markers the shell hook emitted and
+    // record them against this window's project for the palette's Frequent list.
+    // The markers are invisible OSC sequences xterm.js ignores, so the data is
+    // forwarded unchanged; capture is best-effort and never blocks output.
+    let capBuf = ''
     term.onData((data) => {
       if (!wc.isDestroyed()) wc.send('term:data', { id, data })
+      try {
+        const { cmds, rest } = extractCommands(capBuf + data)
+        capBuf = rest
+        if (cmds.length) {
+          const root = ctx.getRoot(wc)
+          for (const cmd of cmds) recordCommand(root, cmd)
+        }
+      } catch {
+        capBuf = '' // never let capture parsing disturb the terminal
+      }
     })
     term.onExit((e) => {
       // Forward the exit code so the renderer can tell a clean finish (0) from a

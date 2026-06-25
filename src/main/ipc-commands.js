@@ -1,11 +1,15 @@
 import { ipcMain, BrowserWindow } from 'electron'
-import { getHistoryCommands, getProjectCommands } from './command-sources.js'
+import { getProjectCommands } from './command-sources.js'
+import { historyForRoot } from './command-history.js'
 import { favoritesForRoot, addFavorite, removeFavorite } from './command-store.js'
 
 // Backs the command palette's three sources. The renderer asks for everything at
 // once (favorites + project commands + frecency-ranked history) scoped to the
 // window's open folder, and toggles favorites. The window's root is read from the
-// trusted per-window context, never from a renderer-supplied path.
+// trusted per-window context, never from a renderer-supplied path. All three
+// sources are per-project: favorites are pinned to the open folder, project
+// commands come from its script files, and history is what's been run in this
+// project's panes (captured via the shell hook in ipc-pty.js).
 
 // Tell every window its favorites changed so an open palette re-renders live.
 function broadcast() {
@@ -18,7 +22,7 @@ export function registerCommands(ctx) {
   ipcMain.handle('commands:list', async (e) => {
     const root = ctx.getRoot(e.sender)
     const [history, project, favorites] = await Promise.all([
-      getHistoryCommands(),
+      historyForRoot(root),
       getProjectCommands(root),
       favoritesForRoot(root)
     ])
@@ -26,9 +30,10 @@ export function registerCommands(ctx) {
   })
 
   ipcMain.handle('commands:favorite', async (e, payload) => {
-    const { cmd, label, project } = payload || {}
-    // Pin to this project only when asked AND a folder is open; otherwise global.
-    const scope = project ? ctx.getRoot(e.sender) || 'global' : 'global'
+    const { cmd, label } = payload || {}
+    // Favorites are per-project: pin to the open folder. With no folder open
+    // there's no project to scope to, so fall back to a global favorite.
+    const scope = ctx.getRoot(e.sender) || 'global'
     const changed = await addFavorite({ cmd, label, scope })
     if (changed) broadcast()
     return changed

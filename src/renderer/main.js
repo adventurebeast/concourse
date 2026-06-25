@@ -7,7 +7,6 @@ import { createTerminals } from './terminals.js'
 import { createWelcome } from './welcome.js'
 import { createKeybindings } from './keybindings.js'
 import { createCommandPalette } from './commandPalette.js'
-import { createBeginnerHud } from './beginnerHud.js'
 import { createStatusBar } from './statusbar.js'
 import { icon } from './icons.js'
 import { showToastOnce } from './toast.js'
@@ -61,10 +60,6 @@ let currentRoot = null
 // ---------- Modules ----------
 const editor = createEditor()
 
-// Beginner heads-up line above the terminal: "you're in <folder>, a git project on
-// <branch>, N changes waiting" — ties the prompt to concrete context.
-const hud = createBeginnerHud()
-
 // Bottom status bar: git counts + branch (left), live fleet pulse + clock (right).
 // Clicking the git portion opens Source Control.
 const statusbar = createStatusBar({
@@ -74,10 +69,9 @@ const statusbar = createStatusBar({
 const git = createGit({
   // Open a git diff as a read-only tab in the editor.
   onOpenDiff: (opts) => editor.openDiff(opts),
-  // Keep the beginner context line, the explorer's per-file git indicators, and
-  // the status-bar change counts in sync with repo state on every refresh.
+  // Keep the explorer's per-file git indicators and the status-bar change counts
+  // in sync with repo state on every refresh.
   onStatus: (status) => {
-    hud.setStatus(status)
     fileTree.applyGitStatus(status)
     statusbar.setGit(status)
   }
@@ -552,7 +546,6 @@ async function setWorkspace(root) {
   currentRoot = root
   welcome.hide()
   setTitle(root)
-  hud.setRoot(root)
   terminals.cdInto(root) // cd fresh shells (e.g. Shell 1) into the opened folder
   await fileTree.load(root)
   git.refresh()
@@ -784,10 +777,6 @@ const isFreshWindow = new URLSearchParams(location.search).get('fresh') === '1'
     if (root) {
       currentRoot = root
       setTitle(root)
-      // Mirror setWorkspace(): the boot/restore path must also seed the beginner
-      // HUD, or its render() early-returns (null root) and the heads-up line stays
-      // blank for a returning user — the default launch path in the default mode.
-      hud.setRoot(root)
       await fileTree.load(root)
       git.refresh()
       let blob = null
