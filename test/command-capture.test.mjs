@@ -69,6 +69,11 @@ describe('keepCommand — what is worth storing', () => {
   it('drops bare navigation/tidy noise and empties', () => {
     for (const n of ['ls', 'cd ..', 'pwd', 'clear', '', '  ']) expect(keepCommand(n)).toBe(false)
   })
+  it('drops the auto-injected `cd <dir> && clear` pane-setup line', () => {
+    expect(keepCommand("cd '/Users/Admin/local_development/concourse' && clear")).toBe(false)
+    expect(keepCommand('cd /srv/app ; clear')).toBe(false)
+    expect(keepCommand('cd /srv/app && npm test')).toBe(true) // real work survives
+  })
   it('drops absurdly long bodies', () => {
     expect(keepCommand('x'.repeat(2000))).toBe(false)
   })

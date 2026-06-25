@@ -39,11 +39,18 @@ const NOISE = new Set([
   'reset'
 ])
 
+// Concourse itself types `cd '<dir>' && clear` into a fresh pane when a folder
+// opens (cdInto() in terminals.js). The shell hook captures it like any command,
+// but the user never wrote it and it's long, pane-setup noise — never a "frequent
+// command" worth relaunching. Match the whole line so a real `cd x && npm test`
+// is untouched; allow `;` as well as `&&` and trailing whitespace.
+const AUTO_CD_CLEAR = /^cd\b.*(&&|;)\s*clear\s*$/
+
 // Anything shorter than 2 chars (single-letter aliases, `z`, etc.) is dropped by
 // the length guard, so the set only needs multi-char noise.
 export function isNoise(cmd) {
   if (cmd.length < 2) return true
-  return NOISE.has(cmd)
+  return NOISE.has(cmd) || AUTO_CD_CLEAR.test(cmd)
 }
 
 // zoxide-style frecency: a command's weight is its raw count scaled by how
