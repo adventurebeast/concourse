@@ -635,7 +635,13 @@ async function saveSession() {
 // only gates the SAVE timer; the Pulse tick lives in terminals.js and keeps
 // running while hidden by design.
 let saveTimer = setInterval(saveSession, 4000)
+// Mirror the hidden state onto <html> so CSS can pause purely-decorative, always-on
+// animations (the working-label shimmer) while the window is off-screen — a hidden window
+// has no reason to keep re-rastering. Foreground behaviour is identical; this only stops
+// frames nobody can see. Set once now in case we launch hidden, then kept in sync below.
+document.documentElement.classList.toggle('win-hidden', document.hidden)
 document.addEventListener('visibilitychange', () => {
+  document.documentElement.classList.toggle('win-hidden', document.hidden)
   if (document.hidden) {
     clearInterval(saveTimer)
     saveTimer = null

@@ -634,6 +634,13 @@ html:not([data-tab-status='dots']) .term-tab[data-state='working']:not(.active) 
   -webkit-text-fill-color: transparent;
   animation: thinking-shimmer 1.7s ease-in-out infinite;
 }
+/* The shimmer is paint-driven (background-position can't be GPU-composited under
+   background-clip:text), so a working label re-rasters every frame while it's working. That's
+   cheap per label but pointless while the window is hidden — nobody's looking. Pause it off-screen
+   (html.win-hidden is toggled from main.js on visibilitychange), mirroring the dot ticker's
+   `if (document.hidden) return`. !important beats the `animation` shorthand's implicit
+   play-state:running on the higher-specificity working rules. Foreground rendering is unchanged. */
+html.win-hidden .term-tab-label { animation-play-state: paused !important; }
 /* The FOCUSED working tab shimmers too — any working tab shimmers, focused or not. The focused
    fill is now the SOFT --tone-focus (not the full hue), so the label sweeps the same hue→white→hue
    crest the unfocused tabs use — it reads on the lighter fill where a dimmed-white band would wash out. */
