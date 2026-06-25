@@ -2,15 +2,16 @@ import './commandPalette.css'
 import { icon } from './icons.js'
 
 // Command palette (⌘K). Two layers:
-//   • Dynamic sources from the main process (api.commands), all scoped to the
-//     open folder and shown in EVERY mode:
-//       ♥ Favorites  → commands you pinned in this project
-//       This project → npm scripts / justfile / Makefile of the open folder
-//       Frequent     → commands you've run in this project's panes, frecency-
-//                      ranked and de-noised (captured via the shell hook)
+//   • Dynamic sources from the main process (api.commands), shown in EVERY mode,
+//     all driven by what you actually run (captured via the shell hook), newest
+//     run weighted up:
+//       ♥ Favorites  → commands you pinned in this project (no run-count gate)
+//       This Project → commands you've entered in THIS project (run ≥ 2×)
+//       Global       → commands you've entered across ALL projects (run ≥ 2×)
 //     This is the "call up the command I always run" surface — far better than
-//     Up-Arrow: visible, searchable, ranked by what you actually use here, and you
-//     can ♥ the ones that matter so they're always on top.
+//     Up-Arrow: visible, searchable, ranked by what you actually use, and you can
+//     ♥ the ones that matter so they're always on top. The 2-run floor keeps
+//     one-off commands out; a command only appears in one group (de-duped top-down).
 //   • A hand-curated beginner cheatsheet (below), shown in beginner mode only.
 // Picking a command TYPES it onto the active prompt but does NOT run it — the user
 // reads it and presses Enter themselves, so the terminal stays a dumb display and
@@ -108,7 +109,7 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
   // Dynamic sources from the main process; empty until load() resolves (and when
   // listCommands isn't wired, e.g. in isolation), so the palette degrades to the
   // curated cheatsheet alone.
-  let dynamic = { favorites: [], project: [], history: [] }
+  let dynamic = { favorites: [], thisProject: [], global: [] }
   // Bumped on every close(); open() captures it before awaiting load() so a stale
   // in-flight fetch from a previous open can't repaint a freshly-reopened palette.
   let openGen = 0
@@ -120,8 +121,8 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       if (d && typeof d === 'object') {
         dynamic = {
           favorites: Array.isArray(d.favorites) ? d.favorites : [],
-          project: Array.isArray(d.project) ? d.project : [],
-          history: Array.isArray(d.history) ? d.history : []
+          thisProject: Array.isArray(d.thisProject) ? d.thisProject : [],
+          global: Array.isArray(d.global) ? d.global : []
         }
       }
     } catch {
@@ -159,22 +160,24 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       favById
     )
 
-    // 2) This project's own commands (deduped against favorites).
+    // 2) This Project — commands you've actually entered here (run ≥ 2×),
+    // frecency-ranked, de-duped against favorites.
     appendGroup(
-      'This project',
-      dynamic.project
-        .filter((p) => !favById.has(p.cmd) && match(p.cmd, p.label))
-        .map((p) => ({ cmd: p.cmd, label: p.label || p.cmd, icon: 'box', badge: p.source })),
+      'This Project',
+      dynamic.thisProject
+        .filter((h) => !favById.has(h.cmd) && match(h.cmd, h.cmd))
+        .map((h) => ({ cmd: h.cmd, label: h.cmd, icon: 'terminal' })),
       favById
     )
 
-    // 3) Frequent (history) — deduped against favorites and project commands.
-    const projCmds = new Set(dynamic.project.map((p) => p.cmd))
+    // 3) Global — commands entered across all projects (run ≥ 2× in total),
+    // de-duped against favorites AND This Project so each command shows once.
+    const localCmds = new Set(dynamic.thisProject.map((h) => h.cmd))
     appendGroup(
-      'Frequent',
-      dynamic.history
-        .filter((h) => !favById.has(h.cmd) && !projCmds.has(h.cmd) && match(h.cmd, h.cmd))
-        .map((h) => ({ cmd: h.cmd, label: h.cmd, icon: 'terminal' })),
+      'Global',
+      dynamic.global
+        .filter((h) => !favById.has(h.cmd) && !localCmds.has(h.cmd) && match(h.cmd, h.cmd))
+        .map((h) => ({ cmd: h.cmd, label: h.cmd, icon: 'globe' })),
       favById
     )
 

@@ -88,9 +88,13 @@ export function keepCommand(cmd) {
 
 // Rank a per-project { cmd -> { count, lastTs } } map by frecency (same zoxide-
 // style weighting as the shell-history ranker), de-noised, capped to `limit`.
-export function rankProjectStats(stats, now, limit = 40) {
+// `minCount` is a hard floor on raw run-count: the palette gates display at 2 so a
+// command typed once never surfaces, while internal callers (pruning) pass 1 to
+// keep every stored entry in play. The floor is applied BEFORE frecency, so a
+// once-run-but-recent command can't ride its recency boost past the gate.
+export function rankProjectStats(stats, now, limit = 40, minCount = 1) {
   return Object.entries(stats || {})
-    .filter(([cmd, s]) => s && keepCommand(cmd))
+    .filter(([cmd, s]) => s && (s.count || 0) >= minCount && keepCommand(cmd))
     .map(([cmd, s]) => ({
       cmd,
       count: s.count || 0,
@@ -98,4 +102,24 @@ export function rankProjectStats(stats, now, limit = 40) {
     }))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
+}
+
+// Sum a { <root>: { <cmd>: { count, lastTs } } } map into one combined
+// { <cmd>: { count, lastTs } } bucket — counts added, lastTs the most recent —
+// so a command run across several projects ranks by its total use. Backs the
+// palette's cross-project "Global" group; the same minCount gate then applies to
+// the aggregate, so a command run once in each of two projects (total 2) qualifies.
+export function mergeBuckets(projects) {
+  const out = {}
+  for (const bucket of Object.values(projects || {})) {
+    if (!bucket || typeof bucket !== 'object') continue
+    for (const [cmd, s] of Object.entries(bucket)) {
+      if (!s) continue
+      const cur = out[cmd] || { count: 0, lastTs: 0 }
+      cur.count += s.count || 0
+      cur.lastTs = Math.max(cur.lastTs, s.lastTs || 0)
+      out[cmd] = cur
+    }
+  }
+  return out
 }

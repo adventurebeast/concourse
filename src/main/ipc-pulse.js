@@ -67,6 +67,30 @@ function settingOrEnv(settingKey, envKey) {
 
 const STATES = ['working', 'awaiting', 'done', 'error', 'idle']
 
+// Few-shot examples for the tiny local model — defined as DATA, not inline prose, so the
+// exact summary strings the prompt teaches are ALSO the strings we refuse to let through
+// verbatim (see EXAMPLE_ECHOES below). A 0.5b model handed thin/ambiguous input parrots the
+// most concrete example it was shown rather than admit it has nothing to say — which is why
+// "Indexing the repository, about 40 percent done" kept surfacing on panes indexing nothing,
+// looking identical across every pane. Single source ⇒ the prompt and the guard can't drift.
+const FEWSHOT = [
+  {
+    in: '● I updated the login flow to call /token/refresh and added auth.test.js.\\n>',
+    summary: 'Adding token refresh to the login flow, with a test',
+    state: 'awaiting'
+  },
+  {
+    in: 'Indexing repository... 1240/3000 files',
+    summary: 'Indexing the repository, about 40 percent done',
+    state: 'working'
+  },
+  {
+    in: '$ npm run build\\nbuilt dist/ in 3.2s\\n$',
+    summary: 'Built the project into dist',
+    state: 'done'
+  }
+]
+
 // Structured-output schema (used by the Claude backend; OpenAI-compatible servers
 // vary in json_schema support, so the local backend uses json_object + the prompt).
 // summary first (and required first) so the model generates the important field before
@@ -119,12 +143,10 @@ const SYSTEM = [
   '  BAD  "Agent is experiencing issues with style.css and terminals.css, requires manual fix"',
   '  GOOD "Fixing the terminal colours in style.css and terminals.css"',
   '',
-  '  "● I updated the login flow to call /token/refresh and added auth.test.js.\\n>" ->',
-  '     {"summary": "Adding token refresh to the login flow, with a test", "state": "awaiting"}',
-  '  "Indexing repository... 1240/3000 files" ->',
-  '     {"summary": "Indexing the repository, about 40 percent done", "state": "working"}',
-  '  "$ npm run build\\nbuilt dist/ in 3.2s\\n$" ->',
-  '     {"summary": "Built the project into dist", "state": "done"}'
+  ...FEWSHOT.flatMap((ex) => [
+    `  "${ex.in}" ->`,
+    `     {"summary": "${ex.summary}", "state": "${ex.state}"}`
+  ])
 ].join('\n')
 
 // Cap renderer-supplied strings — the main process must not trust the renderer's own
@@ -180,6 +202,16 @@ function sanitizeSummary(s) {
 // left intact.
 const STATUS_ONLY = /^(?:working|idle|done|running|active|busy|pending|waiting|awaiting(?:\s+input)?|in\s+progress)\.?$/i
 
+// A 0.5b model handed thin/ambiguous input tends to echo a few-shot example verbatim rather
+// than admit it has nothing to say — which is why the demo phrase "Indexing the repository,
+// about 40 percent done" surfaced on panes doing no such thing, identically across panes (it
+// is hardcoded, so every pane parrots the SAME line — looks like cross-terminal bleed, isn't).
+// Any summary that reduces to one of the example outputs is therefore a parrot, never a real
+// observation, so we blank it and the pane falls back to its base name / OSC title. Normalise
+// both sides (case, punctuation, whitespace) so a stray period/comma/quote can't dodge it.
+const normForEcho = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+const EXAMPLE_ECHOES = new Set(FEWSHOT.map((ex) => normForEcho(ex.summary)))
+
 function parseVerdict(text) {
   if (typeof text !== 'string') return null
   const stripped = text.replace(/```(?:json)?/gi, '')
@@ -201,6 +233,7 @@ function parseVerdict(text) {
     let s = sanitizeSummary(parsed.summary).replace(/[.\s]+$/, '').trim()
     s = dropStatusPreamble(s)
     if (STATUS_ONLY.test(s)) s = '' // pure status word survived: not a work label
+    if (s && EXAMPLE_ECHOES.has(normForEcho(s))) s = '' // a parroted few-shot example, not a real label
     summary = s
   }
   return { state, summary }

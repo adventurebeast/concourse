@@ -1,9 +1,10 @@
 import { app } from 'electron'
 import path from 'path'
 import { writeJsonAtomic, readJson, enqueue, trackPending } from './store-io.js'
-import { keepCommand, rankProjectStats } from './command-capture.js'
+import { keepCommand, rankProjectStats, mergeBuckets } from './command-capture.js'
 
-// Per-project command history — the data behind the palette's "Frequent" group.
+// Per-project command history — the data behind the palette's "This Project" and
+// "Global" groups.
 // Unlike the old global ~/.zsh_history reader, this records the commands you
 // actually run inside Concourse, bucketed by the window's open folder, so each
 // project's Frequent list is its own. Capture is fed by the shell-integration
@@ -12,6 +13,10 @@ import { keepCommand, rankProjectStats } from './command-capture.js'
 // here. On disk: { version, projects: { "<root>": { "<cmd>": { count, lastTs } } } }.
 const SCHEMA_VERSION = 1
 const HISTORY_LIMIT = 40
+// A command must have been entered at least this many times before the palette
+// shows it. Keeps one-off commands out of both the per-project and Global lists
+// (storage still keeps every run; this gates display only).
+const MIN_DISPLAY_COUNT = 2
 // Cap entries per project so a long-lived project can't grow without bound; when
 // exceeded we keep the most frecent and drop the tail.
 const MAX_PER_PROJECT = 300
@@ -79,10 +84,19 @@ export async function recordCommand(root, cmd) {
   scheduleFlush()
 }
 
-// Frecency-ranked commands for `root`, or [] when no folder is open or nothing
-// has been captured yet (the palette then shows its "run a few…" empty state).
+// Frecency-ranked commands entered in `root`'s project (run ≥ MIN_DISPLAY_COUNT
+// times), or [] when no folder is open or nothing has been captured yet (the
+// palette then shows its "run a few…" empty state). Backs the "This Project" group.
 export async function historyForRoot(root) {
   if (!root) return []
   await ensureLoaded()
-  return rankProjectStats(state.projects[root], Date.now(), HISTORY_LIMIT)
+  return rankProjectStats(state.projects[root], Date.now(), HISTORY_LIMIT, MIN_DISPLAY_COUNT)
+}
+
+// Frecency-ranked commands entered across ALL projects (totals summed, gated at
+// MIN_DISPLAY_COUNT), for the palette's "Global" group. The renderer de-dupes
+// these against the per-project list so a command only ever appears once.
+export async function globalHistory() {
+  await ensureLoaded()
+  return rankProjectStats(mergeBuckets(state.projects), Date.now(), HISTORY_LIMIT, MIN_DISPLAY_COUNT)
 }

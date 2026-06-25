@@ -1215,6 +1215,16 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       s.unseen = false
       updateIndicators(s)
     }
+    // Re-clicking the pane you're already in (e.g. mousedown to start a text selection up
+    // in the scrollback) changed nothing about which pane is active — it's already primary,
+    // already fitted, already followed-or-not per your own scrolling. Don't re-flow or
+    // re-fit: a fit can round-trip a resize/SIGWINCH to the program, whose repaint can yank
+    // a scrolled-up viewport back to the bottom. Just (re)focus so typing lands, and leave
+    // the scroll position exactly where the click found it.
+    if (!switching) {
+      s.term.focus()
+      return
+    }
     for (const [sid, sess] of sessions) {
       const on = sid === id
       sess.cell.classList.toggle('active', on)
@@ -1242,12 +1252,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // until you typed a key. fitPane/pinBottom both gate their scrollToBottom on
     // s.follow, so resetting it here is what makes the switch land at the bottom.
     //
-    // But ONLY on a real switch. Re-clicking the pane you're already in — to start a
-    // text selection up in the scrollback, say — must leave the scroll position alone;
-    // forcing follow back on here would scrollToBottom out from under the click and
-    // yank you off the lines you were copying from. Respect whatever follow the user's
-    // own scrolling already set (onScroll keeps it accurate).
-    if (switching) s.follow = true
+    // (Same-pane re-clicks returned early above, so this only runs on a real switch — a
+    // re-click must leave a scrolled-up viewport alone rather than be yanked to the bottom.)
+    s.follow = true
     // Activation changed which pane is primary (and may have flipped one from
     // hidden→visible). Re-fit whatever is primary once the layout settles; fitPane
     // leaves previews/hidden panes untouched so their agents keep their width. Focus
@@ -1752,6 +1759,19 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   })
 
   // ---- pulse Layer B: model summary of quiet panes ----
+  // Pure-decoration glyphs that survive xterm's translateToString (which already drops
+  // ANSI) but carry NO meaning for Pulse: spinner animation frames (Braille U+2800–28FF),
+  // TUI box borders (U+2500–257F), and progress-bar block/shade elements (U+2580–259F).
+  // Stripping them does three things: packs more real signal into the 2500-char tail,
+  // lets Layer-1 match permission prompts that were buried in a box border, and — because
+  // a spinner advancing changes the raw tail every frame — STABILISES the dedup hash, so a
+  // pane just animating a spinner no longer burns a model call per frame. The meaningful
+  // Claude Code status bullet ● (U+25CF) and the menu cursors ❯➤▶ sit OUTSIDE these ranges
+  // and are preserved, so the few-shot prompt and the await detector keep working.
+  const PULSE_NOISE_RE = /[\u2500-\u259f\u2800-\u28ff]/g
+  function cleanTailLine(str) {
+    return str.replace(PULSE_NOISE_RE, ' ').replace(/\s{2,}/g, ' ').trim()
+  }
   // Read the last lines the pane shows (clean text straight from the xterm buffer,
   // no ANSI), hashed so we never re-ask about an unchanged screen. The model call
   // itself lives in main (the key never touches the renderer); we just send the tail.
@@ -1764,11 +1784,16 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (maxLines == null) maxLines = buf.type === 'alternate' ? 40 : 24
     const end = buf.baseY + buf.cursorY
     const lines = []
+    // Count CONTENT lines toward the budget, not decoration/blank rows: a clean line that
+    // reduces to nothing (a horizontal rule, a lone spinner, padding) is skipped so the
+    // window fills with real output instead of TUI chrome.
     for (let i = end; i >= 0 && lines.length < maxLines; i--) {
       const line = buf.getLine(i)
-      if (line) lines.push(line.translateToString(true))
+      if (!line) continue
+      const clean = cleanTailLine(line.translateToString(true))
+      if (clean) lines.push(clean)
     }
-    return lines.reverse().join('\n').replace(/\n{3,}/g, '\n\n').trim()
+    return lines.reverse().join('\n').trim()
   }
   function hashStr(str) {
     let h = 0

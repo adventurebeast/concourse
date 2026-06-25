@@ -120,8 +120,9 @@ function shq(s) {
 
 // Shell-integration capture: emit each command the user runs as an invisible OSC
 // marker (ESC ] 5151 ; base64(cmd) BEL) on the terminal's output stream, which
-// the main process reads back to build the per-project "Frequent" list (see
-// command-capture.js / command-history.js). Because the hook fires only for real
+// the main process reads back to build the palette's per-project "This Project"
+// and cross-project "Global" lists (see command-capture.js / command-history.js).
+// Because the hook fires only for real
 // shell commands, anything typed into a foreground program — Claude, vim, a REPL —
 // is that program's stdin, never a shell command, so it is never captured. The
 // command is base64'd so its body can't corrupt or split the marker.

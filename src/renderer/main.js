@@ -222,7 +222,7 @@ const palette = createCommandPalette({
   favorite: (cmd, label, opts) => api.commands.favorite(cmd, label, opts),
   unfavorite: (id) => api.commands.unfavorite(id)
 })
-document.getElementById('cmd-trigger').addEventListener('click', () => palette.toggle())
+document.getElementById('cmd-trigger')?.addEventListener('click', () => palette.toggle())
 palette.mountStrip(document.getElementById('cmd-strip'))
 // Favorites can change in another window (or via the heart here) — re-render live.
 api.commands.onChanged(() => palette.refresh())

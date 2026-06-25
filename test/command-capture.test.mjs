@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { extractCommands, keepCommand, rankProjectStats } from '../src/main/command-capture.js'
+import {
+  extractCommands,
+  keepCommand,
+  rankProjectStats,
+  mergeBuckets
+} from '../src/main/command-capture.js'
 
 // command-capture.js is pure (no electron), so the OSC marker parsing and the
 // per-project frecency ranking — the riskiest logic behind capture — are
@@ -114,5 +119,42 @@ describe('rankProjectStats — frecency over per-project counts', () => {
   it('tolerates an empty / missing stats object', () => {
     expect(rankProjectStats(undefined, NOW)).toEqual([])
     expect(rankProjectStats({}, NOW)).toEqual([])
+  })
+
+  it('applies a minCount floor before frecency, so a once-run recent command is gated out', () => {
+    const stats = {
+      'git status': { count: 3, lastTs: NOW - 30 * DAY }, // run 3× → kept
+      'rm -rf build': { count: 1, lastTs: NOW } // run once, even just now → dropped
+    }
+    const cmds = rankProjectStats(stats, NOW, 40, 2).map((r) => r.cmd)
+    expect(cmds).toEqual(['git status'])
+  })
+
+  it('defaults to no floor (minCount 1) so single-run entries survive for internal callers', () => {
+    const stats = { 'git status': { count: 1, lastTs: NOW } }
+    expect(rankProjectStats(stats, NOW).map((r) => r.cmd)).toEqual(['git status'])
+  })
+})
+
+describe('mergeBuckets — summing per-project counts for the Global list', () => {
+  it('adds counts and keeps the most recent timestamp across projects', () => {
+    const merged = mergeBuckets({
+      '/a': { 'git push': { count: 2, lastTs: NOW - DAY } },
+      '/b': { 'git push': { count: 3, lastTs: NOW } }
+    })
+    expect(merged['git push']).toEqual({ count: 5, lastTs: NOW })
+  })
+
+  it('lets a command run once in two projects clear the 2× Global gate', () => {
+    const merged = mergeBuckets({
+      '/a': { 'docker compose up': { count: 1, lastTs: NOW } },
+      '/b': { 'docker compose up': { count: 1, lastTs: NOW } }
+    })
+    expect(rankProjectStats(merged, NOW, 40, 2).map((r) => r.cmd)).toEqual(['docker compose up'])
+  })
+
+  it('tolerates empty / malformed project maps', () => {
+    expect(mergeBuckets(undefined)).toEqual({})
+    expect(mergeBuckets({ '/a': null, '/b': { x: null } })).toEqual({})
   })
 })

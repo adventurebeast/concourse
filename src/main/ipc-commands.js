@@ -1,15 +1,15 @@
 import { ipcMain, BrowserWindow } from 'electron'
-import { getProjectCommands } from './command-sources.js'
-import { historyForRoot } from './command-history.js'
+import { historyForRoot, globalHistory } from './command-history.js'
 import { favoritesForRoot, addFavorite, removeFavorite } from './command-store.js'
 
-// Backs the command palette's three sources. The renderer asks for everything at
-// once (favorites + project commands + frecency-ranked history) scoped to the
-// window's open folder, and toggles favorites. The window's root is read from the
-// trusted per-window context, never from a renderer-supplied path. All three
-// sources are per-project: favorites are pinned to the open folder, project
-// commands come from its script files, and history is what's been run in this
-// project's panes (captured via the shell hook in ipc-pty.js).
+// Backs the command palette's three sources, all driven by what you actually run
+// (captured via the shell hook in ipc-pty.js) plus the favorites you pin:
+//   • favorites  → ♥ commands pinned to the open folder
+//   • thisProject → frecency-ranked commands entered in THIS project (run ≥ 2×)
+//   • global      → the same, summed across ALL projects (run ≥ 2× in total)
+// The renderer asks for everything at once and toggles favorites. The window's
+// root is read from the trusted per-window context, never from a renderer-supplied
+// path.
 
 // Tell every window its favorites changed so an open palette re-renders live.
 function broadcast() {
@@ -21,12 +21,12 @@ function broadcast() {
 export function registerCommands(ctx) {
   ipcMain.handle('commands:list', async (e) => {
     const root = ctx.getRoot(e.sender)
-    const [history, project, favorites] = await Promise.all([
+    const [thisProject, global, favorites] = await Promise.all([
       historyForRoot(root),
-      getProjectCommands(root),
+      globalHistory(),
       favoritesForRoot(root)
     ])
-    return { favorites, project, history }
+    return { favorites, thisProject, global }
   })
 
   ipcMain.handle('commands:favorite', async (e, payload) => {
