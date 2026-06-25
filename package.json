@@ -1,6 +1,6 @@
 {
   "name": "concourse",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "description": "A lightweight, ultrafast IDE built for driving AI coding agents.",
   "main": "./out/main/index.js",
   "type": "module",
