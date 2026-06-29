@@ -835,6 +835,23 @@ export function createFileTree({ onOpenFile }) {
     confirmDelete(entry)
   })
 
+  // ---------- Keyboard: Return renames the highlighted entry ----------
+  // Mirrors Finder/VS Code (mac): with a row selected and the explorer focused,
+  // Return opens an inline rename. Scoped like ⌘⌫ above so it never steals the
+  // editor's or a terminal's Enter; skipped while an inline edit is in progress.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+    if (!selected || confirmEl) return
+    const ae = document.activeElement
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return
+    const inExplorer = ae === document.body || (ae && ae.closest && ae.closest('#explorer-panel'))
+    if (!inExplorer) return
+    const entry = findEntry(selected)
+    if (!entry) return
+    e.preventDefault()
+    startRename(entry)
+  })
+
   // ---------- Drag external files in: copy them into the workspace ----------
   // Drop a file/folder from Finder (or an image dragged from a web page) onto the
   // explorer and it's COPIED into the targeted folder — the folder row under the

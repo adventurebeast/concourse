@@ -1066,6 +1066,28 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       const buf = s.term.buffer.active
       s.follow = buf.viewportY >= buf.baseY
     })
+    // Wheel-scroll the scrollback even while an agent grabs the mouse. Interactive
+    // programs (an agent's thinking UI, vim, etc.) enable mouse tracking, which tells
+    // xterm to forward the wheel to the program AS mouse events — so the wheel stops
+    // scrolling our history. That's correct in a full-screen (alternate-buffer) TUI,
+    // but in the NORMAL buffer it's the "can't scroll up while the agent is thinking"
+    // bug: the conversation is sitting right there in the scrollback, unreachable.
+    // Match iTerm/Terminal.app — in the normal buffer the wheel ALWAYS scrolls OUR
+    // scrollback; only the alternate buffer hands it to the program. When nothing is
+    // tracking the mouse we fall through to xterm's own native wheel handling.
+    cellBody.addEventListener('wheel', (e) => {
+      if (term.buffer.active.type === 'alternate') return
+      const tracking = term.modes && term.modes.mouseTrackingMode
+      if (!tracking || tracking === 'none') return
+      e.preventDefault()
+      e.stopPropagation()
+      const perRow = (term.element && term.rows) ? term.element.clientHeight / term.rows : 16
+      let lines
+      if (e.deltaMode === 1) lines = e.deltaY // already in lines
+      else if (e.deltaMode === 2) lines = e.deltaY * term.rows // pages
+      else lines = e.deltaY / (perRow || 16) // pixels → rows
+      term.scrollLines(Math.round(lines) || (e.deltaY > 0 ? 1 : -1))
+    }, { capture: true })
     // Auto-title: catch the OSC 0/2 title ANY program emits (a shell with a
     // titled prompt, vim, ssh, or an agent that reports its task) and route it
     // into the tab + cell labels. Debounced to coalesce rapid updates; never
