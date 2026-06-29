@@ -6,6 +6,8 @@ import { icon } from './icons.js'
 //     all driven by what you actually run (captured via the shell hook), newest
 //     run weighted up:
 //       ♥ Favorites  → commands you pinned in this project (no run-count gate)
+//       Project      → scripts/recipes/targets declared in this folder
+//                      (package.json, justfile, Makefile) — shown without running
 //       This Project → commands you've entered in THIS project (run ≥ 2×)
 //       Global       → commands you've entered across ALL projects (run ≥ 2×)
 //     This is the "call up the command I always run" surface — far better than
@@ -109,7 +111,7 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
   // Dynamic sources from the main process; empty until load() resolves (and when
   // listCommands isn't wired, e.g. in isolation), so the palette degrades to the
   // curated cheatsheet alone.
-  let dynamic = { favorites: [], thisProject: [], global: [] }
+  let dynamic = { favorites: [], project: [], thisProject: [], global: [] }
   // Bumped on every close(); open() captures it before awaiting load() so a stale
   // in-flight fetch from a previous open can't repaint a freshly-reopened palette.
   let openGen = 0
@@ -121,6 +123,7 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       if (d && typeof d === 'object') {
         dynamic = {
           favorites: Array.isArray(d.favorites) ? d.favorites : [],
+          project: Array.isArray(d.project) ? d.project : [],
           thisProject: Array.isArray(d.thisProject) ? d.thisProject : [],
           global: Array.isArray(d.global) ? d.global : []
         }
@@ -160,28 +163,43 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       favById
     )
 
-    // 2) This Project — commands you've actually entered here (run ≥ 2×),
-    // frecency-ranked, de-duped against favorites.
+    // 2) Project — named scripts/recipes/targets discovered in the open folder
+    // (package.json, justfile, Makefile). Declarative and version-controlled, so
+    // they show without ever having been run. De-duped against favorites.
+    appendGroup(
+      'Project',
+      dynamic.project
+        .filter((p) => !favById.has(p.cmd) && match(p.cmd, p.label))
+        .map((p) => ({ cmd: p.cmd, label: p.label, badge: p.source, icon: 'box' })),
+      favById
+    )
+
+    // Commands already shown above (favorites + project) — used to keep each
+    // command in a single group, top-down.
+    const shown = new Set(dynamic.project.map((p) => p.cmd))
+
+    // 3) This Project — commands you've actually entered here (run ≥ 2×),
+    // frecency-ranked, de-duped against favorites and the Project group.
     appendGroup(
       'This Project',
       dynamic.thisProject
-        .filter((h) => !favById.has(h.cmd) && match(h.cmd, h.cmd))
+        .filter((h) => !favById.has(h.cmd) && !shown.has(h.cmd) && match(h.cmd, h.cmd))
         .map((h) => ({ cmd: h.cmd, label: h.cmd, icon: 'terminal' })),
       favById
     )
 
-    // 3) Global — commands entered across all projects (run ≥ 2× in total),
-    // de-duped against favorites AND This Project so each command shows once.
-    const localCmds = new Set(dynamic.thisProject.map((h) => h.cmd))
+    // 4) Global — commands entered across all projects (run ≥ 2× in total),
+    // de-duped against favorites, Project AND This Project so each shows once.
+    for (const h of dynamic.thisProject) shown.add(h.cmd)
     appendGroup(
       'Global',
       dynamic.global
-        .filter((h) => !favById.has(h.cmd) && !localCmds.has(h.cmd) && match(h.cmd, h.cmd))
+        .filter((h) => !favById.has(h.cmd) && !shown.has(h.cmd) && match(h.cmd, h.cmd))
         .map((h) => ({ cmd: h.cmd, label: h.cmd, icon: 'globe' })),
       favById
     )
 
-    // 4) Beginner-only curated cheatsheet, at the bottom.
+    // 5) Beginner-only curated cheatsheet, at the bottom.
     if (document.documentElement.dataset.mode !== 'expert') {
       for (const g of COMMANDS) {
         appendGroup(
