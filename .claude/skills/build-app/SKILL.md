@@ -9,14 +9,20 @@ Produce the packaged macOS Concourse app from source.
 
 ## Steps
 
-Run all five steps in order: build → locate → commit → install → launch. Installing to
-/Applications is what makes it a real, Spotlight-launchable app; launching completes the
-build and always uses `open -n` (a separate instance, safe even when this session runs
-inside Concourse).
+Run all six steps in order: build → locate → commit → install → smoke → publish. The
+process is end-to-end every time: it builds the DMG, records it in the repo, installs it
+locally, verifies it boots, AND publishes it to GitHub so the newest version is always
+downloadable. Installing to /Applications is what makes it a real, Spotlight-launchable
+app; the smoke step always uses `open -n` (a separate instance, safe even when this
+session runs inside Concourse); the publish step uploads the DMG as a GitHub Release.
 
-1. From the project root, run the build:
-   - **Unpacked `.app` (fast, for local launch):** `npm run pack`
-   - **DMG installer:** `npm run dist`
+1. From the project root, run the build. **Default to the DMG** — it produces both the
+   installable `.app` AND the `.dmg` in one pass, so the install (step 4) and publish
+   (step 6) work off the same artifact with no second build:
+   - **DMG (default — installable + publishable):** `npm run dist`
+   - **Unpacked `.app` (throwaway local-only build, no DMG to publish):** `npm run pack` —
+     only when explicitly asked for a quick local build that will NOT be shipped; it skips
+     publish (step 6) since there's no DMG.
 
    Both run, in order: **`npm run preflight`** (`npm run lint && npm test` — the
    EXACT gate CI runs; the build ABORTS here on any lint error or failing test, so
@@ -62,7 +68,7 @@ inside Concourse).
    need right-click → Open, or `xattr -dr com.apple.quarantine /Applications/Concourse.app`
    to clear Gatekeeper.)
 
-5. Smoke-launch the installed app — this completes every build AND verifies it actually boots:
+5. Smoke-launch the installed app — verifies it actually boots before it goes live to users:
    ```
    npm run smoke
    ```
@@ -79,31 +85,31 @@ inside Concourse).
      the bottom status bar of the newly-opened window. It must match the `version` in
      `package.json`.
 
-## Publish (optional) — put the DMG on GitHub for users to download
+6. **Publish the DMG to GitHub** so the newest version is always downloadable — this is
+   the finisher for every DMG build (skip ONLY for a `npm run pack` throwaway, which has no
+   DMG). Publish only what you've verified: smoke (step 5) must have passed and CI must be
+   green on `main` (`gh run list --branch main --limit 1` / `gh pr checks` if a PR was used)
+   before uploading, since this DMG goes to real users.
+   ```
+   npm run release             # publish (or update) the GitHub Release for the current version
+   ```
+   Useful variants when needed:
+   ```
+   npm run release -- --dry-run  # preview the tag/title/auto-notes first, touch nothing
+   npm run release -- --draft    # publish as a draft to review on GitHub before going live
+   npm run release -- --notes path/to/body.md   # supply hand-written notes verbatim
+   ```
+   After it finishes, confirm the release is live and at the new version:
+   `gh release list --limit 1` should show `vX.Y.Z` matching `package.json`.
 
-The five steps above are LOCAL only (build → install → launch); they never upload
-anything. To distribute a build, first run the **DMG** variant (`npm run dist`, not
-`pack` — `--dir` produces no installer), then publish the resulting
-`release/Concourse-<version>-arm64.dmg` as a GitHub Release:
-
-```
-npm run release             # create (or update) the release for the current version
-npm run release -- --dry-run  # preview the tag/title/auto-notes first, touch nothing
-npm run release -- --draft    # publish as a draft to review on GitHub before going live
-npm run release -- --notes path/to/body.md   # supply hand-written notes verbatim
-```
-
-Ship only what you've verified: run **`npm run smoke`** (step 5) and confirm CI is green
-on the merged PR before `npm run release`, since this DMG goes to real users.
-
-`scripts/release.mjs` does NOT build — run it AFTER `npm run dist` and after the
-version-bump commit is in place (it tags `vX.Y.Z` at HEAD). It mirrors the existing
-convention: title `Concourse X.Y.Z — developer beta`, the unsigned-beta notes with the
-one-time `xattr -dr com.apple.quarantine` bypass, and a "What's new" changelog
-auto-generated from commits since the previous release tag (edit on GitHub to polish).
-Re-running for the same version is safe — it re-uploads the DMG (`--clobber`) and
-refreshes the notes. Requires `gh auth`. Builds stay **unsigned** until the
-sign/notarize work lands, so users still need the quarantine bypass.
+   `scripts/release.mjs` does NOT build — it runs AFTER `npm run dist` and after the
+   version-bump commit is pushed (it tags `vX.Y.Z` at HEAD). It mirrors the existing
+   convention: title `Concourse X.Y.Z — developer beta`, the unsigned-beta notes with the
+   one-time `xattr -dr com.apple.quarantine` bypass, and a "What's new" changelog
+   auto-generated from commits since the previous release tag (edit on GitHub to polish).
+   Re-running for the same version is safe — it re-uploads the DMG (`--clobber`) and
+   refreshes the notes. Requires `gh auth`. Builds stay **unsigned** until the
+   sign/notarize work lands, so users still need the quarantine bypass.
 
 ## Notes
 
