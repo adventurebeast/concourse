@@ -272,6 +272,19 @@ export function registerPty(ctx) {
       COLORTERM: 'truecolor'
     }
 
+    // Scrub npm's script-lifecycle vars. When Concourse is launched via
+    // `npm run …` (dev) the Electron process inherits INIT_CWD + the npm_*
+    // family, and our `{ ...process.env }` copy leaks them into every spawned
+    // shell. A real login shell (Terminal.app) has none of these. Worst
+    // offender: INIT_CWD — tools that trust it as the working dir (e.g. the
+    // Shopify CLI: `cwd() = INIT_CWD || process.cwd()`) then run against the
+    // concourse repo instead of the user's cwd, e.g. `shopify theme dev`
+    // wrongly reporting "doesn't seem like you're running this command in a
+    // theme directory". Delete them so each shell starts pristine.
+    for (const key of Object.keys(env)) {
+      if (key === 'INIT_CWD' || key.startsWith('npm_')) delete env[key]
+    }
+
     // Seed the shell's init files (see shellInitSetup): always installs the
     // command-capture hook that feeds the per-project palette history, and gives
     // newbies a calm `folder ❯` prompt instead of the default `Mac:dir user$`.
