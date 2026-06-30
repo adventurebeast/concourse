@@ -9,7 +9,7 @@ import { createKeybindings } from './keybindings.js'
 import { createCommandPalette } from './commandPalette.js'
 import { createStatusBar } from './statusbar.js'
 import { icon } from './icons.js'
-import { showToastOnce } from './toast.js'
+import { showToast, showToastOnce } from './toast.js'
 
 const api = window.api
 
@@ -569,6 +569,30 @@ api.menu?.onCommand?.((command) => {
   if (command === 'open-folder') document.getElementById('open-folder')?.click()
   else if (command === 'new-file') document.getElementById('ft-new-file')?.click()
   else if (command === 'new-folder') document.getElementById('ft-new-folder')?.click()
+})
+
+// Update notifier: the main process checks GitHub Releases at launch and fires
+// this once when a newer build is out. We show a persistent (until dismissed)
+// "Download" toast that opens the release page. De-duped per version via
+// localStorage so a given version only ever nags once — the next version will
+// notify again. Notify-only: installing is still a manual DMG drag for now.
+api.update?.onAvailable?.((info) => {
+  if (!info?.version) return
+  const seenKey = 'concourse.update.seen'
+  try {
+    if (localStorage.getItem(seenKey) === info.version) return
+    localStorage.setItem(seenKey, info.version)
+  } catch {
+    // localStorage unavailable — show it anyway rather than swallow the notice.
+  }
+  showToast(`Concourse ${info.version} is available.`, {
+    kind: 'info',
+    timeout: 0, // persist until the user acts or dismisses
+    action: {
+      label: 'Download',
+      onClick: () => api.update.open(info.url)
+    }
+  })
 })
 
 // Launch / start screen: opens a folder via the dialog or a recent project.

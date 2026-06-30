@@ -20,6 +20,15 @@ contextBridge.exposeInMainWorld('api', {
     version: () => ipcRenderer.invoke('app:version')
   },
 
+  // Update notifier — handlers in src/main/index.js + src/main/update-check.js.
+  // onAvailable() fires once at launch when a newer GitHub release exists, with
+  // { version, url }; open() asks the main process to open that release page in
+  // the browser. Notify-only: the unsigned beta can't auto-install (Track B).
+  update: {
+    onAvailable: (cb) => ipcRenderer.on('update:available', (_e, info) => cb(info)),
+    open: (url) => ipcRenderer.send('update:open', url)
+  },
+
   // Windows — handlers in src/main/index.js. open() spawns another independent app
   // window (its own folder, terminals, and session) at the welcome screen;
   // openSettings() opens (or focuses) the shared Settings window.

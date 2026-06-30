@@ -16,6 +16,7 @@ import { registerCommands } from './ipc-commands.js'
 import { initSettings, getRaw } from './settings.js'
 import { createWatchers } from './watcher.js'
 import { installAppMenu } from './menu.js'
+import { checkForUpdate } from './update-check.js'
 import { flushSync, readJson, writeJsonAtomic, enqueue, trackPending, sweepStaleTmp } from './store-io.js'
 
 const ctx = createContext()
@@ -41,6 +42,22 @@ function openExternalSafely(url) {
   if (scheme === 'http:' || scheme === 'https:' || scheme === 'mailto:') {
     shell.openExternal(url)
   }
+}
+
+// Run the launch-time update check and, if a newer release exists, hand the
+// { version, url } to the first live window once it has loaded. The renderer
+// de-dupes per version (it won't re-toast a version you've already seen), so a
+// single send is enough even across relaunches.
+async function maybeNotifyUpdate() {
+  const info = await checkForUpdate()
+  if (!info) return
+  const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
+  if (!win) return
+  const send = () => {
+    if (!win.isDestroyed()) win.webContents.send('update:available', info)
+  }
+  if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send)
+  else send()
 }
 
 // Set once the user has confirmed an app quit (Cmd+Q / menu Quit), so the window
@@ -280,6 +297,11 @@ app.whenReady().then(async () => {
   // version is auto-bumped by `npm run bump` on every pack/dist build).
   ipcMain.handle('app:version', () => app.getVersion())
 
+  // The "Download" action on the update toast — open the release page in the
+  // browser. openExternalSafely scheme-guards the URL (the renderer never reaches
+  // shell.openExternal directly).
+  ipcMain.on('update:open', (_e, url) => openExternalSafely(url))
+
   // Open another window. Fresh so it starts at the welcome screen instead of
   // cloning the current folder. Driven by the renderer (titlebar button) and the
   // File ▸ New Window menu item below.
@@ -310,6 +332,13 @@ app.whenReady().then(async () => {
   })
 
   createWindow()
+
+  // Notify-only update check (packaged builds only). Polls the GitHub Releases
+  // API once at launch; if a newer version exists, the first window shows a
+  // dismissible "Download" toast. Fire-and-forget — never blocks startup, silent
+  // on any failure. Skipped in dev (isPackaged false) where the version is local.
+  if (app.isPackaged) maybeNotifyUpdate()
+
   app.on('activate', () => {
     // Clicking the dock icon with no windows open reopens the last session.
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
