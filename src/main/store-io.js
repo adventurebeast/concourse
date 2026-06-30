@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import fsSync from 'fs'
+import path from 'path'
 
 // Shared, crash-safe JSON persistence for the main-process stores (session,
 // recents). Two failure modes this guards against:
@@ -87,6 +88,52 @@ export function writeJsonSync(filePath, data) {
       // ignore — tmp may not exist
     }
     return false
+  }
+}
+
+// Sweep orphaned atomic-write temp files left in `dir`. Both write paths name
+// their temp `<file>.<pid>.tmp` and clean it up in their own catch block — but a
+// process that dies between open and rename (force-quit, crash, dev relaunch)
+// can never run that cleanup, so its temp leaks forever (the next launch uses a
+// new pid and never revisits the dead one). session.js's one-shot migration
+// likewise leaves `<file>.migrate.tmp` if it's interrupted. This drains both on
+// startup. Best-effort: a temp owned by a still-live pid (another window) is
+// left alone, and any error is swallowed — a failed sweep must never block boot.
+export async function sweepStaleTmp(dir) {
+  let entries
+  try {
+    entries = await fs.readdir(dir)
+  } catch {
+    return // dir may not exist yet on first launch
+  }
+  for (const name of entries) {
+    const pidMatch = name.match(/\.(\d+)\.tmp$/)
+    const isMigrate = name.endsWith('.migrate.tmp')
+    if (!pidMatch && !isMigrate) continue
+    // Don't reap a temp whose owner process is still running — it may be an
+    // in-flight write from a concurrent window.
+    if (pidMatch) {
+      const pid = Number(pidMatch[1])
+      if (pid !== process.pid && isPidAlive(pid)) continue
+    }
+    try {
+      await fs.unlink(path.join(dir, name))
+    } catch {
+      // ignore — already gone, or raced with another sweeper
+    }
+  }
+}
+
+// True if a process with `pid` currently exists. `kill(pid, 0)` sends no signal;
+// it throws ESRCH when there's no such process and EPERM when one exists but is
+// owned by another user (still "alive" for our purposes).
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return err && err.code === 'EPERM'
   }
 }
 

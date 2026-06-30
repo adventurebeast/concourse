@@ -16,7 +16,7 @@ import { registerCommands } from './ipc-commands.js'
 import { initSettings, getRaw } from './settings.js'
 import { createWatchers } from './watcher.js'
 import { installAppMenu } from './menu.js'
-import { flushSync, readJson, writeJsonAtomic, enqueue, trackPending } from './store-io.js'
+import { flushSync, readJson, writeJsonAtomic, enqueue, trackPending, sweepStaleTmp } from './store-io.js'
 
 const ctx = createContext()
 // Recursive fs watcher per window — keeps the file tree in sync with on-disk
@@ -255,6 +255,13 @@ app.whenReady().then(async () => {
   await initSettings()
   // Load the persisted window bounds before the first window is created.
   await loadWindowState()
+
+  // Reap atomic-write temp files orphaned by a previous run that died mid-write
+  // (force-quit/crash/dev relaunch). Stores live in userData and its sessions/
+  // subdir. Fire-and-forget — never let cleanup delay the first window.
+  const userData = app.getPath('userData')
+  sweepStaleTmp(userData)
+  sweepStaleTmp(join(userData, 'sessions'))
 
   registerWorkspace(ctx, watchers)
   registerFs(ctx)
