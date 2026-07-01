@@ -613,48 +613,19 @@ body {
   --tone-focus: var(--tone-mid);
 }
 .term-tab[data-state='working'] {
-  /* No background tint — the braille spinner + the shimmering label (below) carry "working". */
+  /* No background tint — the braille spinner + the hue-lifted label (below) carry "working". */
 }
-/* While working, the agent's NAME shimmers in its hue — a bright band sweeps across the label
-   (the modern "thinking" cue, the gallery's "agent-shimmer"). Pure-white crest at 50% for the
-   premium Linear/Claude look; scoped off the active tab (its label is white on the full-hue
-   fill). background-clip:text is broadly supported — unlike the colour-space tricks we dropped. */
-@keyframes thinking-shimmer {
-  0%   { background-position: 160% 0; }
-  100% { background-position: -60% 0; }
-}
+/* While working, the agent's NAME lifts into its own hue — a STATIC solid tint, no animation.
+   We dropped the animated "shimmer" (an animated background-position under background-clip:text):
+   that band could not be GPU-composited, so every working label re-rastered on the CPU every
+   display frame and got re-uploaded to the GPU process. With a fleet of working agents that
+   pinned the GPU helper (~20%) and WindowServer continuously and scaled linearly with agent
+   count — the opposite of what "run 10+ agents" needs. The working SIGNAL is already carried by
+   the braille spinner dot in every tab/header (terminals.js animation ticker, throttled + opacity
+   -only, so compositable and cheap); the label just needs to read as "this one's live", which a
+   steady hue does with zero ongoing paint. .lbl-sub keeps its own dimming. */
 html:not([data-tab-status='dots']) .term-tab[data-state='working']:not(.active) .term-tab-label {
-  background: linear-gradient(100deg,
-    var(--term-color, var(--accent)) 28%,
-    #fff 50%,
-    var(--term-color, var(--accent)) 72%);
-  background-size: 220% 100%;
-  -webkit-background-clip: text;
-          background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: thinking-shimmer 1.7s ease-in-out infinite;
-}
-/* The shimmer is paint-driven (background-position can't be GPU-composited under
-   background-clip:text), so a working label re-rasters every frame while it's working. That's
-   cheap per label but pointless while the window is hidden — nobody's looking. Pause it off-screen
-   (html.win-hidden is toggled from main.js on visibilitychange), mirroring the dot ticker's
-   `if (document.hidden) return`. !important beats the `animation` shorthand's implicit
-   play-state:running on the higher-specificity working rules. Foreground rendering is unchanged. */
-html.win-hidden .term-tab-label { animation-play-state: paused !important; }
-/* The FOCUSED working tab shimmers too — any working tab shimmers, focused or not. The focused
-   fill is now the SOFT --tone-focus (not the full hue), so the label sweeps the same hue→white→hue
-   crest the unfocused tabs use — it reads on the lighter fill where a dimmed-white band would wash out. */
-html:not([data-tab-status='dots']) .term-tab.active[data-state='working'] .term-tab-label {
-  background: linear-gradient(100deg,
-    var(--term-color, var(--accent)) 28%,
-    #fff 50%,
-    var(--term-color, var(--accent)) 72%);
-  background-size: 220% 100%;
-  -webkit-background-clip: text;
-          background-clip: text;
-  -webkit-text-fill-color: transparent;
-  text-shadow: none; /* with transparent glyphs the inherited shadow would ghost (esp. .lbl-sub) */
-  animation: thinking-shimmer 1.7s ease-in-out infinite;
+  color: var(--term-color, var(--accent));
 }
 /* Tab background is now TWO states only: dark (focused) and light (unfocused). The
    working spinner + label shimmer carry "working"; `awaiting` no longer recolours the
