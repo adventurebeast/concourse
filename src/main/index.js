@@ -18,6 +18,17 @@ import { createWatchers } from './watcher.js'
 import { installAppMenu } from './menu.js'
 import { checkForUpdate } from './update-check.js'
 import { flushSync, readJson, writeJsonAtomic, enqueue, trackPending, sweepStaleTmp } from './store-io.js'
+import log from 'electron-log/main'
+
+// Persistent main-process log — ~/Library/Logs/Concourse/main.log (Console.app shows
+// it under Log Reports). A Finder-launched packaged app has no stdout, so this is the
+// only trail for lifecycle events, close-guard decisions, and crashes. errorHandler
+// catches uncaught exceptions/rejections; eventLogger records Electron-level failures
+// (render-process-gone, child-process-gone, …). File transport rotates at ~1MB.
+log.initialize()
+log.transports.file.level = 'info'
+log.errorHandler.startCatching({ showDialog: false })
+log.eventLogger.startLogging()
 
 const ctx = createContext()
 // Recursive fs watcher per window — keeps the file tree in sync with on-disk
@@ -164,7 +175,9 @@ function createWindow({ fresh = false } = {}) {
   win.on('close', (e) => {
     if (allowClose || quitConfirmed || !getRaw('general.confirmQuit')) return
     e.preventDefault()
+    log.info('window close intercepted — showing confirm dialog')
     confirmExit(win, { quitting: false }).then((ok) => {
+      log.info(`window close ${ok ? 'confirmed' : 'cancelled'} by user`)
       if (ok && !win.isDestroyed()) {
         allowClose = true
         win.close()
@@ -200,6 +213,7 @@ function createWindow({ fresh = false } = {}) {
     return { action: 'deny' }
   })
   win.on('closed', () => {
+    log.info('window closed')
     // Tear down only this window's terminals and per-window state; other windows
     // keep running.
     if (killPtysForWindow) killPtysForWindow(wcId)
@@ -266,6 +280,9 @@ function openSettingsWindow() {
 }
 
 app.whenReady().then(async () => {
+  // Version + binary path up front: when two copies of the app exist (dock install
+  // vs a build left in release/), the log says exactly which one is running.
+  log.info(`app ready — v${app.getVersion()} packaged=${app.isPackaged} exe=${process.execPath}`)
   // Warm the settings cache before any window or the Pulse resolver reads it, so
   // synchronous getters (getRaw) and the new Settings window's background colour
   // reflect the persisted values from the first frame.
@@ -357,7 +374,9 @@ app.on('before-quit', (e) => {
   // setting being off don't prompt here.
   if (!quitConfirmed && getRaw('general.confirmQuit') && BrowserWindow.getAllWindows().length > 0) {
     e.preventDefault()
+    log.info('quit intercepted — showing confirm dialog')
     confirmExit(BrowserWindow.getFocusedWindow(), { quitting: true }).then((ok) => {
+      log.info(`quit ${ok ? 'confirmed' : 'cancelled'} by user`)
       if (ok) {
         quitConfirmed = true
         app.quit()
@@ -365,6 +384,7 @@ app.on('before-quit', (e) => {
     })
     return
   }
+  log.info('quitting — flushing stores')
   flushSync()
   // Stop the Pulse model server, but only if WE launched it (an externally-owned
   // Ollama — the menubar app, or one you started — is left running).
