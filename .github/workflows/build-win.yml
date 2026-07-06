@@ -1,0 +1,40 @@
+name: Build (Windows)
+
+# The Windows spike: produce a real .exe installer on a native windows-latest runner
+# so node-pty (ConPTY) and the llama.cpp runtime are compiled for Windows — no wine,
+# no cross-compile. This does NOT publish; it uploads the installer as a build
+# artifact you can download and run. Trigger by hand from the Actions tab, or it
+# runs automatically on a vX.Y.Z tag alongside the macOS release.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      # Full install (NOT --ignore-scripts): the postinstall electron-rebuild compiles
+      # node-pty against this Electron for Windows/x64.
+      - name: Install
+        run: npm ci
+      # Vendor the Windows llama.cpp runtime (llama-server.exe + .dll siblings) into
+      # build/bin. Non-fatal if it fails — the app just ships without bundled Pulse.
+      - name: Vendor llama runtime
+        run: npm run fetch:llama
+      - name: Build renderer/main
+        run: npm run build
+      - name: Package Windows installer
+        run: npx electron-builder --win --publish never
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: concourse-windows-x64
+          path: release/*.exe
+          if-no-files-found: error

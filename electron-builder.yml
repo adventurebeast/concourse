@@ -33,6 +33,22 @@ mac:
   # the arm64 binary so it runs locally; downloaded copies still hit Gatekeeper,
   # so the README documents the one-time `xattr -dr com.apple.quarantine` step.
   identity: null
+win:
+  # x64 NSIS installer. Built on a windows-latest runner (see build-win.yml) so
+  # node-pty and the llama.cpp runtime are native — no wine, no cross-compile.
+  # electron-builder generates the required .ico from build/icon.png at pack time.
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.png
+nsis:
+  # Assisted installer (let the user pick the install dir) rather than the silent
+  # one-click default — a friendlier first run for a beta with no code-signing cert.
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  # Unsigned beta: Windows SmartScreen will warn on first launch, same spirit as the
+  # macOS Gatekeeper quarantine step. Signing config lands with a real cert later.
 # Versioned, arch-tagged DMG name so each beta drop is distinguishable on the
 # Releases page (e.g. Concourse-0.0.17-arm64.dmg).
 artifactName: ${productName}-${version}-${arch}.${ext}

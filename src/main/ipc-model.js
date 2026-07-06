@@ -1,6 +1,8 @@
 import { ipcMain } from 'electron'
 import { existsSync, createWriteStream } from 'fs'
 import { mkdir, rename, unlink } from 'fs/promises'
+import os from 'os'
+import path from 'path'
 import {
   getLocalRuntime,
   ensureLocalRuntimeStarted,
@@ -31,8 +33,18 @@ function apiRootFrom(baseUrl) {
 // and no network so the dialog can skip straight to "ready" for someone who has it.
 function ollamaManifestPath(model) {
   const [name, tag = 'latest'] = model.split(':')
-  const home = process.env.HOME || ''
-  return `${home}/.ollama/models/manifests/registry.ollama.ai/library/${name}/${tag}`
+  // os.homedir() resolves HOME on macOS/Linux and USERPROFILE on Windows (where HOME
+  // is usually unset); path.join keeps the separators right on every platform.
+  return path.join(
+    os.homedir(),
+    '.ollama',
+    'models',
+    'manifests',
+    'registry.ollama.ai',
+    'library',
+    name,
+    tag
+  )
 }
 
 // Is the active runtime's model already in place? (Offline, cheap.)
