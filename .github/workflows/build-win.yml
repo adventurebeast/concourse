@@ -13,7 +13,11 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    # Pin to VS 2022, NOT windows-latest: latest now maps to the win25-vs2026 image,
+    # whose Visual Studio 2026 the node-gyp bundled in electron-rebuild can't detect
+    # ("unknown version undefined") — node-pty's native rebuild then fails. windows-2022
+    # ships VS 2022, which node-gyp resolves cleanly. Revisit when node-gyp learns VS 2026.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
