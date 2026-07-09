@@ -21,6 +21,17 @@ import { checkForUpdate } from './update-check.js'
 import { flushSync, readJson, writeJsonAtomic, enqueue, trackPending, sweepStaleTmp } from './store-io.js'
 import log from 'electron-log/main'
 
+// Dev and the packaged app must NEVER share a profile. Both resolve userData to
+// "Concourse", but Chromium locks parts of that directory per running instance
+// (GPU/network caches), so `npm run dev` launched while the installed app is
+// running can fail to render a window at all — and even when both boot, the two
+// instances fight over every store: each purges pty-rc at startup (breaking the
+// other's future shell spawns), and both run session-save timers over the same
+// files. The packaged app keeps the real profile; dev gets an isolated sibling
+// ("Concourse-dev" — fresh settings/recents/sessions, by design). Must run
+// before ANYTHING reads app.getPath('userData').
+if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
+
 // Persistent main-process log — ~/Library/Logs/Concourse/main.log (Console.app shows
 // it under Log Reports). A Finder-launched packaged app has no stdout, so this is the
 // only trail for lifecycle events, close-guard decisions, and crashes. errorHandler
