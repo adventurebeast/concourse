@@ -34,6 +34,8 @@ const version = pkg.version
 const tag = `v${version}`
 const dmgName = `Concourse-${version}-arm64.dmg`
 const dmg = path.join(root, 'release', dmgName)
+// Uploaded by CI (build-win.yml), not this script — the notes just reference it.
+const exeName = `Concourse-${version}-x64.exe`
 
 function die(msg) {
   console.error(`\n✗ ${msg}\n`)
@@ -94,9 +96,9 @@ const body =
     ? readFileSync(notesFile, 'utf8')
     : `**Concourse** — a lightweight, ultrafast, open-source IDE for driving a fleet of CLI coding agents (Claude Code, Codex, and any terminal-native agent) from one workbench.
 
-> ⚠️ **Developer beta.** Apple Silicon (M-series) only, and **not yet signed/notarized by Apple** — so macOS will block it on first launch. One-time bypass below. A signed, double-click-to-open build is coming for 1.0. On an Intel Mac, run from source (see the README).
+> ⚠️ **Developer beta.** Apple Silicon (M-series) Macs and 64-bit Windows. **Not yet code-signed** — so macOS Gatekeeper and Windows SmartScreen will each warn on first launch; one-time bypasses below. Signed builds are coming for 1.0. On an Intel Mac, run from source (see the README).
 
-### Install
+### Install — macOS (Apple Silicon)
 1. Download **\`${dmgName}\`** below.
 2. Open it and drag **Concourse** into **Applications**.
 3. Clear the download quarantine once, then open normally:
@@ -104,6 +106,10 @@ const body =
    xattr -dr com.apple.quarantine /Applications/Concourse.app
    \`\`\`
    (Or: right-click the app → **Open**, or **System Settings → Privacy & Security → Open Anyway**.)
+
+### Install — Windows (x64)
+1. Download **\`${exeName}\`** below. (Built by CI — it appears a few minutes after this release goes live.)
+2. Run it. SmartScreen will warn once (unsigned beta): **More info → Run anyway**.
 
 ### What's new ${sinceLabel}
 ${changelogSince(prev)}

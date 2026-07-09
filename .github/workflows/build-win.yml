@@ -1,15 +1,20 @@
 name: Build (Windows)
 
-# The Windows spike: produce a real .exe installer on a native windows-latest runner
-# so node-pty (ConPTY) and the llama.cpp runtime are compiled for Windows — no wine,
-# no cross-compile. This does NOT publish; it uploads the installer as a build
-# artifact you can download and run. Trigger by hand from the Actions tab, or it
-# runs automatically on a vX.Y.Z tag alongside the macOS release.
+# Produce a real .exe installer on a native Windows runner so node-pty (ConPTY)
+# and the llama.cpp runtime are compiled for Windows — no wine, no cross-compile.
+# A hand-triggered run only uploads the installer as a build artifact; a vX.Y.Z
+# tag build ALSO attaches it to that tag's GitHub Release, so the Releases page
+# serves Windows alongside the DMG. (npm run release creates the release + tag
+# from the Mac; this workflow completes it a few minutes later.)
 on:
   workflow_dispatch:
   push:
     tags:
       - 'v*'
+
+# Needed by the attach step: GITHUB_TOKEN must be allowed to edit releases.
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -42,3 +47,13 @@ jobs:
           name: concourse-windows-x64
           path: release/*.exe
           if-no-files-found: error
+      # Tag builds: attach the installer to the matching GitHub Release. --clobber
+      # makes re-runs safe (same file name replaces the old asset). If the tag was
+      # pushed without a release (raw git tag), this fails visibly rather than
+      # silently shipping nothing — create the release first (npm run release).
+      - name: Attach installer to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" release/*.exe --clobber

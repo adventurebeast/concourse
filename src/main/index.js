@@ -149,6 +149,30 @@ function trackWindowBounds(win) {
 // you left off. IPC handlers and the PTY layer are registered once, globally, and
 // scope themselves to the calling window via event.sender — so every window here
 // gets its own workspace root and its own terminals automatically.
+// Frameless-titlebar options per platform. macOS: hiddenInset tucks the traffic
+// lights into our custom titlebar. Windows: hiddenInset behaves like a bare
+// frameless window — NO minimize/maximize/close anywhere — so we use 'hidden'
+// plus titleBarOverlay, which draws the native caption buttons over the
+// top-right of the web titlebar (the CSS pads around them via
+// env(titlebar-area-width)). Linux keeps the normal frame.
+const OVERLAY_HEIGHT = 36 // matches the CSS #titlebar height
+function overlayColors(dark) {
+  // Mirror --bg-activity / --text from style.css so the caption strip blends in.
+  return dark
+    ? { color: '#181818', symbolColor: '#cccccc', height: OVERLAY_HEIGHT }
+    : { color: '#fafafa', symbolColor: '#383838', height: OVERLAY_HEIGHT }
+}
+function titleBarOptions() {
+  if (process.platform === 'darwin') return { titleBarStyle: 'hiddenInset' }
+  if (process.platform === 'win32') {
+    return {
+      titleBarStyle: 'hidden',
+      titleBarOverlay: overlayColors(getRaw('appearance.theme') === 'dark')
+    }
+  }
+  return {}
+}
+
 function createWindow({ fresh = false } = {}) {
   // Restore the last window's size/position when it's still on a connected display;
   // otherwise fall back to a centered 1400x900 (also the genuine first-run default).
@@ -161,7 +185,7 @@ function createWindow({ fresh = false } = {}) {
     minHeight: 520,
     show: false,
     backgroundColor: '#1e1e1e',
-    titleBarStyle: 'hiddenInset',
+    ...titleBarOptions(),
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.mjs'),
       sandbox: false
@@ -276,7 +300,7 @@ function openSettingsWindow() {
     title: 'Settings',
     parent: BrowserWindow.getFocusedWindow() || undefined,
     backgroundColor: dark ? '#1e1e1e' : '#ffffff',
-    titleBarStyle: 'hiddenInset',
+    ...titleBarOptions(),
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.mjs'),
       sandbox: false
@@ -348,6 +372,20 @@ app.whenReady().then(async () => {
   // Open (or focus) the shared Settings window — from the titlebar gear and the
   // Settings… menu item (⌘,).
   ipcMain.on('window:openSettings', () => openSettingsWindow())
+
+  // Windows only: keep the native caption-button strip (titleBarOverlay) in step
+  // with the app theme — the renderer pings this from applyTheme. No-op elsewhere
+  // and on windows created without an overlay.
+  ipcMain.on('window:setTitleBarOverlay', (e, theme) => {
+    if (process.platform !== 'win32') return
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win || win.isDestroyed()) return
+    try {
+      win.setTitleBarOverlay(overlayColors(theme === 'dark'))
+    } catch {
+      /* window has no overlay */
+    }
+  })
 
   // Bring the calling window to the foreground — clicking a Pulse "awaiting you"
   // notification pulls you back to the agent that needs you. app.focus({steal}) lifts

@@ -124,9 +124,21 @@ body {
   position: relative;
   background: var(--bg-activity);
   border-bottom: 1px solid var(--border);
-  padding-left: 80px; /* room for macOS traffic lights */
+  padding-left: 80px; /* room for macOS traffic lights (overridden per platform below) */
   padding-right: 8px;
   -webkit-app-region: drag;
+}
+/* Windows: no traffic lights on the left; the native caption buttons (min/max/
+   close, via titleBarOverlay) sit over the top-right instead. env(titlebar-area-
+   width) is the overlay-provided width of the usable strip — pad past it so our
+   buttons never hide underneath. The fallback keeps this rule inert if the env
+   vars are missing (e.g. overlay disabled). */
+:root[data-platform='win32'] #titlebar {
+  padding-left: 8px;
+  padding-right: calc(100vw - env(titlebar-area-width, 100vw) + 8px);
+}
+:root[data-platform='linux'] #titlebar {
+  padding-left: 8px; /* normal frame — no reserved corners */
 }
 .titlebar-left {
   display: flex;

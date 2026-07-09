@@ -13,6 +13,9 @@ import { colorsFor } from './term-palettes.js'
 
 const api = window.api
 
+// Platform flag for CSS — same contract as the workbench (see main.js).
+document.documentElement.dataset.platform = api.platform || 'darwin'
+
 // Instant theme before the async settings load: both windows share one origin,
 // so the localStorage cache the workbench writes is readable here too. This
 // paints the panel in the right theme with no flash.
@@ -303,7 +306,11 @@ function syncControls() {
 // The panel themes itself from its own settings (so changing the theme here is
 // visible immediately, even before the workbench echoes it back).
 function applyTheme() {
-  if (values['appearance.theme']) document.documentElement.dataset.theme = values['appearance.theme']
+  if (values['appearance.theme']) {
+    document.documentElement.dataset.theme = values['appearance.theme']
+    // Windows: keep this window's caption buttons on-theme too (no-op elsewhere).
+    api.window?.setTitleBarOverlay?.(values['appearance.theme'])
+  }
 }
 
 // ---------- search filter ----------

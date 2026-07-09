@@ -3,6 +3,11 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 // The complete, stable API surface exposed to the renderer.
 // Renderer modules (fileTree, editor, git, terminals) code against this contract.
 contextBridge.exposeInMainWorld('api', {
+  // Exact OS platform ('darwin' | 'win32' | 'linux') — the renderers stamp it on
+  // <html data-platform> so CSS can branch (traffic-light padding vs the Windows
+  // caption-button overlay) without sniffing navigator.
+  platform: process.platform,
+
   // Resolve a dropped File to its absolute filesystem path. Electron 33 removed
   // the old File.path property; webUtils.getPathForFile is the supported way, and
   // it can only run here in the preload. Returns '' for non-file drags.
@@ -37,7 +42,10 @@ contextBridge.exposeInMainWorld('api', {
     openSettings: () => ipcRenderer.send('window:openSettings'),
     // Bring THIS window to the foreground — used by the Pulse awaiting notification's
     // click handler to pull you back to the agent that needs you.
-    focusSelf: () => ipcRenderer.send('window:focusSelf')
+    focusSelf: () => ipcRenderer.send('window:focusSelf'),
+    // Windows only (no-op elsewhere): recolour the native caption-button strip
+    // (titleBarOverlay) when the theme flips, so it doesn't stay light-on-dark.
+    setTitleBarOverlay: (theme) => ipcRenderer.send('window:setTitleBarOverlay', theme)
   },
 
   // Application-menu commands (File / View / Terminal items). The main process

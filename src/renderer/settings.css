@@ -25,6 +25,14 @@
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
 }
+/* Windows/Linux: same padding swap as the workbench titlebar (see style.css). */
+:root[data-platform='win32'] #settings-titlebar {
+  padding-left: 12px;
+  padding-right: calc(100vw - env(titlebar-area-width, 100vw) + 12px);
+}
+:root[data-platform='linux'] #settings-titlebar {
+  padding-left: 12px;
+}
 .settings-title {
   font-size: 13px;
   font-weight: 600;
