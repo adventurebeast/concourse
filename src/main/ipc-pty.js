@@ -145,10 +145,14 @@ function shq(s) {
 // is that program's stdin, never a shell command, so it is never captured. The
 // command is base64'd so its body can't corrupt or split the marker.
 //
-// zsh: a preexec hook gets the command line as $1, before it runs.
+// zsh: a preexec hook gets the command line as $1, before it runs. A precmd
+// twin reports the cwd at each prompt (OSC 5152) so a restored session can
+// reopen each pane where it was (fleet resurrection).
 const ZSH_CAPTURE =
   "_concourse_capture() { printf '\\033]5151;%s\\007' \"$(printf '%s' \"$1\" | base64 | tr -d '\\n')\" }\n" +
-  'autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook preexec _concourse_capture 2>/dev/null || preexec_functions=(_concourse_capture $preexec_functions)\n'
+  "_concourse_cwd() { printf '\\033]5152;%s\\007' \"$(printf '%s' \"$PWD\" | base64 | tr -d '\\n')\" }\n" +
+  'autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook preexec _concourse_capture 2>/dev/null || preexec_functions=(_concourse_capture $preexec_functions)\n' +
+  'autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _concourse_cwd 2>/dev/null || precmd_functions=(_concourse_cwd $precmd_functions)\n'
 // PowerShell (both Windows PowerShell and pwsh 7): like bash there's no preexec,
 // so wrap the prompt function — it runs right before each new prompt — and read
 // the just-finished command off Get-History. The previous prompt function is
@@ -172,6 +176,8 @@ function psInit(friendly) {
     '      $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($h.CommandLine))\n' +
     '      [Console]::Write("$([char]27)]5151;$b64$([char]7)")\n' +
     '    }\n' +
+    '    $cwd64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path))\n' +
+    '    [Console]::Write("$([char]27)]5152;$cwd64$([char]7)")\n' +
     '  } catch {}\n' +
     '  if ($global:__ConcourseFriendly) { "$(Split-Path -Leaf -Path (Get-Location)) ❯ " }\n' +
     '  elseif ($global:__ConcoursePrev) { & $global:__ConcoursePrev }\n' +
@@ -182,12 +188,14 @@ function psInit(friendly) {
 
 // bash has no preexec, so read the just-run command off history at each prompt;
 // a guard against the unchanged last entry avoids double-counting a bare Enter.
+// The same prompt hook also reports the cwd (OSC 5152) for fleet resurrection.
 const BASH_CAPTURE =
   '_concourse_capture() {\n' +
   '  local c\n' +
   "  c=$(HISTTIMEFORMAT= history 1 2>/dev/null | sed 's/^ *[0-9][0-9]* *//')\n" +
   '  if [ -n "$c" ] && [ "$c" != "$_concourse_last" ]; then _concourse_last="$c"; ' +
   "printf '\\033]5151;%s\\007' \"$(printf '%s' \"$c\" | base64 | tr -d '\\n')\"; fi\n" +
+  "  printf '\\033]5152;%s\\007' \"$(printf '%s' \"$PWD\" | base64 | tr -d '\\n')\"\n" +
   '}\n' +
   'PROMPT_COMMAND="_concourse_capture${PROMPT_COMMAND:+;$PROMPT_COMMAND}"\n'
 
@@ -411,14 +419,26 @@ export function registerPty(ctx) {
     // The markers are invisible OSC sequences xterm.js ignores, so the data is
     // forwarded unchanged; capture is best-effort and never blocks output.
     let capBuf = ''
+    let lastCwd = ''
     term.onData((data) => {
       if (!wc.isDestroyed()) wc.send('term:data', { id, data })
       try {
-        const { cmds, rest } = extractCommands(capBuf + data)
+        const { cmds, cwds, rest } = extractCommands(capBuf + data)
         capBuf = rest
         if (cmds.length) {
           const root = ctx.getRoot(wc)
-          for (const cmd of cmds) recordCommand(root, cmd)
+          for (const cmd of cmds) {
+            recordCommand(root, cmd)
+            // Per-pane echo: the renderer remembers each pane's last real shell
+            // command so a restored session can offer to bring its agent back.
+            if (!wc.isDestroyed()) wc.send('term:command', { id, cmd })
+          }
+        }
+        // Latest cwd wins; forward only changes so a busy pane doesn't spam IPC.
+        const cwd = cwds.length ? cwds[cwds.length - 1] : ''
+        if (cwd && cwd !== lastCwd) {
+          lastCwd = cwd
+          if (!wc.isDestroyed()) wc.send('term:cwd', { id, cwd })
         }
       } catch {
         capBuf = '' // never let capture parsing disturb the terminal

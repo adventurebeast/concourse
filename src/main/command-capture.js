@@ -6,12 +6,16 @@ import { isNoise, recencyBoost } from './command-sources.js'
 // rank the accumulated per-project counts by frecency. Kept free of any electron
 // import so the parsing and ranking — the riskiest logic — are unit-testable.
 
-// Our private OSC marker: ESC ] 5151 ; <base64(command)> BEL. 5151 isn't a code
-// any terminal renders, so xterm.js silently ignores it (the marker never shows
-// in the pane) while the main process can still read it off the byte stream. We
-// base64 the command in the shell so an arbitrary command body — quotes, control
-// chars, the BEL/ST terminators themselves — can't corrupt or split the marker.
+// Our private OSC markers. Neither code is one any terminal renders, so xterm.js
+// silently ignores them (they never show in the pane) while the main process can
+// still read them off the byte stream. Payloads are base64'd in the shell so an
+// arbitrary body — quotes, control chars, the BEL/ST terminators themselves —
+// can't corrupt or split the marker.
+//   ESC ] 5151 ; <base64(command)> BEL — each command the user runs (palette history)
+//   ESC ] 5152 ; <base64(cwd)>     BEL — the shell's cwd at each prompt (session resurrection)
 const MARK = '\x1b]5151;'
+const CWD_MARK = '\x1b]5152;'
+const MARKS = [MARK, CWD_MARK]
 // Don't let an unterminated marker (a hook half-written, or a coincidental ESC]
 // in normal output) grow the carry buffer without bound.
 const MAX_CARRY = 64 * 1024
@@ -19,13 +23,15 @@ const MAX_CARRY = 64 * 1024
 // commands" anyone wants relaunched, and they'd bloat the store.
 const MAX_CMD_LEN = 1000
 
-// Longest suffix of `s` that is a (non-full) prefix of MARK — i.e. a marker whose
-// start landed at the very end of a chunk and will complete in the next one. We
-// keep only this so normal output never accumulates.
+// Longest suffix of `s` that is a (non-full) prefix of ANY marker — i.e. a marker
+// whose start landed at the very end of a chunk and will complete in the next
+// one. We keep only this so normal output never accumulates.
 function partialMarkTail(s) {
-  const max = Math.min(MARK.length - 1, s.length)
+  const maxLen = Math.max(...MARKS.map((m) => m.length))
+  const max = Math.min(maxLen - 1, s.length)
   for (let n = max; n > 0; n--) {
-    if (MARK.startsWith(s.slice(s.length - n))) return s.slice(s.length - n)
+    const tail = s.slice(s.length - n)
+    if (MARKS.some((m) => m.startsWith(tail))) return tail
   }
   return ''
 }
@@ -40,25 +46,37 @@ function decode(b64) {
   }
 }
 
-// Pull every complete command marker out of `buf`, returning the decoded commands
-// plus the `rest` to carry into the next chunk (an incomplete trailing marker, or
-// a partial-prefix tail). `buf` is the previous rest concatenated with new data.
+// Earliest occurrence of any marker in `s` from `from`, or null.
+function nextMark(s) {
+  let best = null
+  for (const mark of MARKS) {
+    const at = s.indexOf(mark)
+    if (at !== -1 && (best === null || at < best.at)) best = { at, mark }
+  }
+  return best
+}
+
+// Pull every complete marker out of `buf`, returning the decoded commands and
+// cwds plus the `rest` to carry into the next chunk (an incomplete trailing
+// marker, or a partial-prefix tail). `buf` is the previous rest concatenated
+// with new data.
 export function extractCommands(buf) {
   const cmds = []
+  const cwds = []
   let rest = buf
   // A runaway carry (unterminated marker) — give up on it rather than grow forever.
   if (rest.length > MAX_CARRY) {
-    const start = rest.lastIndexOf(MARK)
+    const start = Math.max(...MARKS.map((m) => rest.lastIndexOf(m)))
     rest = start === -1 ? '' : rest.slice(start)
-    if (rest.length > MAX_CARRY) return { cmds, rest: '' }
+    if (rest.length > MAX_CARRY) return { cmds, cwds, rest: '' }
   }
   for (;;) {
-    const start = rest.indexOf(MARK)
-    if (start === -1) {
+    const hit = nextMark(rest)
+    if (!hit) {
       rest = partialMarkTail(rest)
       break
     }
-    const payloadStart = start + MARK.length
+    const payloadStart = hit.at + hit.mark.length
     let end = rest.indexOf('\x07', payloadStart) // BEL terminator
     let termLen = 1
     const st = rest.indexOf('\x1b\\', payloadStart) // ST terminator
@@ -67,14 +85,14 @@ export function extractCommands(buf) {
       termLen = 2
     }
     if (end === -1) {
-      rest = rest.slice(start) // marker not finished yet — carry it whole
+      rest = rest.slice(hit.at) // marker not finished yet — carry it whole
       break
     }
-    const cmd = decode(rest.slice(payloadStart, end))
-    if (cmd) cmds.push(cmd)
+    const body = decode(rest.slice(payloadStart, end))
+    if (body) (hit.mark === CWD_MARK ? cwds : cmds).push(body)
     rest = rest.slice(end + termLen)
   }
-  return { cmds, rest }
+  return { cmds, cwds, rest }
 }
 
 // Whether a captured command is worth storing: real (non-noise) and not absurdly

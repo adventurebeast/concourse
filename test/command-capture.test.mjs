@@ -14,8 +14,10 @@ const NOW = 1_700_000_000_000 // fixed "now" (ms) so recency math is determinist
 const MIN = 60 * 1000
 const DAY = 24 * 60 * MIN
 
-// Build the marker the shell hook emits: ESC ] 5151 ; base64(cmd) BEL.
+// Build the markers the shell hook emits: ESC ] 5151 ; base64(cmd) BEL for
+// commands, ESC ] 5152 ; base64(cwd) BEL for the prompt cwd.
 const mark = (cmd, term = '\x07') => `\x1b]5151;${Buffer.from(cmd, 'utf8').toString('base64')}${term}`
+const cwdMark = (dir, term = '\x07') => `\x1b]5152;${Buffer.from(dir, 'utf8').toString('base64')}${term}`
 
 describe('extractCommands — OSC marker parsing', () => {
   it('pulls a single command out of surrounding terminal output', () => {
@@ -63,6 +65,28 @@ describe('extractCommands — OSC marker parsing', () => {
   it('drops a malformed (undecodable-as-empty) payload without throwing', () => {
     const { cmds } = extractCommands('\x1b]5151;\x07') // empty payload → nothing recorded
     expect(cmds).toEqual([])
+  })
+
+  it('separates cwd markers (5152) from command markers (5151)', () => {
+    const { cmds, cwds, rest } = extractCommands(
+      `${mark('claude')}output…${cwdMark('/srv/app')}$ `
+    )
+    expect(cmds).toEqual(['claude'])
+    expect(cwds).toEqual(['/srv/app'])
+    expect(rest).toBe('')
+  })
+
+  it('carries an incomplete cwd marker across chunks and completes it', () => {
+    const full = cwdMark('/Users/dev/café projects/app')
+    const a = extractCommands(full.slice(0, 10))
+    expect(a.cwds).toEqual([])
+    const b = extractCommands(a.rest + full.slice(10))
+    expect(b.cwds).toEqual(['/Users/dev/café projects/app'])
+  })
+
+  it('keeps a shared-prefix tail (both markers start with ESC ]515)', () => {
+    const { rest } = extractCommands('output\x1b]515')
+    expect(rest).toBe('\x1b]515') // could still become either marker
   })
 })
 

@@ -604,7 +604,7 @@ const $ = (id) => document.getElementById(id)
 
 // Current session-blob schema version. Bumped when the blob shape changes; old
 // blobs are upgraded by migrateSession() on restore.
-const SESSION_VERSION = 1
+const SESSION_VERSION = 2
 
 // Snapshot the restorable workbench state for the current workspace.
 function gatherSession() {
@@ -677,6 +677,12 @@ function migrateSession(blob) {
     // v0 -> v1: no shape change yet; just stamp the version.
     blob = { ...blob, version: 1 }
   }
+  if (blob.version < 2) {
+    // v1 -> v2: terminal tab entries gained optional cwd/lastCommand (fleet
+    // resurrection). Absent fields restore as plain shells, so only the stamp
+    // changes.
+    blob = { ...blob, version: 2 }
+  }
   return blob
 }
 
@@ -685,6 +691,16 @@ async function restoreSession(blob) {
   blob = migrateSession(blob)
   const ts = blob && blob.terminals
   if (!ts || !terminals.restore(ts)) terminals.create()
+
+  // Fleet resurrection: several restored panes may each be offering to bring
+  // their agent back (per-pane cards) — give the whole fleet one click too.
+  const resumable = terminals.pendingResumeCount()
+  if (resumable >= 2) {
+    showToast(`${resumable} agents can pick up where they left off.`, {
+      kind: 'info',
+      action: { label: 'Resume all', onClick: () => terminals.resumeAllPending() }
+    })
+  }
 
   // Each restored file fires onTabsChange; suppress the terminals-only reaction to those
   // (see the onTabsChange wiring above) so the saved preference applied at the end wins.

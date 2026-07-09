@@ -125,7 +125,13 @@ contextBridge.exposeInMainWorld('api', {
     resize: (id, cols, rows) => ipcRenderer.send('term:resize', { id, cols, rows }),
     kill: (id) => ipcRenderer.send('term:kill', { id }),
     onData: (cb) => ipcRenderer.on('term:data', (_e, payload) => cb(payload)),
-    onExit: (cb) => ipcRenderer.on('term:exit', (_e, payload) => cb(payload))
+    onExit: (cb) => ipcRenderer.on('term:exit', (_e, payload) => cb(payload)),
+    // Fleet-resurrection inputs, echoed per pane by the main capture hook (see
+    // ipc-pty.js): each real shell command run in the pane, and the shell's cwd
+    // at each prompt. Persisted in the session blob so a restart can offer to
+    // reopen each pane where it was and relaunch its agent.
+    onCommand: (cb) => ipcRenderer.on('term:command', (_e, payload) => cb(payload)),
+    onCwd: (cb) => ipcRenderer.on('term:cwd', (_e, payload) => cb(payload))
   },
 
   // OS shell — handlers in src/main/ipc-shell.js (Reveal in Finder / open path)

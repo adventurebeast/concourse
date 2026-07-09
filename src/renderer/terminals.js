@@ -377,6 +377,67 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (!s.launcher) return
     s.launcher.remove()
     s.launcher = null
+    s.resumeCmd = null
+  }
+
+  // ---- fleet resurrection (restored panes) ----
+  // Agents we know how to bring back after a restart. claude resumes its most
+  // recent conversation for the pane's cwd (--continue — which is exactly why we
+  // restore the cwd first); the rest relaunch fresh, since their CLIs own their
+  // session state. Anything not listed restores as a plain shell — deliberately:
+  // auto-rerunning arbitrary commands (rm, deploys…) is not a risk worth taking.
+  const AGENT_RESUME = [
+    {
+      re: /^claude\b/,
+      resume: (c) =>
+        /(^|\s)(-c|--continue|-r|--resume)\b/.test(c) ? c : c.replace(/^claude\b/, 'claude --continue')
+    },
+    { re: /^(codex|aider|gemini|amp|goose)\b/, resume: (c) => c }
+  ]
+  function resumeCommandFor(cmd) {
+    const c = (cmd || '').trim()
+    if (!c) return null
+    for (const a of AGENT_RESUME) if (a.re.test(c)) return a.resume(c)
+    return null
+  }
+
+  // The restored-pane twin of mountPaneLauncher: this pane was running an agent
+  // when the app closed — offer to bring it back with one click. Shows the exact
+  // command it will run (no surprises); typing into the pane dismisses it via the
+  // same s.launcher path as the first-run launcher.
+  function mountResumeCard(s, original, resumeCmd) {
+    const esc = (t) =>
+      String(t).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])
+    const el = document.createElement('div')
+    el.className = 'pane-launcher'
+    el.innerHTML =
+      `<div class="pane-launcher-card">` +
+      `<div class="pl-title">Pick up where you left off</div>` +
+      `<div class="pl-sub">This pane was running <code>${esc(original)}</code>.</div>` +
+      `<div class="pl-actions">` +
+      `<button class="pl-btn primary"><span class="pl-btn-icon">${icon('wand', 15)}</span>Resume · ${esc(resumeCmd)}</button>` +
+      `</div>` +
+      `<button class="pl-link">Just a shell</button>` +
+      `</div>`
+    el.querySelector('.pl-btn').addEventListener('click', () => launchAgentInPane(s, resumeCmd))
+    el.querySelector('.pl-link').addEventListener('click', () => {
+      dismissPaneLauncher(s)
+      s.term.focus()
+    })
+    s.body.appendChild(el)
+    s.launcher = el
+    s.resumeCmd = resumeCmd
+  }
+
+  // How many restored panes are still offering a resume, and one click for all of
+  // them — backs the "Resume all" toast shown after a session restore (main.js).
+  function pendingResumeCount() {
+    let n = 0
+    for (const s of sessions.values()) if (s.launcher && s.resumeCmd) n++
+    return n
+  }
+  function resumeAllPending() {
+    for (const s of sessions.values()) if (s.launcher && s.resumeCmd) launchAgentInPane(s, s.resumeCmd)
   }
   // Run an agent in an existing (empty) pane — the launcher's reuse path. Mirrors the
   // create({command}) preset seam: mark used, start the pulse immediately for instant
@@ -385,6 +446,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function launchAgentInPane(s, command) {
     dismissPaneLauncher(s)
     s.used = true
+    s.lastCommand = command // resurrection: remember what this pane runs
     setState(s, 'working') // pulse the tab the instant they click — immediate feedback
     coachOnce('pulse', PULSE_COACH)
     api.term.input(s.id, command + '\r')
@@ -816,7 +878,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   }
 
   // ---- create / destroy ----
-  function create({ name, command, label, bare, restored } = {}) {
+  // `cwd` and `lastCommand` arrive on restored panes (from the session blob):
+  // the shell reopens in its old directory and, when lastCommand is a known
+  // agent, the pane offers to resume it (mountResumeCard).
+  function create({ name, command, label, bare, restored, cwd, lastCommand } = {}) {
     const id = 'term-' + ++counter
     // Is this the first pane in an otherwise-empty workbench? Gates the one-time
     // beginner launcher overlay so it only greets a genuinely fresh start, not every
@@ -962,6 +1027,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       //                 after it is the prompt ECHOING what you typed, not work (see onData)
       isShell: !command, // plain shell vs an agent preset — gates command capture
       lineBuf: '', // keystroke accumulator for the last-command heuristic
+      lastCommand: command || lastCommand || null, // last real shell command (main echoes the
+      //                 capture hook per pane) — persisted so a restart can offer a resume
+      cwd: cwd || null, // shell's cwd at the last prompt (OSC 5152) — persisted with the blob
+      resumeCmd: null, // set while a restored pane's resume card is up (see mountResumeCard)
       baseName: displayName, // fallback label shown when nothing better is known
       oscTitle: null, // last OSC 0/2 title the program emitted (Layer 0) — always leads the label
       heurTitle: null, // last heuristic label (the typed command line; branch not shown)
@@ -993,9 +1062,19 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       mountPaneLauncher(s)
     }
 
+    // Fleet resurrection: a restored pane that was running a known agent offers
+    // to bring it back with one click. Mounted like the launcher above — typing
+    // into the pane dismisses it.
+    if (restored && lastCommand) {
+      const resumeCmd = resumeCommandFor(lastCommand)
+      if (resumeCmd) mountResumeCard(s, lastCommand, resumeCmd)
+    }
+
     // The calmer, friendlier shell prompt — only applied when the user has no
     // custom prompt of their own (the main process checks before touching it).
-    api.term.create(id, getRoot(), { friendlyPrompt: true })
+    // A restored pane reopens in its persisted cwd (main confines it to the
+    // workspace root and falls back safely if the folder is gone).
+    api.term.create(id, cwd || getRoot(), { friendlyPrompt: true })
     // Cmd+Backspace clears the whole input line — the macOS "delete to start of
     // line" gesture, mapped onto the shell's kill-line. We send Ctrl+E (jump to
     // end) then Ctrl+U (kill from cursor to start) so the line is wiped no matter
@@ -1146,11 +1225,16 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   }
 
   // ---- session restore (Tier A: fresh shells, same layout) ----
-  // Snapshot the terminal set for persistence: tab labels, layout, active index.
-  // Live process state and scrollback are intentionally not captured.
+  // Snapshot the terminal set for persistence: tab labels, layout, active index,
+  // plus each pane's cwd and last shell command (fleet resurrection). Live
+  // process state and scrollback are intentionally not captured.
   function getState() {
     const list = [...sessions.values()]
-    const tabs = list.map((s) => ({ label: s.tabLabel.textContent || s.baseName }))
+    const tabs = list.map((s) => ({
+      label: s.tabLabel.textContent || s.baseName,
+      cwd: s.cwd || null,
+      lastCommand: s.lastCommand || null
+    }))
     const active = Math.max(0, list.findIndex((s) => s.id === activeId))
     return { layout, active, tabs }
   }
@@ -1158,7 +1242,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // Recreate terminals from a snapshot. Returns true if anything was restored.
   function restore(state) {
     if (!state || !Array.isArray(state.tabs) || state.tabs.length === 0) return false
-    for (const t of state.tabs) create({ label: t && t.label, restored: true })
+    for (const t of state.tabs) {
+      if (!t) continue
+      create({ label: t.label, restored: true, cwd: t.cwd, lastCommand: t.lastCommand })
+    }
     if (state.layout) setLayout(state.layout)
     if (Number.isInteger(state.active)) activateIndex(state.active)
     return true
@@ -1643,6 +1730,19 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   panesResizeObserver.observe(panesEl)
 
   // ---- pty output -> terminal: drives the two-state (working/idle) indicator ----
+  // Fleet-resurrection bookkeeping: main echoes each pane's captured shell
+  // commands and prompt cwd off the shell-integration hook (see ipc-pty.js).
+  // Stashed on the session and persisted via getState() so a restored pane can
+  // reopen where it was and offer to bring its agent back.
+  api.term.onCommand?.(({ id, cmd }) => {
+    const s = sessions.get(id)
+    if (s && cmd) s.lastCommand = cmd
+  })
+  api.term.onCwd?.(({ id, cwd }) => {
+    const s = sessions.get(id)
+    if (s && cwd) s.cwd = cwd
+  })
+
   api.term.onData(({ id, data }) => {
     const s = sessions.get(id)
     if (!s) return
@@ -2122,5 +2222,5 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (sessions.has(id)) activate(id)
   }
 
-  return { create, newTab, fitActive, fitAll, setLayout, setTheme, setHeaderTheme, applySettings, cdInto, typeIntoActive, stepActive, moveActive, activateIndex, cycleLayout, closeActive, getState, restore, revealPane, dispose }
+  return { create, newTab, fitActive, fitAll, setLayout, setTheme, setHeaderTheme, applySettings, cdInto, typeIntoActive, stepActive, moveActive, activateIndex, cycleLayout, closeActive, getState, restore, revealPane, pendingResumeCount, resumeAllPending, dispose }
 }
