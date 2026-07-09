@@ -172,17 +172,37 @@ function createWindow({ fresh = false } = {}) {
   // to pass straight through) if confirmed. Skipped during a confirmed app quit (Cmd+Q
   // already asked once — see before-quit below) and when the setting is off.
   let allowClose = false
+  let closePromptOpen = false
   win.on('close', (e) => {
     if (allowClose || quitConfirmed || !getRaw('general.confirmQuit')) return
     e.preventDefault()
+    // Re-entrancy guard: a second X click (or an OS-repeated close) while the confirm
+    // sheet is already up would stack a second sheet on the same window. macOS allows
+    // only one sheet per window, so the extra one silently no-ops and the X "does
+    // nothing". Ignore further close events until the pending prompt resolves.
+    if (closePromptOpen) return
+    closePromptOpen = true
     log.info('window close intercepted — showing confirm dialog')
-    confirmExit(win, { quitting: false }).then((ok) => {
-      log.info(`window close ${ok ? 'confirmed' : 'cancelled'} by user`)
-      if (ok && !win.isDestroyed()) {
-        allowClose = true
-        win.close()
-      }
-    })
+    confirmExit(win, { quitting: false })
+      .then((ok) => {
+        log.info(`window close ${ok ? 'confirmed' : 'cancelled'} by user`)
+        if (ok && !win.isDestroyed()) {
+          allowClose = true
+          // Defer the re-issued close to the next tick. Calling win.close()
+          // synchronously inside the message-box callback races the sheet's teardown,
+          // and on macOS the close silently no-ops while the sheet is still detaching
+          // (the reported "X button sometimes doesn't work" — logged as "confirmed by
+          // user" with no following "window closed"). setImmediate lets the sheet fully
+          // dismiss first so the close actually takes.
+          setImmediate(() => {
+            if (!win.isDestroyed()) win.close()
+          })
+        }
+      })
+      .catch((err) => log.error('window close confirm dialog failed', err))
+      .finally(() => {
+        closePromptOpen = false
+      })
   })
   // Capture the id now — after 'closed' the WebContents is gone.
   const wcId = win.webContents.id

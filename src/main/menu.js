@@ -72,6 +72,10 @@ export function installAppMenu({ onNewWindow, onOpenSettings }) {
       // (the U-I-O-P layout row), and menu accelerators fire first, so a plain
       // ⌘O here would steal that keystroke from the renderer.
       { label: 'Open Folder…', accelerator: 'CmdOrCtrl+Shift+O', click: (_i, win) => toRenderer(win, 'open-folder') },
+      // Reveal the current workspace root in the OS file browser — same action as the
+      // file-tree's reveal button, so menu and toolbar can't drift. No-ops (in the
+      // renderer) when no folder is open.
+      { label: isMac ? 'Reveal in Finder' : 'Show in File Explorer', click: (_i, win) => toRenderer(win, 'reveal-in-finder') },
       // Non-mac: Settings lives here (no app menu to host it).
       ...(isMac ? [] : [{ type: 'separator' }, settingsItem]),
       { type: 'separator' },

@@ -569,6 +569,7 @@ api.menu?.onCommand?.((command) => {
   if (command === 'open-folder') document.getElementById('open-folder')?.click()
   else if (command === 'new-file') document.getElementById('ft-new-file')?.click()
   else if (command === 'new-folder') document.getElementById('ft-new-folder')?.click()
+  else if (command === 'reveal-in-finder') document.getElementById('ft-reveal')?.click()
 })
 
 // Update notifier: the main process checks GitHub Releases at launch and fires
