@@ -40,11 +40,12 @@ contextBridge.exposeInMainWorld('api', {
     focusSelf: () => ipcRenderer.send('window:focusSelf')
   },
 
-  // Application-menu commands (File ▸ New File / New Folder / Open Folder). The
-  // main process forwards the menu click here; the renderer runs the same action
-  // as the matching toolbar button. See src/main/menu.js.
+  // Application-menu commands (File / View / Terminal items). The main process
+  // forwards the menu click here; the renderer runs the same action as the
+  // matching toolbar button or shortcut. `arg` carries an optional payload
+  // (e.g. the folder path of an Open Recent entry). See src/main/menu.js.
   menu: {
-    onCommand: (cb) => ipcRenderer.on('menu:command', (_e, command) => cb(command))
+    onCommand: (cb) => ipcRenderer.on('menu:command', (_e, command, arg) => cb(command, arg))
   },
 
   workspace: {

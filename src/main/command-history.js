@@ -14,9 +14,11 @@ import { keepCommand, rankProjectStats, mergeBuckets } from './command-capture.j
 const SCHEMA_VERSION = 1
 const HISTORY_LIMIT = 40
 // A command must have been entered at least this many times before the palette
-// shows it. Keeps one-off commands out of both the per-project and Global lists
-// (storage still keeps every run; this gates display only).
-const MIN_DISPLAY_COUNT = 2
+// shows it. 1 = everything you run shows up straight away — the noise filter is
+// isNoise() (ls/cd/clear etc.) plus frecency ranking, not a run-count gate. (It
+// used to be 2, which made the palette feel like it "missed" common commands:
+// anything run once per project never surfaced.)
+const MIN_DISPLAY_COUNT = 1
 // Cap entries per project so a long-lived project can't grow without bound; when
 // exceeded we keep the most frecent and drop the tail.
 const MAX_PER_PROJECT = 300

@@ -16,6 +16,7 @@ import { registerCommands } from './ipc-commands.js'
 import { initSettings, getRaw } from './settings.js'
 import { createWatchers } from './watcher.js'
 import { installAppMenu } from './menu.js'
+import { getRecents } from './recents.js'
 import { checkForUpdate } from './update-check.js'
 import { flushSync, readJson, writeJsonAtomic, enqueue, trackPending, sweepStaleTmp } from './store-io.js'
 import log from 'electron-log/main'
@@ -360,12 +361,14 @@ app.whenReady().then(async () => {
     if (process.platform === 'darwin') app.focus({ steal: true })
   })
 
-  // Application menu: File ▸ New Window / New File / New Folder / Open Folder, the
-  // Settings… item, plus the standard Edit roles. New Window and Settings are
-  // handled here; the rest are forwarded to the focused window's renderer (menu.js).
+  // Application menu: File (incl. Open Recent), View, Terminal, plus the standard
+  // Edit roles. New Window and Settings are handled here; everything else is
+  // forwarded to the focused window's renderer (menu.js). ipc-workspace calls
+  // refreshAppMenu() after each folder open so Open Recent stays current.
   installAppMenu({
     onNewWindow: () => createWindow({ fresh: true }),
-    onOpenSettings: () => openSettingsWindow()
+    onOpenSettings: () => openSettingsWindow(),
+    getRecents
   })
 
   createWindow()

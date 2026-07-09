@@ -2,6 +2,7 @@ import { ipcMain, dialog, BrowserWindow } from 'electron'
 import fs from 'fs/promises'
 import { getRecents, addRecent } from './recents.js'
 import { setLastRoot } from './session.js'
+import { refreshAppMenu } from './menu.js'
 
 // Resolve symlinks once at the boundary so a folder is always bucketed under its
 // canonical path. On macOS /tmp → /private/tmp (and iCloud/home paths) are
@@ -35,6 +36,7 @@ export function registerWorkspace(ctx, watchers) {
     watchers.start(win, dir)
     await addRecent(dir)
     await setLastRoot(dir)
+    refreshAppMenu() // Open Recent just changed
     return ctx.getRoot(e.sender)
   })
 
@@ -54,6 +56,7 @@ export function registerWorkspace(ctx, watchers) {
     watchers.start(BrowserWindow.fromWebContents(e.sender), dir)
     await addRecent(dir)
     await setLastRoot(dir)
+    refreshAppMenu() // Open Recent just changed
     return ctx.getRoot(e.sender)
   })
 
