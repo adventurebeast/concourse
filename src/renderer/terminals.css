@@ -146,10 +146,9 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
 
 /* ---------- Master-stack (side rail) & Master-deck (bottom rail) ----------
    The same layout on two axes: a flex primary (flex:1) beside (stack) or above (deck)
-   a scrollable rail of compact preview tiles. The rail (.term-rail) is its OWN scroll
-   container, so the primary stays put while the rail scrolls; JS fixes each tile to
-   --rail-tile px (sizeRail / appearance.railVisibleTiles) so tiles never shrink below a
-   readable floor — past the visible count the rail overflows instead. */
+   a scrollable rail of Pulse cards — one per session: identity edge, the animated
+   working figure, name, and up to two lines of Pulse summary. The rail (.term-rail)
+   is its OWN scroll container, so the primary stays put while it scrolls. */
 #term-panes.stack {
   display: flex;
   flex-direction: row;
@@ -164,20 +163,22 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
   background: var(--border);
   overflow: hidden;
 }
-/* The primary pane is the one cell that's a direct child of #term-panes (the rail's
-   tiles are nested in .term-rail), so it fills whatever the rail doesn't take. */
-#term-panes.stack > .term-cell,
-#term-panes.deck > .term-cell {
-  flex: 1 1 auto;
-}
+/* Only the primary renders in stack/deck (applyRail marks it .rail-primary); every
+   other session's cell is parked hidden — its Pulse card in the rail represents it,
+   the same never-render rule the tabs layout uses for inactive panes. */
 #term-panes.stack .term-cell,
 #term-panes.deck .term-cell {
   position: relative;
-  display: flex;
+  display: none;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   background: var(--bg-panel);
+}
+#term-panes.stack > .term-cell.rail-primary,
+#term-panes.deck > .term-cell.rail-primary {
+  display: flex;
+  flex: 1 1 auto;
 }
 
 /* The rail: hidden until a stack/deck layout moves tiles into it; an empty rail (the
@@ -198,7 +199,7 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
 #term-panes.deck > .term-rail {
   display: flex;
   flex-direction: row;
-  flex: 0 0 clamp(110px, 22%, 190px);
+  flex: 0 0 auto; /* card-height strip — cards set their own height */
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -207,64 +208,85 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
 #term-panes.deck > .term-rail:empty {
   display: none;
 }
-/* Rail tiles + the active session's stub: fixed along the scroll axis (--rail-tile,
-   set by sizeRail), filling the cross axis. flex:0 0 means no grow/shrink, so once the
-   tiles overflow the rail scrolls rather than squeezing everything thinner. */
-.term-rail > .term-cell,
-.term-rail > .term-stub.on {
-  flex: 0 0 var(--rail-tile, 110px);
-  min-width: 0;
-  min-height: 0;
-}
-/* Tiles read as compact, clickable previews — dimmed until hovered, click to promote. */
-.term-rail .term-cell {
-  cursor: pointer;
-  opacity: 0.78;
-  transition: opacity 0.12s ease;
-}
-.term-rail .term-cell:hover {
-  opacity: 1;
-}
-.term-rail .term-cell .cell-body {
-  /* The rail is for glanceable awareness; the primary is where you interact. */
-  pointer-events: none;
-}
-/* Rail stub: holds the active terminal's slot in the rail while its live view is the
-   primary. Hidden by default; only shown (.on) once placed in the rail. */
-.term-stub {
+
+/* ---------- Pulse cards (the rail's content) ----------
+   One per session, parked hidden outside the rail. Identity edge + state dot (the
+   SAME figure element the tabs animate — paintFigure writes all three) + name +
+   up to two lines of summary. Click promotes; the active pane's card wears .active
+   (its live view is the primary). State tints reuse the tab semantics: working
+   wears the hue wash (the figure animates on top), awaiting holds the lifted tint. */
+.term-card {
   display: none;
-}
-.term-rail .term-stub.on {
-  display: flex;
-  /* The stub fills the active terminal's whole rail slot (so the tint below marks
-     which pane is maximized), but its title must sit at the TOP — level with the
-     live rail tiles' headers — not floating in the slot's middle. Wrap + align-content
-     pins the title line to the top; align-items keeps the dot/label centred within
-     that line just like a real cell-header. */
-  flex-wrap: wrap;
-  align-content: flex-start;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 4px 10px 0;
-  cursor: default;
-  background: var(--bg-panel);
+  align-items: flex-start;
+  gap: 7px;
+  padding: 7px 10px 8px;
+  border: none;
   border-left: 2px solid var(--term-color, var(--accent));
+  background: var(--bg-panel);
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  min-width: 0;
+}
+.term-rail > .term-card {
+  display: flex;
+  flex: 0 0 auto;
+}
+/* Deck (horizontal): fixed card width so the strip stays scannable and scrolls;
+   the identity edge moves to the top so it reads against the master above. */
+#term-panes.deck > .term-rail > .term-card {
+  flex: 0 0 236px;
+  border-left: none;
+  border-top: 2px solid var(--term-color, var(--accent));
+}
+.term-card:hover {
+  background: var(--hover);
+}
+.term-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.term-card[data-state='working'] {
+  background: color-mix(in srgb, var(--term-color, var(--accent)) 9%, var(--bg-panel));
+}
+.term-card[data-state='awaiting'] {
+  background: color-mix(in srgb, var(--term-color, var(--accent)) 20%, var(--bg-panel));
+}
+/* This card's pane IS the master — mark it like the stub used to (inset identity tint). */
+.term-card.active {
   box-shadow: inset 0 0 0 9999px color-mix(in srgb, var(--term-color, var(--accent)) 8%, transparent);
 }
-.term-rail .term-stub .stub-label {
+.term-card .dot {
+  margin-top: 2px;
+}
+.card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   flex: 1;
   min-width: 0;
+}
+.card-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--fg);
 }
-.term-rail .term-stub .stub-max {
-  display: inline-flex;
-  opacity: 0.6;
-  color: var(--term-color, var(--accent));
+.card-sum {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; /* "a little more room" — two summary lines, then clip */
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.card-sum[hidden] {
+  display: none;
 }
 
 /* ---------- Album flow: centre stage + side previews ([ ][   ][ ]) ---------- */

@@ -48,11 +48,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     fontFamily: 'Menlo, Monaco, "SF Mono", "Courier New", monospace',
     cursorBlink: true,
     scrollback: 10000,
-    confirmClose: true, // show the close-confirmation dialog (terminal.confirmClose)
-    // Master-stack / master-deck: how many secondary terminals fit in the rail before
-    // it scrolls. Tiles are sized to track/visible so they never shrink below a readable
-    // floor — past this count the rail scrolls instead (appearance.railVisibleTiles).
-    railVisibleTiles: 6
+    confirmClose: true // show the close-confirmation dialog (terminal.confirmClose)
   }
   let activeId = null
   let counter = 0
@@ -593,7 +589,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     else resetCellStyles()
   }
   // Clear any inline placement / layout classes so the next layout starts clean. Also
-  // flattens every cell + stub back to being a direct child of panesEl in session order
+  // flattens every cell + card back to being a direct child of panesEl in session order
   // (the master-stack/deck rail reparents some of them into railEl) and re-empties the
   // rail. Re-appending in Map order preserves the DOM-order == tab-order invariant that
   // grid/flow rely on; railEl is parked last so it never lands between cells.
@@ -603,12 +599,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       s.cell.style.gridRow = ''
       s.cell.style.order = ''
       s.cell.style.flex = ''
-      s.cell.classList.remove('flow-center', 'flow-prev', 'flow-next')
-      s.stub.style.gridColumn = ''
-      s.stub.style.gridRow = ''
-      s.stub.classList.remove('on')
+      s.cell.classList.remove('flow-center', 'flow-prev', 'flow-next', 'rail-primary')
       panesEl.appendChild(s.cell)
-      panesEl.appendChild(s.stub)
+      panesEl.appendChild(s.card) // parked (display:none) outside the rail
     }
     panesEl.appendChild(railEl) // empty now → CSS :empty hides it outside stack/deck
   }
@@ -626,11 +619,13 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   }
   // Master-stack (vertical rail, right) and master-deck (horizontal rail, bottom) are
   // the same layout on different axes: the active session maximizes into the primary
-  // area (flex:1) and every other session is a small live tile in a scrollable rail.
-  // The active session keeps its slot in the rail too — a compact stub holds it so the
-  // order never reshuffles when you promote a tile (activate() re-runs this). The rail
-  // is its own scroll container (railEl), so the primary stays put while it scrolls;
-  // sizeRail() fixes each tile to track/visible px so tiles never shrink below a floor.
+  // area (flex:1) and EVERY session — active included — has a Pulse card in the
+  // scrollable rail: identity edge + the working figure + name + up to two lines of
+  // Pulse summary. Cards replaced the old live preview tiles: at rail size a clipped
+  // terminal is noise, while name/state/summary is the actual "who needs me" answer
+  // (and the parked panes aren't rendered at all, so a big fleet got cheaper). The
+  // rail order is stable session order, so promoting never reshuffles; the active
+  // session's card just wears .active. Click a card to promote it (selectCell).
   function applyStack() {
     applyRail()
   }
@@ -645,37 +640,14 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     const active = sessions.get(activeId) || order[0]
     // Alone: the primary fills everything and the rail stays empty (CSS :empty hides it).
     if (n < 2) return
-    // The active session's live cell becomes the primary (a direct child of panesEl,
-    // sitting before the rail). Every session — including the active one, via its stub
-    // — gets a tile in the rail, in stable session order, so selecting never reshuffles.
+    // The active session's live cell becomes the primary: marked .rail-primary (the
+    // only visible cell in these layouts) and placed just before the rail.
+    active.cell.classList.add('rail-primary')
     panesEl.insertBefore(active.cell, railEl)
     for (const s of order) {
-      if (s === active) {
-        s.stub.classList.add('on')
-        railEl.appendChild(s.stub)
-      } else {
-        railEl.appendChild(s.cell)
-      }
+      s.card.classList.toggle('active', s === active)
+      railEl.appendChild(s.card)
     }
-    sizeRail()
-  }
-  // Fix each rail tile to track/visible px along the scroll axis so exactly
-  // railVisibleTiles fit before the rail scrolls — past that, tiles keep their size and
-  // the rail overflows instead of shrinking everything. Re-run on layout change, pane
-  // add/remove, settings change, and container resize (panesResizeObserver below).
-  const RAIL_TILE_MIN = { stack: 70, deck: 150 } // px floor per axis (vertical/horizontal)
-  function sizeRail() {
-    if (layout !== 'stack' && layout !== 'deck') return
-    const n = sessions.size
-    if (n < 2) return
-    const horizontal = layout === 'deck'
-    const track = horizontal ? panesEl.clientWidth : panesEl.clientHeight
-    if (!track) return // panel collapsed / not yet measurable — RO re-runs us later
-    const visible = Math.max(1, Math.round(termSettings.railVisibleTiles) || 1)
-    const slots = Math.min(visible, n)
-    const gap = 1 // matches the rail's CSS gap
-    const tile = Math.max(RAIL_TILE_MIN[layout], Math.floor((track - (slots - 1) * gap) / slots))
-    panesEl.style.setProperty('--rail-tile', tile + 'px')
   }
 
   // Album flow: the centred session is large and interactive; its neighbours sit
@@ -842,11 +814,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function updateIndicators(s) {
     s.tabEl.dataset.state = s.state // pulse style: breathing vs steady tab tint
     s.cell.dataset.state = s.state // grid/stack/flow: unfocused header breathes while working
-    s.stub.dataset.state = s.state
+    s.card.dataset.state = s.state // rail card: state tint (stack/deck)
     const cls = 'dot ' + s.state
     s.tabDot.className = cls // dots style: the in-tab status dot
     s.cellDot.className = cls
-    s.stubDot.className = cls
+    s.cardDot.className = cls
     // Two states, that's it: working (the spinner loop animates the figure) or resting (the
     // static full figure, painted here on the edge). The spinner loop only repaints
     // `.dot.working` and early-returns when nothing is working, so the LAST pane to settle
@@ -944,26 +916,28 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     cell.append(cellHeader, cellBody)
     panesEl.appendChild(cell)
 
-    // Rail stub: a compact, non-live entry that holds this terminal's slot in the
-    // master-stack rail while its live view is maximized in the primary column.
-    // Keeps the rail order stable (no reshuffle on select) and means the active
-    // terminal is still visible/clickable in the sidebar. Only shown in 'stack'
-    // layout for the active session (CSS gates it); hidden everywhere else.
-    const stub = document.createElement('div')
-    stub.className = 'term-stub'
-    stub.style.setProperty('--term-color', color)
-    const stubDot = document.createElement('span')
-    stubDot.className = 'dot idle'
-    stubDot.appendChild(makeFigure())
-    const stubLabel = document.createElement('span')
-    stubLabel.className = 'stub-label'
-    stubLabel.textContent = displayName
-    const stubMax = document.createElement('span')
-    stubMax.className = 'stub-max'
-    stubMax.innerHTML = icon('square', 12)
-    stubMax.title = 'Maximized'
-    stub.append(stubDot, stubLabel, stubMax)
-    panesEl.appendChild(stub)
+    // Rail card: this terminal's entry in the master-stack/deck rail — identity
+    // edge + the same animated working figure the tabs carry + name + up to two
+    // lines of Pulse summary (updateCardMeta). Every session has one; only the
+    // rail displays them (CSS). Click promotes the pane to the primary slot.
+    const card = document.createElement('button')
+    card.className = 'term-card'
+    card.style.setProperty('--term-color', color)
+    const cardDot = document.createElement('span')
+    cardDot.className = 'dot idle'
+    cardDot.appendChild(makeFigure())
+    const cardText = document.createElement('span')
+    cardText.className = 'card-text'
+    const cardLabel = document.createElement('span')
+    cardLabel.className = 'card-label'
+    cardLabel.textContent = displayName
+    const cardSum = document.createElement('span')
+    cardSum.className = 'card-sum'
+    cardSum.hidden = true
+    cardText.append(cardLabel, cardSum)
+    card.append(cardDot, cardText)
+    card.addEventListener('click', () => selectCell(id))
+    panesEl.appendChild(card)
 
     const term = new Terminal({
       fontFamily: termSettings.fontFamily,
@@ -992,7 +966,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
 
     const s = {
       id, term, fit, cell, body: cellBody, tabEl, tabDot, tabLabel, cellLabel, cellDot, color, colorIndex,
-      stub, stubDot, stubLabel,
+      card, cardDot, cardLabel, cardSum,
       status: 'running', custom: false,
       // Three states: `working` (output flowing — pulsing), `awaiting` (at rest, your
       // move) or `idle` (gone quiet, nothing pending). An agent preset (command)
@@ -1044,6 +1018,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     labelResizeObserver.observe(tabLabel) // re-measure the hover-marquee on width changes
     labelResizeObserver.observe(cellLabel)
     updateIndicators(s) // paint the initial working/idle tab tint
+    updateCardMeta(s) // rail card's summary line (a restored pane already knows its lastCommand)
     // A preset pane starts `working` by literal (not via setState), so give it what the
     // rest→work edge gives every other working pane: an actual first frame (else it shows the
     // full resting block until the ticker's first tick) and an armed settle (else a preset
@@ -1269,7 +1244,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     labelResizeObserver.unobserve(s.tabLabel)
     labelResizeObserver.unobserve(s.cellLabel)
     s.cell.remove()
-    s.stub.remove()
+    s.card.remove()
     s.tabEl.remove()
     sessions.delete(id)
     emitFleet() // the fleet shrank — refresh the status-bar summary
@@ -1374,7 +1349,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       s.custom = true
       s.tabLabel.textContent = v
       s.cellLabel.textContent = v
-      s.stubLabel.textContent = v
+      s.cardLabel.textContent = v
       // The label was detached (replaced by the input) during the edit and its content
       // just changed; re-measure so a stale hover-marquee shift from before the rename
       // doesn't persist on the restored label.
@@ -1396,7 +1371,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // else the base name ("shell 2"). One resolver keeps the layers from fighting
   // and is where a model-generated summary would slot in later.
   // The REAL, width-aware truncation is CSS's job: every label (.cell-label, .term-tab-label,
-  // .stub-label) is `overflow:hidden; text-overflow:ellipsis`, each bounded to its own width —
+  // .card-label) is `overflow:hidden; text-overflow:ellipsis`, each bounded to its own width —
   // so a full-width cell header shows far more than a 180px tab, and each ellipsises exactly at
   // its own pixel edge. MAX_TITLE is only a sanity bound so a pathologically long typed line
   // never becomes a giant DOM text node / tooltip; it should stay well above any width we render.
@@ -1454,7 +1429,18 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       clipEl.classList.remove('is-overflow')
     }
   }
+  // The rail card's summary line: the Pulse one-liner, falling back to the last
+  // typed/captured command so a plain shell's card still says something useful.
+  // Updated even for custom-renamed panes (the rename freezes the NAME, not what
+  // the pane is doing); hidden entirely when nothing adds to the name.
+  function updateCardMeta(s) {
+    const name = s.custom ? s.cardLabel.textContent : clamp(visibleLabel(s))
+    const sum = [s.summaryText, s.heurTitle, s.lastCommand].find((v) => v && v !== name) || ''
+    s.cardSum.textContent = sum
+    s.cardSum.hidden = !sum
+  }
   function applyTitle(s) {
+    updateCardMeta(s)
     if (s.custom) return // a manual rename always wins
     const primary = clamp(visibleLabel(s))
     // Append the summary only when the program supplied its OWN title (so we ADD to it).
@@ -1462,7 +1448,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     const secondary = s.oscTitle && s.summaryText && s.summaryText !== s.oscTitle ? clamp(s.summaryText) : null
     setTwoPart(s.tabLabel, primary, secondary)
     setTwoPart(s.cellLabel, primary, secondary)
-    if (s.stubLabel.isConnected) s.stubLabel.textContent = primary // slim rail stub: single-line
+    s.cardLabel.textContent = primary // rail card name: single line, no marquee
     const tip = secondary ? `${primary} — ${secondary}` : primary
     s.tabEl.title = tip
     s.cell.title = tip
@@ -1561,7 +1547,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function paneRole(s) {
     if (layout === 'tabs') return s.id === activeId ? 'primary' : 'hidden'
     if (layout === 'grid') return 'primary' // every grid cell is a real working surface
-    if (layout === 'stack' || layout === 'deck') return s.id === activeId ? 'primary' : 'preview'
+    // Stack/deck: only the primary renders — every other pane is parked
+    // (display:none) and represented by its Pulse card in the rail.
+    if (layout === 'stack' || layout === 'deck') return s.id === activeId ? 'primary' : 'hidden'
     if (layout === 'flow') {
       if (s.cell.classList.contains('flow-center')) return 'primary'
       if (s.cell.classList.contains('flow-prev') || s.cell.classList.contains('flow-next')) return 'preview'
@@ -1723,12 +1711,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   const labelResizeObserver = new ResizeObserver((entries) => {
     for (const entry of entries) measureMarquee(entry.target)
   })
-  // The rail's tile size is a function of the panes container's size, so re-derive it
-  // whenever that box changes — window resize, panel drag, sidebar toggle. sizeRail()
-  // is a cheap no-op outside stack/deck, so observing unconditionally is fine.
-  const panesResizeObserver = new ResizeObserver(() => sizeRail())
-  panesResizeObserver.observe(panesEl)
-
   // ---- pty output -> terminal: drives the two-state (working/idle) indicator ----
   // Fleet-resurrection bookkeeping: main echoes each pane's captured shell
   // commands and prompt cwd off the shell-integration hook (see ipc-pty.js).
@@ -1736,7 +1718,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // reopen where it was and offer to bring its agent back.
   api.term.onCommand?.(({ id, cmd }) => {
     const s = sessions.get(id)
-    if (s && cmd) s.lastCommand = cmd
+    if (!s || !cmd) return
+    s.lastCommand = cmd
+    updateCardMeta(s) // a shell card's summary line may be this command
   })
   api.term.onCwd?.(({ id, cwd }) => {
     const s = sessions.get(id)
@@ -2030,13 +2014,13 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   }, WORKING_PULSE_MS)
 
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)')
-  // Paint one grid into a pane's three dot figures (tab / cell-header / stub) at once — the
-  // single place that writes the figure, so resting (updateIndicators), the rest→work edge
-  // (setState) and the animation tick all stay in lock-step.
+  // Paint one grid into a pane's three dot figures (tab / cell-header / rail card) at once —
+  // the single place that writes the figure, so resting (updateIndicators), the rest→work
+  // edge (setState) and the animation tick all stay in lock-step.
   function paintFigure(s, grid) {
     paint(s.tabDot.firstElementChild, grid)
     paint(s.cellDot.firstElementChild, grid)
-    paint(s.stubDot.firstElementChild, grid)
+    paint(s.cardDot.firstElementChild, grid)
   }
   // Paint the CURRENT working frame for a pane (does not advance the clock — the ticker owns
   // s.workT++). Reduced motion shows the static figure; otherwise the thinker's frame, with a
@@ -2051,7 +2035,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
 
   // ---- working-figure animation ticker ----
   // One global ticker advances every WORKING pane's own thinker and paints the frame into its
-  // three dot figures (tab / cell-header / stub). Each pane shows the ONE pattern picked for
+  // three dot figures (tab / cell-header / rail card). Each pane shows the ONE pattern picked for
   // this working phase (in setState on the rest→work edge); resting figures are painted once on
   // the edge (updateIndicators), not here. Reduced motion freezes on the static figure.
   const FRAME_MS = 130 // animation cadence — slowed slightly for a calmer, more readable figure
@@ -2114,7 +2098,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     recolorAll()
   }
 
-  // Re-apply --term-color to every existing pane (tab + cell + rail stub) from the
+  // Re-apply --term-color to every existing pane (tab + cell + rail card) from the
   // current activeColors, keeping each pane on its own stored slot. Also refreshes
   // s.color so any code reading it stays in sync. The Pulse tint/breathe and status
   // dots all derive from --term-color, so they pick up the new hue live.
@@ -2126,7 +2110,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       s.color = c
       s.tabEl.style.setProperty('--term-color', c)
       s.cell.style.setProperty('--term-color', c)
-      s.stub.style.setProperty('--term-color', c)
+      s.card.style.setProperty('--term-color', c)
     }
   }
 
@@ -2147,10 +2131,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (typeof opts.cursorBlink === 'boolean') termSettings.cursorBlink = opts.cursorBlink
     if (typeof opts.scrollback === 'number') termSettings.scrollback = opts.scrollback
     if (typeof opts.confirmClose === 'boolean') termSettings.confirmClose = opts.confirmClose
-    if (typeof opts.railVisibleTiles === 'number' && opts.railVisibleTiles > 0) {
-      termSettings.railVisibleTiles = opts.railVisibleTiles
-      sizeRail() // re-derive rail tile size live (no-op outside stack/deck)
-    }
     for (const s of sessions.values()) {
       if (fontChanged) {
         s.term.options.fontSize = termSettings.fontSize

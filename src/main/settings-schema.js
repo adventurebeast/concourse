@@ -95,18 +95,6 @@ export const SETTINGS_GROUPS = [
         ]
       },
       {
-        key: 'appearance.railVisibleTiles',
-        label: 'Rail Tiles Before Scroll',
-        description:
-          'In Master-stack and Master-deck layouts, how many secondary terminals fit in the rail before it scrolls. Fewer means larger tiles.',
-        type: 'number',
-        default: 6,
-        min: 2,
-        max: 20,
-        step: 1,
-        unit: 'tiles'
-      },
-      {
         key: 'appearance.tabStatus',
         label: 'Tab Status Style',
         description: 'How a tab shows whether its agent is working.',

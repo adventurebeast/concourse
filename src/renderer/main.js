@@ -466,8 +466,7 @@ function applyEditorTerminalSettings(v) {
     fontFamily: v['terminal.fontFamily'],
     cursorBlink: v['terminal.cursorBlink'],
     scrollback: v['terminal.scrollback'],
-    confirmClose: v['terminal.confirmClose'],
-    railVisibleTiles: v['appearance.railVisibleTiles']
+    confirmClose: v['terminal.confirmClose']
   })
 }
 function applyAppearanceSettings(v, { skipTheme = false } = {}) {
