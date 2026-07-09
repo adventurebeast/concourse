@@ -34,12 +34,6 @@ document.addEventListener('mouseover', (e) => {
     el.dataset.tip = text // migrate so the native tooltip never shows
     el.removeAttribute('title')
   }
-  // Expert mode: suppress the terminal tab/cell auto-title pop-over. The label is
-  // already visible on the tab/header and the summary can lag the live pane, so the
-  // hover card is just noise that covers the terminal. We still migrated the native
-  // title away above, so nothing shows at all. Functional tooltips (close buttons,
-  // toolbar, status bar) are unaffected since they aren't the tab/cell themselves.
-  if (document.documentElement.dataset.mode === 'expert' && el.matches('.term-tab, .term-cell')) return
   tipEl.textContent = text
   tipEl.classList.add('show')
   const r = el.getBoundingClientRect()
@@ -211,18 +205,17 @@ document.addEventListener('visibilitychange', () => {
 })
 
 // Command palette (⌘K): TYPES a command onto the active prompt (the user presses
-// Enter). Surfaces ♥ favorites + this project's commands + frecency-ranked shell
-// history, all from the main process; the curated beginner cheatsheet shows below
-// in beginner mode. Trigger button lives in the terminal tab bar (beginner only).
+// Enter; ⌘↵ runs it immediately). Surfaces ♥ favorites + this project's commands +
+// frecency-ranked shell history, all from the main process; the curated cheatsheet
+// shows below.
 const palette = createCommandPalette({
-  typeInto: (cmd) => terminals.typeIntoActive(cmd),
+  typeInto: (cmd, opts) => terminals.typeIntoActive(cmd, opts),
   // The palette's three dynamic sources (♥ favorites · project commands · frecency
   // history) and the ♥ toggle, all backed by the main process (api.commands).
   listCommands: () => api.commands.list(),
   favorite: (cmd, label, opts) => api.commands.favorite(cmd, label, opts),
   unfavorite: (id) => api.commands.unfavorite(id)
 })
-document.getElementById('cmd-trigger')?.addEventListener('click', () => palette.toggle())
 palette.mountStrip(document.getElementById('cmd-strip'))
 // Favorites can change in another window (or via the heart here) — re-render live.
 api.commands.onChanged(() => palette.refresh())
@@ -235,8 +228,7 @@ const keys = createKeybindings()
 // Cmd/Ctrl+R is also vetoed in the main process (menu accelerators fire first),
 // but keep a renderer veto too so the keystroke never leaks into a terminal.
 keys.register('mod+r', () => {})
-// Cmd/Ctrl+T opens a fresh terminal tab. In beginner mode this offers the agent
-// launcher menu (Claude / Codex / plain shell); in expert it spawns a bare shell.
+// Cmd/Ctrl+T opens a fresh terminal tab.
 keys.register('mod+t', () => terminals.newTab())
 // Shift+Cmd/Ctrl+Left / Right cycle the active terminal tab. A modifier is
 // required so plain arrow keys still reach the shell inside a terminal.
@@ -401,38 +393,6 @@ document.getElementById('toggle-theme').addEventListener('click', () => {
 })
 applyTheme(theme, { persist: false })
 
-// ---------- Experience mode (beginner default, expert optional, persisted) ----------
-// Two "lanes": beginner is calmer and more guided for people new to IDEs; expert
-// follows standard IDE conventions. Foundation only for now — the flag lives on
-// <html data-mode> (like data-theme) so CSS and feature code can branch off it.
-// The one behavioral hook today: beginner terminals get a friendlier prompt.
-const MODE_KEY = 'concourse-mode'
-let mode = localStorage.getItem(MODE_KEY) || 'beginner'
-function applyMode(next, { persist = true } = {}) {
-  mode = next === 'expert' ? 'expert' : 'beginner'
-  document.documentElement.dataset.mode = mode
-  const btn = document.getElementById('toggle-mode')
-  // Show the CURRENT mode as a labelled, colour-coded pill: a wand (guided "magic")
-  // for beginner, a terminal glyph (raw shell) for expert. Clicking switches.
-  const beginner = mode !== 'expert'
-  btn.innerHTML =
-    icon(beginner ? 'wand' : 'terminal', 14) +
-    `<span class="mode-toggle-label">${beginner ? 'Beginner' : 'Expert'}</span>`
-  btn.classList.toggle('beginner', beginner)
-  btn.classList.toggle('expert', !beginner)
-  const tip = beginner ? 'Switch to Expert Mode' : 'Switch to Beginner Mode'
-  btn.setAttribute('title', tip)
-  btn.dataset.tip = tip
-  localStorage.setItem(MODE_KEY, mode)
-  // Mirror into the central settings store (see applyTheme above for why this is
-  // loop-safe and why the boot call skips the write).
-  if (persist) Promise.resolve(api.settings?.set?.('appearance.mode', mode)).catch(() => {})
-}
-document.getElementById('toggle-mode').addEventListener('click', () => {
-  applyMode(mode === 'expert' ? 'beginner' : 'expert')
-})
-applyMode(mode, { persist: false })
-
 // ---------- Tab status style (pulse default, dots optional, persisted) ----------
 // How a terminal tab signals "working": the default 'pulse' tints the whole tab and
 // breathes it; 'dots' keeps the classic small status dot. Lives on <html
@@ -474,9 +434,8 @@ applyHeaderTheme(headerTheme, headerCustom)
 // ---------- Central settings (Settings window) ----------
 // The Settings window writes to a main-process store; every window then receives a
 // settings:changed broadcast. Editor/terminal preferences are applied live here;
-// theme/mode are mirrored INTO the store by applyTheme/applyMode above (so the panel
-// always shows the current state) and applied live when changed from the panel or
-// another window.
+// theme is mirrored INTO the store by applyTheme above (so the panel always shows
+// the current state) and applied live when changed from the panel or another window.
 function applyNotificationSettings(v) {
   if (!v || typeof v['notifications.enabled'] !== 'boolean') return
   notificationsEnabled = v['notifications.enabled']
@@ -505,7 +464,6 @@ function applyEditorTerminalSettings(v) {
 function applyAppearanceSettings(v, { skipTheme = false } = {}) {
   if (!v) return
   if (!skipTheme && v['appearance.theme'] && v['appearance.theme'] !== theme) applyTheme(v['appearance.theme'])
-  if (v['appearance.mode'] && v['appearance.mode'] !== mode) applyMode(v['appearance.mode'])
   if (v['appearance.tabStatus'] && v['appearance.tabStatus'] !== tabStatus)
     applyTabStatus(v['appearance.tabStatus'])
   // Default terminal layout is a "next time you open a workspace" preference, not a
@@ -563,13 +521,33 @@ document.getElementById('open-folder').addEventListener('click', async () => {
 // Open another, independent app window (also on File ▸ New Window / ⇧⌘N).
 document.getElementById('new-window')?.addEventListener('click', () => api.window?.open())
 
-// Application-menu commands run the SAME action as the matching toolbar button,
-// so the menu and the in-app buttons stay in lockstep (see src/main/menu.js).
-api.menu?.onCommand?.((command) => {
+// Application-menu commands run the SAME action as the matching toolbar button /
+// keyboard shortcut, so the menu and the in-app controls stay in lockstep (see
+// src/main/menu.js). Layout names arrive as 'layout-<name>' and map straight
+// onto terminals.setLayout.
+api.menu?.onCommand?.(async (command, arg) => {
   if (command === 'open-folder') document.getElementById('open-folder')?.click()
-  else if (command === 'new-file') document.getElementById('ft-new-file')?.click()
+  else if (command === 'open-recent') {
+    if (!arg) return
+    const root = await api.workspace.openPath(arg)
+    if (root) await setWorkspace(root)
+  } else if (command === 'new-file') document.getElementById('ft-new-file')?.click()
   else if (command === 'new-folder') document.getElementById('ft-new-folder')?.click()
   else if (command === 'reveal-in-finder') document.getElementById('ft-reveal')?.click()
+  else if (command === 'palette') palette.toggle()
+  else if (command === 'toggle-sidebar') document.getElementById('toggle-sidebar')?.click()
+  else if (command === 'toggle-panel') document.getElementById('toggle-panel')?.click()
+  else if (command === 'toggle-terminals') document.getElementById('toggle-terminals')?.click()
+  else if (command === 'view-explorer' || command === 'view-search' || command === 'view-scm')
+    document.querySelector(`.activity-btn[data-view="${command.slice(5)}"]`)?.click()
+  else if (command === 'term-new') terminals.newTab()
+  else if (command === 'term-close') terminals.closeActive()
+  else if (command === 'term-next') terminals.stepActive(1)
+  else if (command === 'term-prev') terminals.stepActive(-1)
+  else if (command === 'term-move-left') terminals.moveActive(-1)
+  else if (command === 'term-move-right') terminals.moveActive(1)
+  else if (command === 'layout-cycle') terminals.cycleLayout(1)
+  else if (command.startsWith('layout-')) terminals.setLayout(command.slice(7))
 })
 
 // Update notifier: the main process checks GitHub Releases at launch and fires

@@ -2,23 +2,39 @@ import './commandPalette.css'
 import { icon } from './icons.js'
 
 // Command palette (⌘K). Two layers:
-//   • Dynamic sources from the main process (api.commands), shown in EVERY mode,
-//     all driven by what you actually run (captured via the shell hook), newest
-//     run weighted up:
+//   • Dynamic sources from the main process (api.commands), all driven by what you
+//     actually run (captured via the shell hook), newest run weighted up:
 //       ♥ Favorites  → commands you pinned in this project (no run-count gate)
 //       Project      → scripts/recipes/targets declared in this folder
 //                      (package.json, justfile, Makefile) — shown without running
-//       This Project → commands you've entered in THIS project (run ≥ 2×)
-//       Global       → commands you've entered across ALL projects (run ≥ 2×)
+//       This Project → commands you've entered in THIS project
+//       Global       → commands you've entered across ALL projects
 //     This is the "call up the command I always run" surface — far better than
 //     Up-Arrow: visible, searchable, ranked by what you actually use, and you can
-//     ♥ the ones that matter so they're always on top. The 2-run floor keeps
-//     one-off commands out; a command only appears in one group (de-duped top-down).
-//   • A hand-curated beginner cheatsheet (below), shown in beginner mode only.
+//     ♥ the ones that matter so they're always on top. A command only appears in
+//     one group (de-duped top-down).
+//   • A hand-curated cheatsheet (below), always at the bottom.
+// Anything you type that isn't in the list becomes a row of its own, so a novel
+// command is one ⌥↵ away from being a saved favorite.
 // Picking a command TYPES it onto the active prompt but does NOT run it — the user
 // reads it and presses Enter themselves, so the terminal stays a dumb display and
-// we never fight the shell's byte stream.
+// we never fight the shell's byte stream. ⌘↵ (or ⌘-click) is the deliberate
+// exception: type AND run in one stroke.
 const COMMANDS = [
+  {
+    group: 'Agents',
+    items: [
+      { cmd: 'claude', label: 'Run Claude Code', icon: 'wand' },
+      { cmd: 'claude -c', label: 'Continue your last Claude session', icon: 'wand' },
+      { cmd: 'codex', label: 'Run Codex', icon: 'code' },
+      {
+        cmd: 'ssh ',
+        label: 'SSH into a machine',
+        hint: 'type user@host after it',
+        icon: 'globe'
+      }
+    ]
+  },
   {
     group: 'Files & folders',
     items: [
@@ -72,15 +88,18 @@ const COMMANDS = [
 const FLAT = COMMANDS.flatMap((g) => g.items.map((it) => ({ ...it, group: g.group })))
 
 // A short, friendly starter set shown in the always-visible strip under the
-// terminal (beginner mode). Chips lead with a concise plain-English label; the
-// real command is the tooltip. The full set lives behind the palette ("More…").
+// terminal (dismissible via its ✕ chip). Chips lead with a concise plain-English
+// label; the real command is the tooltip. The full set lives behind ⌘K ("More…").
 const STARTERS = [
+  { cmd: 'claude', short: 'Run Claude' },
   { cmd: 'ls', short: 'See files' },
-  { cmd: 'cd ..', short: 'Go up a folder' },
   { cmd: 'git status', short: 'Check status' },
   { cmd: 'npm run dev', short: 'Start the app' },
   { cmd: 'clear', short: 'Tidy screen' }
 ]
+
+// Once dismissed, the starter strip stays gone (per machine, like coach marks).
+const STRIP_DISMISS_KEY = 'concourse.strip.dismissed'
 
 export function createCommandPalette({ typeInto, listCommands, favorite, unfavorite } = {}) {
   // ---- DOM (built once, appended to body, toggled with [hidden]) -------------
@@ -97,6 +116,7 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       <div class="cmd-foot">
         <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
         <span><kbd>↵</kbd> put on prompt</span>
+        <span><kbd>⌘</kbd><kbd>↵</kbd> run</span>
         <span><kbd>⌥</kbd><kbd>↵</kbd> ♥ favorite</span>
         <span><kbd>esc</kbd> close</span>
       </div>
@@ -199,25 +219,41 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       favById
     )
 
-    // 5) Beginner-only curated cheatsheet, at the bottom.
-    if (document.documentElement.dataset.mode !== 'expert') {
-      for (const g of COMMANDS) {
-        appendGroup(
-          g.group,
-          g.items
-            .filter((it) => match(it.cmd, it.label))
-            .map((it) => ({ cmd: it.cmd, label: it.label, hint: it.hint, icon: it.icon })),
-          favById
-        )
-      }
+    // 5) Curated cheatsheet, at the bottom.
+    for (const g of COMMANDS) {
+      appendGroup(
+        g.group,
+        g.items
+          .filter((it) => match(it.cmd, it.label))
+          .map((it) => ({ cmd: it.cmd, label: it.label, hint: it.hint, icon: it.icon })),
+        favById
+      )
+    }
+
+    // 6) Whatever you typed, as a row of its own — the "just let me save my
+    // command" path. Shown whenever the query isn't already a listed command:
+    // ↵ types it, ⌘↵ runs it, ⌥↵ pins it as a favorite. Uses the RAW query
+    // (commands are case-sensitive), not the lowercased match key.
+    const typed = filter.trim()
+    if (typed && !rows.some((r) => r.item.cmd === typed)) {
+      appendGroup(
+        'Your command',
+        [
+          {
+            cmd: typed,
+            label: 'Use what you typed',
+            hint: '⌥↵ saves it as a favorite',
+            icon: 'terminal'
+          }
+        ],
+        favById
+      )
     }
 
     if (!rows.length) {
       const empty = document.createElement('div')
       empty.className = 'cmd-empty'
-      empty.textContent = q
-        ? 'No matching commands'
-        : 'No commands yet — run a few and they’ll show up here'
+      empty.textContent = 'No commands yet — run a few and they’ll show up here'
       list.appendChild(empty)
     }
     setActive(0)
@@ -256,7 +292,7 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
 
     const idx = rows.length
     row.addEventListener('mouseenter', () => setActive(idx))
-    row.addEventListener('click', () => choose(it))
+    row.addEventListener('click', (e) => choose(it, { run: e.metaKey || e.ctrlKey }))
     const favBtn = row.querySelector('.cmd-fav')
     favBtn.addEventListener('click', (e) => {
       e.stopPropagation() // never let the heart also "choose" the row
@@ -273,11 +309,12 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
     rows[active].el.scrollIntoView({ block: 'nearest' })
   }
 
-  // Type the command onto the active prompt (no newline) and close. If there's no
-  // active terminal to type into we just close — nothing to do.
-  function choose(it) {
+  // Type the command onto the active prompt (no newline) and close. With run:true
+  // (⌘↵ / ⌘-click) the newline is included, so it types AND executes. If there's
+  // no active terminal to type into we just close — nothing to do.
+  function choose(it, { run = false } = {}) {
     close()
-    if (typeInto) typeInto(it.cmd)
+    if (typeInto) typeInto(it.cmd, { run })
   }
 
   // Toggle a ♥. Favorites are pinned to the current project (main scopes them to
@@ -339,8 +376,8 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       const r = rows[active]
       if (!r) return
       if (e.altKey)
-        toggleFavorite(r.item, r.favId) // ⌥↵ favorites instead of running
-      else choose(r.item)
+        toggleFavorite(r.item, r.favId) // ⌥↵ favorites instead of typing
+      else choose(r.item, { run: e.metaKey || e.ctrlKey }) // ⌘↵ types AND runs
     } else if (e.key === 'Escape') {
       e.preventDefault()
       close()
@@ -357,12 +394,24 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
     if (e.target === overlay) close()
   })
 
-  // ---- Always-visible chip strip (beginner mode) ----------------------------
+  // ---- Always-visible chip strip ---------------------------------------------
   // The same curated commands, surfaced as clickable chips under the terminal so a
   // newcomer sees suggestions immediately without opening anything. Clicking a chip
   // types it onto the prompt (no run); the trailing "More…" chip opens the palette.
+  // Once you know your way around, the ✕ chip hides the strip for good (persisted);
+  // everything on it stays reachable through ⌘K.
   function mountStrip(el) {
     if (!el) return
+    let dismissed = false
+    try {
+      dismissed = localStorage.getItem(STRIP_DISMISS_KEY) === '1'
+    } catch {
+      /* localStorage unavailable — show the strip */
+    }
+    if (dismissed) {
+      el.hidden = true
+      return
+    }
     el.innerHTML = ''
     for (const starter of STARTERS) {
       const it = FLAT.find((f) => f.cmd === starter.cmd)
@@ -382,6 +431,20 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
     more.innerHTML = `<span class="cmd-chip-icon">${icon('wand', 13)}</span><span>More…</span>`
     more.addEventListener('click', open)
     el.appendChild(more)
+    const dismiss = document.createElement('button')
+    dismiss.className = 'cmd-chip cmd-chip-dismiss'
+    dismiss.type = 'button'
+    dismiss.title = 'Hide these starter chips (everything stays in ⌘K)'
+    dismiss.textContent = '✕'
+    dismiss.addEventListener('click', () => {
+      try {
+        localStorage.setItem(STRIP_DISMISS_KEY, '1')
+      } catch {
+        /* can't persist — still hide for this session */
+      }
+      el.hidden = true
+    })
+    el.appendChild(dismiss)
   }
 
   return { open, close, toggle, refresh, mountStrip, isOpen: () => !overlay.hidden }

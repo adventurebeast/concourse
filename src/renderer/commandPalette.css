@@ -186,8 +186,8 @@
   text-align: center;
 }
 
-/* Always-visible chip strip under the terminal — beginner mode only. */
-:root[data-mode='expert'] .cmd-strip {
+/* Always-visible chip strip under the terminal (dismissible via its ✕ chip). */
+.cmd-strip[hidden] {
   display: none;
 }
 .cmd-strip {
@@ -228,28 +228,10 @@
 .cmd-chip-more {
   color: var(--accent);
 }
-
-/* The trigger button lives in the terminal tab bar; beginner mode only. */
-:root[data-mode='expert'] #cmd-trigger {
-  display: none;
-}
-#cmd-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--bg-input);
-  color: var(--text-dim);
-  font-size: 12px;
-  cursor: pointer;
-}
-#cmd-trigger:hover {
-  background: var(--hover);
-  color: var(--text);
-  border-color: var(--accent);
-}
-#cmd-trigger svg {
-  color: var(--accent);
+/* The trailing ✕ chip hides the strip for good (persisted; see mountStrip). */
+.cmd-chip-dismiss {
+  margin-left: auto;
+  padding: 3px 8px;
+  border-color: transparent;
+  background: none;
 }

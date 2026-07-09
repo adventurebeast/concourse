@@ -13,13 +13,11 @@ import { colorsFor } from './term-palettes.js'
 
 const api = window.api
 
-// Instant theme/mode before the async settings load: both windows share one
-// origin, so the localStorage cache the workbench writes is readable here too.
-// This paints the panel in the right theme with no flash.
+// Instant theme before the async settings load: both windows share one origin,
+// so the localStorage cache the workbench writes is readable here too. This
+// paints the panel in the right theme with no flash.
 document.documentElement.dataset.theme =
   localStorage.getItem('concourse-theme') === 'dark' ? 'dark' : 'light'
-document.documentElement.dataset.mode =
-  localStorage.getItem('concourse-mode') === 'expert' ? 'expert' : 'beginner'
 
 const nav = document.getElementById('settings-nav')
 const content = document.getElementById('settings-content')
@@ -306,7 +304,6 @@ function syncControls() {
 // visible immediately, even before the workbench echoes it back).
 function applyTheme() {
   if (values['appearance.theme']) document.documentElement.dataset.theme = values['appearance.theme']
-  if (values['appearance.mode']) document.documentElement.dataset.mode = values['appearance.mode']
 }
 
 // ---------- search filter ----------

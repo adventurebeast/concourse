@@ -65,17 +65,6 @@ export const SETTINGS_GROUPS = [
         ]
       },
       {
-        key: 'appearance.mode',
-        label: 'Experience Mode',
-        description: 'Beginner adds extra guidance; Expert follows standard IDE conventions.',
-        type: 'enum',
-        default: 'beginner',
-        options: [
-          { value: 'beginner', label: 'Beginner' },
-          { value: 'expert', label: 'Expert' }
-        ]
-      },
-      {
         key: 'appearance.startup',
         label: 'On Startup',
         description: 'Show the start screen, or reopen the project from your last session.',

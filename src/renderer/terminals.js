@@ -10,7 +10,7 @@ import { RESTING_GRID, STATIC_GRID, MIN_WORKING_GRID, createThinker } from './br
 import { makeFigure, paint } from './dot-figure.js' // SVG dot-matrix renderer for the figure
 import { colorsFor } from './term-palettes.js'
 
-// The one-time beginner coach mark that explains Pulse the first time a tab starts
+// The one-time coach mark that explains Pulse the first time a tab starts
 // working. Fired from every path that starts an agent (launcher reuse, '+' preset,
 // or a user-driven shell going active) — coachOnce makes it once-ever regardless.
 const PULSE_COACH =
@@ -333,20 +333,20 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   }
 
   // The new-tab affordance ('+' button and Cmd+T): just open a new tab — no menu.
-  // The very first pane still greets beginners with the empty-pane agent launcher
+  // The very first pane still greets you with the empty-pane agent launcher
   // (gated on sessions.size === 0 in create()); a plain new pane is all the '+' owes.
   function newTab() {
     return create({})
   }
 
-  // ---- empty-pane agent launcher (beginner mode) ----
-  // A fresh, unused shell in beginner mode is a dead end for a newcomer: a mute
-  // prompt with no hint that the whole point is to run an agent here. This overlay
-  // turns that first pane into the moment they learn the core move — by doing it.
-  // Shown only on the FIRST pane (sessions.size 0 → 1), never on restored panes,
-  // never in expert. Dismissed the instant the user acts (a button, or typing into
-  // the pane); crucially NOT on PTY output, so the cd-into-folder chrome can't make
-  // it vanish before the user has chosen.
+  // ---- empty-pane agent launcher ----
+  // A fresh, unused shell is a dead end for a newcomer: a mute prompt with no hint
+  // that the whole point is to run an agent here. This overlay turns that first
+  // pane into the moment they learn the core move — by doing it. (It's also the
+  // power-user fast path: one click to Claude.) Shown only on the FIRST pane
+  // (sessions.size 0 → 1), never on restored panes. Dismissed the instant the user
+  // acts (a button, or typing into the pane); crucially NOT on PTY output, so the
+  // cd-into-folder chrome can't make it vanish before the user has chosen.
   function mountPaneLauncher(s) {
     const el = document.createElement('div')
     el.className = 'pane-launcher'
@@ -386,7 +386,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     dismissPaneLauncher(s)
     s.used = true
     setState(s, 'working') // pulse the tab the instant they click — immediate feedback
-    if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
+    coachOnce('pulse', PULSE_COACH)
     api.term.input(s.id, command + '\r')
     s.term.focus()
   }
@@ -791,17 +791,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // would otherwise keep a stale animation frame — this is the one funnel every state change
     // routes through, so paint the resting figure here.
     if (s.state !== 'working') paintFigure(s, RESTING_GRID)
-    // A just-in-time reminder of what the state means, surfaced on hover — beginner
-    // only, so Expert stays a bare shell. The status-bar fleet count carries the full
-    // Pulse legend; this is just the hover gloss.
-    if (document.documentElement.dataset.mode !== 'expert') {
-      const tip = s.state === 'working' ? 'Working' : s.state === 'awaiting' ? 'Awaiting you' : 'Idle'
-      s.cellDot.dataset.tip = tip
-      s.tabEl.dataset.tip = tip
-    } else {
-      delete s.cellDot.dataset.tip
-      delete s.tabEl.dataset.tip
-    }
+    // A just-in-time reminder of what the state means, surfaced on hover. The
+    // status-bar fleet count carries the full Pulse legend; this is the hover gloss.
+    const tip = s.state === 'working' ? 'Working' : s.state === 'awaiting' ? 'Awaiting you' : 'Idle'
+    s.cellDot.dataset.tip = tip
+    s.tabEl.dataset.tip = tip
     emitFleet()
   }
 
@@ -828,11 +822,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // beginner launcher overlay so it only greets a genuinely fresh start, not every
     // '+'-spawned shell.
     const firstPane = sessions.size === 0
-    // Beginner mode uses the plainest possible default ("Tab 1"); expert mode
-    // keeps the conventional "shell N". A preset name (e.g. an agent) wins either way.
+    // The plainest possible default ("Tab 1"). A preset name (e.g. an agent) wins.
     // `label` is used verbatim (session restore) — it skips the counter suffix.
-    const beginner = document.documentElement.dataset.mode !== 'expert'
-    const defaultName = beginner ? `Tab ${counter}` : `shell ${counter}`
+    const defaultName = `Tab ${counter}`
     const displayName = label || (name ? `${name} ${counter}` : defaultName)
     // Stable per-pane colour slot: store the raw ordinal so recolorAll() can re-pick
     // this pane's hue from any palette/theme (modulo its length) and keep it on its
@@ -993,23 +985,17 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       armSettle(s)
     }
 
-    // Beginner-only empty-pane launcher: greet a brand-new user's first pane with
-    // "Launch an agent here" instead of a mute prompt. Never on restored panes
-    // (returning users), never on a preset (it's already running an agent), never
-    // when the user explicitly asked for a plain shell, never in expert.
-    if (
-      firstPane &&
-      !command &&
-      !bare &&
-      !restored &&
-      document.documentElement.dataset.mode !== 'expert'
-    ) {
+    // Empty-pane launcher: greet a fresh first pane with "Launch an agent here"
+    // instead of a mute prompt. Never on restored panes (returning users), never on
+    // a preset (it's already running an agent), never when the user explicitly
+    // asked for a plain shell.
+    if (firstPane && !command && !bare && !restored) {
       mountPaneLauncher(s)
     }
 
-    // Beginner mode gets the calmer, friendlier shell prompt; expert mode is left bare.
-    const friendlyPrompt = document.documentElement.dataset.mode !== 'expert'
-    api.term.create(id, getRoot(), { friendlyPrompt })
+    // The calmer, friendlier shell prompt — only applied when the user has no
+    // custom prompt of their own (the main process checks before touching it).
+    api.term.create(id, getRoot(), { friendlyPrompt: true })
     // Cmd+Backspace clears the whole input line — the macOS "delete to start of
     // line" gesture, mapped onto the shell's kill-line. We send Ctrl+E (jump to
     // end) then Ctrl+U (kill from cursor to start) so the line is wiped no matter
@@ -1140,16 +1126,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     else activate(id)
     refreshBranch() // warm the git-branch cache for the last-command heuristic
 
-    // Just-in-time layout teaching: the moment a beginner has TWO agents and is still
-    // in the single-pane tabs view, point them at Grid so they can watch both at once.
-    // Fires once ever (coachOnce persists across launches) — never nags, never expert,
-    // and never during a session restore (which recreates panes with restored:true).
-    if (
-      !restored &&
-      document.documentElement.dataset.mode !== 'expert' &&
-      sessions.size === 2 &&
-      layout === 'tabs'
-    ) {
+    // Just-in-time layout teaching: the moment you have TWO agents and are still
+    // in the single-pane tabs view, point at Grid so you can watch both at once.
+    // Fires once ever (coachOnce persists across launches) — never nags, and never
+    // during a session restore (which recreates panes with restored:true).
+    if (!restored && sessions.size === 2 && layout === 'tabs') {
       coachOnce('grid', 'You have two agents now — press ⌘I to watch them side by side (Grid).')
     }
 
@@ -1158,7 +1139,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       s.used = true
       // A preset pane starts in the 'working' state, so it never crosses the
       // idle→working edge that fires the Pulse coach in onData — explain it here too.
-      if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
+      coachOnce('pulse', PULSE_COACH)
       setTimeout(() => api.term.input(id, command + '\r'), 500)
     }
     return id
@@ -1720,9 +1701,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       // WORKING_PULSE_MS; reset its hash so it re-labels this stint from scratch.
       s.lastLiveHash = null
       setState(s, 'working') // repaints; also clears any awaiting come-look
-      // The first time a beginner ever sees a tab start pulsing, explain it — Pulse
-      // finally names itself at the exact moment it has meaning. Once ever, never expert.
-      if (document.documentElement.dataset.mode !== 'expert') coachOnce('pulse', PULSE_COACH)
+      // The first time you ever see a tab start pulsing, explain it — Pulse
+      // finally names itself at the exact moment it has meaning. Once ever.
+      coachOnce('pulse', PULSE_COACH)
     }
     // Visible change ⇒ not at rest: (re-)arm the fast settle debounce.
     armSettle(s)
@@ -2095,14 +2076,15 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
 
   // Type text into the active terminal WITHOUT running it — no trailing newline.
   // The user reads the command on the prompt and presses Enter themselves. Used by
-  // the beginner command palette ("type, don't run"). Focusing the pane afterwards
+  // the command palette ("type, don't run"); run:true (the palette's ⌘↵) is the
+  // deliberate exception and includes the newline. Focusing the pane afterwards
   // means they can immediately edit or run it. Marks the pane "used" so cdInto()
   // won't later type a cd into a terminal the user has started driving.
-  function typeIntoActive(text) {
+  function typeIntoActive(text, { run = false } = {}) {
     const s = sessions.get(activeId)
     if (!s || !text) return false
     s.used = true
-    api.term.input(s.id, text)
+    api.term.input(s.id, run ? text + '\r' : text)
     s.term.focus()
     return true
   }
