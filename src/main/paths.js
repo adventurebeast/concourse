@@ -22,7 +22,11 @@ export function confine(root, p) {
     // Target doesn't exist yet: resolve its parent and re-attach the name.
     real = path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved))
   }
-  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+  // Windows paths are case-insensitive and realpathSync can normalise the drive
+  // letter differently between the two sides (C:\ vs c:\) — compare case-folded
+  // there so a legitimate in-root path isn't rejected. POSIX stays case-exact.
+  const fold = (s) => (process.platform === 'win32' ? s.toLowerCase() : s)
+  if (fold(real) !== fold(realRoot) && !fold(real).startsWith(fold(realRoot) + path.sep)) {
     throw new Error('EPATHESCAPE')
   }
   return real

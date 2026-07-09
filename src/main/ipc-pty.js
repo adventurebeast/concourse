@@ -80,7 +80,7 @@ function firstExisting(paths) {
 // unusable (a Custom path that doesn't exist, a named shell that isn't installed)
 // — a bad setting must never leave the user unable to open a terminal.
 function resolveShell() {
-  if (os.platform() === 'win32') return 'powershell.exe'
+  if (os.platform() === 'win32') return resolveWinShell()
   const choice = getRaw('terminal.shell') || 'auto'
   if (choice === 'custom') {
     const p = (getRaw('terminal.shellPath') || '').trim()
@@ -88,6 +88,24 @@ function resolveShell() {
   }
   if (SHELL_PATHS[choice]) return firstExisting(SHELL_PATHS[choice]) || loginShell()
   return loginShell() // 'auto' (default) or anything unrecognized
+}
+
+// Windows twin of resolveShell(): PowerShell is the safe default (always present),
+// with pwsh 7 / cmd / a custom path as opt-ins (settings-schema.js swaps the enum
+// options per platform). Same degradation rule: a bad choice falls back to
+// powershell.exe rather than a pane that can't open.
+function resolveWinShell() {
+  const choice = getRaw('terminal.shell') || 'auto'
+  if (choice === 'custom') {
+    const p = (getRaw('terminal.shellPath') || '').trim()
+    return p && firstExisting([p]) ? p : 'powershell.exe'
+  }
+  if (choice === 'pwsh') {
+    const pf = process.env.ProgramFiles || 'C:\\Program Files'
+    return firstExisting([path.join(pf, 'PowerShell', '7', 'pwsh.exe')]) || 'powershell.exe'
+  }
+  if (choice === 'cmd') return process.env.ComSpec || 'cmd.exe'
+  return 'powershell.exe' // 'auto', 'powershell', or anything unrecognized
 }
 
 // Does the user customize their own shell prompt? If so we leave it alone.
@@ -131,6 +149,37 @@ function shq(s) {
 const ZSH_CAPTURE =
   "_concourse_capture() { printf '\\033]5151;%s\\007' \"$(printf '%s' \"$1\" | base64 | tr -d '\\n')\" }\n" +
   'autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook preexec _concourse_capture 2>/dev/null || preexec_functions=(_concourse_capture $preexec_functions)\n'
+// PowerShell (both Windows PowerShell and pwsh 7): like bash there's no preexec,
+// so wrap the prompt function — it runs right before each new prompt — and read
+// the just-finished command off Get-History. The previous prompt function is
+// preserved and called through, so a custom prompt (starship, oh-my-posh, a
+// $PROFILE prompt) survives; the calm friendly prompt only ever replaces
+// PowerShell's stock "PS C:\path>" (recognised by its $nestedPromptLevel body).
+// try/catch around capture: a marker failure must never break the prompt. The
+// file gets a UTF-8 BOM so Windows PowerShell 5.1 reads the ❯ correctly.
+function psInit(friendly) {
+  return (
+    '﻿' + // UTF-8 BOM — see comment above
+    '$global:__ConcoursePrev = $function:prompt\n' +
+    '$global:__ConcourseLast = -1\n' +
+    `$global:__ConcourseFriendly = ${friendly ? '$true' : '$false'} -and ` +
+    "($global:__ConcoursePrev.ToString() -match 'nestedPromptLevel')\n" +
+    'function global:prompt {\n' +
+    '  try {\n' +
+    '    $h = Get-History -Count 1\n' +
+    '    if ($h -and $h.Id -ne $global:__ConcourseLast) {\n' +
+    '      $global:__ConcourseLast = $h.Id\n' +
+    '      $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($h.CommandLine))\n' +
+    '      [Console]::Write("$([char]27)]5151;$b64$([char]7)")\n' +
+    '    }\n' +
+    '  } catch {}\n' +
+    '  if ($global:__ConcourseFriendly) { "$(Split-Path -Leaf -Path (Get-Location)) ❯ " }\n' +
+    '  elseif ($global:__ConcoursePrev) { & $global:__ConcoursePrev }\n' +
+    '  else { "PS $($executionContext.SessionState.Path.CurrentLocation)> " }\n' +
+    '}\n'
+  )
+}
+
 // bash has no preexec, so read the just-run command off history at each prompt;
 // a guard against the unchanged last entry avoids double-counting a bare Enter.
 const BASH_CAPTURE =
@@ -167,6 +216,28 @@ async function shellInitSetup(shellPath, friendly) {
   try {
     const home = os.homedir()
     const dir = rcDir()
+
+    // PowerShell (Windows PowerShell or pwsh): dot-source a generated init file.
+    // Profiles still load first (no -NoProfile), so the user's PATH/aliases/prompt
+    // are in place before psInit wraps the prompt. -ExecutionPolicy Bypass is
+    // required: the default Restricted policy refuses to dot-source ANY .ps1.
+    if (/powershell|pwsh/i.test(shellPath)) {
+      const ps1 = path.join(dir, `ps-${crypto.randomUUID()}.ps1`)
+      await fs.promises.writeFile(ps1, psInit(friendly), { mode: 0o600 })
+      return {
+        args: [
+          '-NoLogo',
+          '-NoExit',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          `. '${ps1.replace(/'/g, "''")}'`
+        ]
+      }
+    }
+    // cmd.exe has no prompt-hook mechanism — plain shell, no capture (same trade
+    // as fish/nushell below).
+    if (/cmd(\.exe)?$/i.test(shellPath)) return null
 
     if (/zsh/.test(shellPath)) {
       // zsh reads its rc files from $ZDOTDIR (default $HOME). Point it at a
@@ -247,15 +318,17 @@ export function registerPty(ctx) {
   // Whether the user runs their own prompt is a property of their rc files, not
   // of any one terminal — compute it ONCE at startup instead of re-scanning the
   // rc files on every spawn (10 rapid terminals = 10 redundant disk scans).
+  // Windows: no pre-scan needed — psInit preserves a custom prompt at runtime
+  // (it wraps the previous prompt function and only replaces the stock one).
   const isWinHost = os.platform() === 'win32'
-  const hostShell = isWinHost ? 'powershell.exe' : resolveShell()
-  const hasCustomPrompt = isWinHost ? true : userHasCustomPrompt(hostShell)
+  const hostShell = resolveShell()
+  const hasCustomPrompt = isWinHost ? false : userHasCustomPrompt(hostShell)
 
   ipcMain.on('term:create', async (_e, { id, cwd, friendlyPrompt = true }) => {
     const wc = _e.sender
     const wcId = wc.id
     const isWin = os.platform() === 'win32'
-    const shellPath = isWin ? 'powershell.exe' : resolveShell()
+    const shellPath = resolveShell()
     // Login shell (-l) so it sources the user's profile (/etc/profile, ~/.bash_profile,
     // ~/.zprofile…) — gives the normal prompt (PS1), aliases, and PATH like Terminal/Cursor.
     let args = isWin ? [] : ['-l']
@@ -287,12 +360,13 @@ export function registerPty(ctx) {
 
     // Seed the shell's init files (see shellInitSetup): always installs the
     // command-capture hook that feeds the per-project palette history, and gives
-    // newbies a calm `folder ❯` prompt instead of the default `Mac:dir user$`.
-    // The friendly prompt is only applied when the user hasn't set up their own
-    // (a custom PS1/framework is left untouched) and the renderer asked for it;
+    // newbies a calm `folder ❯` prompt instead of the default `Mac:dir user$` /
+    // `PS C:\dir>`. The friendly prompt is only applied when the user hasn't set
+    // up their own (a custom PS1/framework is left untouched — on PowerShell the
+    // generated init decides this at runtime) and the renderer asked for it;
     // capture is installed either way. Seeding init files rather than injecting
     // live input means none of this races the shell's startup output.
-    if (!isWin) {
+    {
       const friendly = friendlyPrompt && !hasCustomPrompt
       // Await the once-per-(shell,friendly) rc generation so even the first spawn
       // — and any burst of spawns sharing the same in-flight promise — gets the

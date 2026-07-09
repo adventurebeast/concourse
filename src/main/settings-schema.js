@@ -20,6 +20,11 @@
 // 'secret' values are stored locally but never sent back to a renderer (the UI
 // only learns whether one is set) and are read solely by the main process.
 
+// Platform switch for the few settings whose options differ by OS (the shell
+// chooser). Guarded via globalThis so this file stays importable anywhere; the
+// schema is evaluated in the main process and shipped to the UI as plain data.
+const IS_WIN = (globalThis.process?.platform || '') === 'win32'
+
 export const SETTINGS_GROUPS = [
   {
     id: 'general',
@@ -193,25 +198,34 @@ export const SETTINGS_GROUPS = [
       {
         key: 'terminal.shell',
         label: 'Shell',
-        description:
-          'Which shell new terminals launch. Automatic uses your login shell (recommended) — it works even when Concourse is opened from Finder/Dock, where the system hides $SHELL. Pick a named shell, or Custom… to run any other shell by path.',
+        description: IS_WIN
+          ? 'Which shell new terminals launch. Automatic uses Windows PowerShell (always present). PowerShell 7 (pwsh) is used when installed; Command Prompt runs without the per-project command history hook.'
+          : 'Which shell new terminals launch. Automatic uses your login shell (recommended) — it works even when Concourse is opened from Finder/Dock, where the system hides $SHELL. Pick a named shell, or Custom… to run any other shell by path.',
         type: 'enum',
         default: 'auto',
-        options: [
-          { value: 'auto', label: 'Automatic (login shell)' },
-          { value: 'bash', label: 'Bash' },
-          { value: 'zsh', label: 'Zsh' },
-          { value: 'custom', label: 'Custom…' }
-        ]
+        options: IS_WIN
+          ? [
+              { value: 'auto', label: 'Automatic (PowerShell)' },
+              { value: 'powershell', label: 'Windows PowerShell' },
+              { value: 'pwsh', label: 'PowerShell 7 (pwsh)' },
+              { value: 'cmd', label: 'Command Prompt' },
+              { value: 'custom', label: 'Custom…' }
+            ]
+          : [
+              { value: 'auto', label: 'Automatic (login shell)' },
+              { value: 'bash', label: 'Bash' },
+              { value: 'zsh', label: 'Zsh' },
+              { value: 'custom', label: 'Custom…' }
+            ]
       },
       {
         key: 'terminal.shellPath',
         label: 'Custom Shell Path',
         description:
-          'Used only when Shell is “Custom…”. Full path to the shell binary. Concourse leaves a custom shell’s startup files untouched, so its prompt and PATH are whatever you’ve configured (the per-project command history hook is skipped). Invalid paths fall back to your login shell.',
+          'Used only when Shell is “Custom…”. Full path to the shell binary. Concourse leaves a custom shell’s startup files untouched, so its prompt and PATH are whatever you’ve configured (the per-project command history hook is skipped). Invalid paths fall back to the default shell.',
         type: 'text',
         default: '',
-        placeholder: '/opt/homebrew/bin/fish'
+        placeholder: IS_WIN ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/opt/homebrew/bin/fish'
       },
       {
         key: 'terminal.fontSize',
@@ -229,8 +243,11 @@ export const SETTINGS_GROUPS = [
         label: 'Font Family',
         description: 'Terminal font family (monospace recommended).',
         type: 'text',
-        default: 'Menlo, Monaco, "SF Mono", "Courier New", monospace',
-        placeholder: 'Menlo, Monaco, monospace'
+        // Cross-platform fallback chain: Menlo/SF Mono land on macOS, Cascadia
+        // Mono/Consolas on Windows (Menlo doesn't exist there — without these the
+        // old chain fell through to Courier New).
+        default: 'Menlo, Monaco, "SF Mono", "Cascadia Mono", Consolas, "Courier New", monospace',
+        placeholder: 'Menlo, Consolas, monospace'
       },
       {
         key: 'terminal.cursorBlink',

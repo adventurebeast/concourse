@@ -664,7 +664,10 @@ export function createFileTree({ onOpenFile }) {
         }
       },
       { sep: true },
-      { label: 'Reveal in Finder', action: () => api.shell.showItemInFolder(entry.path) },
+      {
+        label: api.platform === 'darwin' ? 'Reveal in Finder' : 'Show in File Explorer',
+        action: () => api.shell.showItemInFolder(entry.path)
+      },
       { sep: true },
       { label: 'Rename', action: () => startRename(entry) },
       { label: 'Delete', action: () => confirmDelete(entry), danger: true }

@@ -16,6 +16,9 @@ const api = window.api
 // Platform flag for CSS: macOS pads the titlebar for the traffic lights; Windows
 // pads the other side for the native caption-button overlay (see style.css).
 document.documentElement.dataset.platform = api.platform || 'darwin'
+// The explorer's reveal button ships with the macOS label in the markup.
+if (api.platform && api.platform !== 'darwin')
+  document.getElementById('ft-reveal')?.setAttribute('title', 'Show in File Explorer')
 
 // ---------- Icons: fill every [data-icon] button from the shared set ----------
 function renderIcons(scope = document) {

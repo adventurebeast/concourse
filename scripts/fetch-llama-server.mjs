@@ -10,8 +10,9 @@
 // llama.cpp is MIT-licensed — redistribution inside the app is fine.
 //
 // NOTE: this is build tooling that runs in plain Node (not Electron). It relies on the
-// system `tar` (macOS/Linux .tar.gz assets) or `unzip` (Windows .zip) — both present on
-// their respective platforms. The app targets macOS today.
+// system `tar` for macOS/Linux .tar.gz assets; Windows .zip assets are extracted with
+// PowerShell's Expand-Archive (`unzip` is NOT a stock Windows binary — it only happens
+// to exist on Git-Bash-provisioned CI images).
 
 import {
   existsSync,
@@ -48,12 +49,16 @@ if (existsSync(join(outDir, serverName))) {
   process.exit(0)
 }
 
-// Substring llama.cpp uses in its release asset names for this platform/arch.
-function assetMatcher() {
+// Preference-ordered name matchers for this platform/arch — the FIRST regex with a
+// matching asset wins. Windows needs the ordering: the release carries several
+// win-*-x64 builds (cpu / cuda / vulkan / …) and only the CPU build runs everywhere;
+// a loose match used to grab whichever variant listed first (e.g. a CUDA build that
+// won't start without the driver stack).
+function assetMatchers() {
   const a = process.arch
-  if (process.platform === 'darwin') return a === 'arm64' ? /macos-arm64/i : /macos-x64/i
-  if (process.platform === 'linux') return a === 'arm64' ? /ubuntu-arm64/i : /ubuntu-x64/i
-  if (process.platform === 'win32') return /win-.*x64/i // best-effort; app is macOS-first
+  if (process.platform === 'darwin') return [a === 'arm64' ? /macos-arm64/i : /macos-x64/i]
+  if (process.platform === 'linux') return [a === 'arm64' ? /ubuntu-arm64/i : /ubuntu-x64/i]
+  if (process.platform === 'win32') return [/win-cpu-x64/i, /win-.*x64/i]
   return null
 }
 
@@ -73,8 +78,8 @@ function findServerDir(dir) {
 }
 
 async function main() {
-  const matcher = assetMatcher()
-  if (!matcher) bail(`unsupported platform ${process.platform}/${process.arch}`)
+  const matchers = assetMatchers()
+  if (!matchers) bail(`unsupported platform ${process.platform}/${process.arch}`)
 
   console.log('[fetch:llama] querying latest llama.cpp release…')
   const rel = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
@@ -82,7 +87,13 @@ async function main() {
   }).then((r) => r.json())
 
   // llama.cpp ships macOS/Linux as .tar.gz and Windows as .zip — accept either.
-  const asset = (rel.assets || []).find((x) => matcher.test(x.name) && /\.(?:zip|tar\.gz|tgz)$/i.test(x.name))
+  // Walk the matchers in preference order (see assetMatchers).
+  const isArchive = (n) => /\.(?:zip|tar\.gz|tgz)$/i.test(n)
+  let asset = null
+  for (const m of matchers) {
+    asset = (rel.assets || []).find((x) => m.test(x.name) && isArchive(x.name))
+    if (asset) break
+  }
   if (!asset) {
     console.warn('[fetch:llama] available assets:', (rel.assets || []).map((x) => x.name).join(', '))
     bail(`no matching release asset for ${process.platform}/${process.arch}`)
@@ -101,7 +112,19 @@ async function main() {
 
   console.log('[fetch:llama] extracting…')
   if (/\.zip$/i.test(asset.name)) {
-    execFileSync('unzip', ['-o', '-q', zipPath, '-d', work])
+    if (process.platform === 'win32') {
+      // Expand-Archive ships with every PowerShell — `unzip` does not exist on a
+      // clean Windows box (a local `npm run dist:win` would die on ENOENT).
+      const q = (s) => `'${s.replace(/'/g, "''")}'`
+      execFileSync('powershell.exe', [
+        '-NoLogo',
+        '-NoProfile',
+        '-Command',
+        `Expand-Archive -LiteralPath ${q(zipPath)} -DestinationPath ${q(work)} -Force`
+      ])
+    } else {
+      execFileSync('unzip', ['-o', '-q', zipPath, '-d', work])
+    }
   } else {
     execFileSync('tar', ['-xzf', zipPath, '-C', work]) // .tar.gz / .tgz (macOS/Linux)
   }
