@@ -200,7 +200,8 @@ const BASH_CAPTURE =
   'PROMPT_COMMAND="_concourse_capture${PROMPT_COMMAND:+;$PROMPT_COMMAND}"\n'
 
 // Seed the shell's own init files with two things: the command-capture hook
-// (always) and — when `friendly` is true — the calm beginner prompt (`folder ❯`).
+// (always) and — when `friendly` is true (the opt-in terminal.friendlyPrompt
+// setting) — the calm `folder ❯` prompt.
 //
 // We used to inject ` PS1=… PROMPT=… && clear\r` as shell input once the PTY
 // looked idle. That raced the shell's own startup output: when several panes
@@ -332,7 +333,7 @@ export function registerPty(ctx) {
   const hostShell = resolveShell()
   const hasCustomPrompt = isWinHost ? false : userHasCustomPrompt(hostShell)
 
-  ipcMain.on('term:create', async (_e, { id, cwd, friendlyPrompt = true }) => {
+  ipcMain.on('term:create', async (_e, { id, cwd }) => {
     const wc = _e.sender
     const wcId = wc.id
     const isWin = os.platform() === 'win32'
@@ -367,15 +368,15 @@ export function registerPty(ctx) {
     }
 
     // Seed the shell's init files (see shellInitSetup): always installs the
-    // command-capture hook that feeds the per-project palette history, and gives
-    // newbies a calm `folder ❯` prompt instead of the default `Mac:dir user$` /
-    // `PS C:\dir>`. The friendly prompt is only applied when the user hasn't set
-    // up their own (a custom PS1/framework is left untouched — on PowerShell the
-    // generated init decides this at runtime) and the renderer asked for it;
-    // capture is installed either way. Seeding init files rather than injecting
+    // command-capture hook that feeds the per-project palette history. The prompt
+    // is left EXACTLY as this machine has it by default — a terminal that looks
+    // familiar out of the gate. The calm `folder ❯` prompt is opt-in
+    // (terminal.friendlyPrompt) and even then only ever replaces a STOCK prompt
+    // (a custom PS1/framework is never touched — on PowerShell the generated
+    // init decides this at runtime). Seeding init files rather than injecting
     // live input means none of this races the shell's startup output.
     {
-      const friendly = friendlyPrompt && !hasCustomPrompt
+      const friendly = getRaw('terminal.friendlyPrompt') === true && !hasCustomPrompt
       // Await the once-per-(shell,friendly) rc generation so even the first spawn
       // — and any burst of spawns sharing the same in-flight promise — gets the
       // setup; the rc files are written ONCE, not per spawn.

@@ -216,6 +216,14 @@ export const SETTINGS_GROUPS = [
         placeholder: IS_WIN ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/opt/homebrew/bin/fish'
       },
       {
+        key: 'terminal.friendlyPrompt',
+        label: 'Simplified Prompt',
+        description:
+          'Replace a stock shell prompt with a calm “folder ❯” in new terminals. Off, your shell looks exactly as it does in Terminal. A custom prompt (starship, oh-my-zsh, a hand-set PS1…) is never touched either way.',
+        type: 'boolean',
+        default: false
+      },
+      {
         key: 'terminal.fontSize',
         label: 'Font Size',
         description: 'Terminal font size in pixels.',

@@ -1045,11 +1045,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       if (resumeCmd) mountResumeCard(s, lastCommand, resumeCmd)
     }
 
-    // The calmer, friendlier shell prompt — only applied when the user has no
-    // custom prompt of their own (the main process checks before touching it).
     // A restored pane reopens in its persisted cwd (main confines it to the
-    // workspace root and falls back safely if the folder is gone).
-    api.term.create(id, cwd || getRoot(), { friendlyPrompt: true })
+    // workspace root and falls back safely if the folder is gone). Prompt policy
+    // (the opt-in "Simplified Prompt") is the main process's call — see ipc-pty.js.
+    api.term.create(id, cwd || getRoot())
     // Cmd+Backspace clears the whole input line — the macOS "delete to start of
     // line" gesture, mapped onto the shell's kill-line. We send Ctrl+E (jump to
     // end) then Ctrl+U (kill from cursor to start) so the line is wiped no matter
