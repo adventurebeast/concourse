@@ -86,17 +86,21 @@
   min-width: 0;
 }
 
-/* Trailing slot holds either the close button or the dirty dot. */
+/* Trailing slot holds either the close button or the dirty dot. Both are laid
+   out absolutely and centered so they never compete for the 18px of space — if
+   they shared a flex row, the hidden-but-still-laid-out close button would
+   squeeze the dot's width and render it as a squished oval. */
 .etab .etab-actions {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: relative;
   flex-shrink: 0;
   width: 18px;
   height: 18px;
 }
 
 .etab .etab-close {
+  position: absolute;
+  inset: 0;
+  margin: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -124,8 +128,12 @@
   outline-offset: -2px;
 }
 
-/* Dirty indicator: a filled dot replacing the close button until hover. */
+/* Dirty indicator: a filled dot replacing the close button until hover.
+   Absolutely centered in the actions slot so it stays a true circle. */
 .etab .etab-dot {
+  position: absolute;
+  inset: 0;
+  margin: auto;
   width: 8px;
   height: 8px;
   border-radius: 50%;

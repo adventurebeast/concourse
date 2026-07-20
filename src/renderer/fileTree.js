@@ -118,12 +118,22 @@ function joinPath(dir, name) {
   const sep = dir.includes('\\') && !dir.includes('/') ? '\\' : '/'
   return dir.replace(/[/\\]+$/, '') + sep + name
 }
+// Path relative to the workspace root (for "Copy Relative Path"). Falls back to
+// the basename if the entry somehow sits outside the root.
+function relativeTo(base, p) {
+  if (!base) return basename(p)
+  const b = base.replace(/[/\\]+$/, '')
+  if (p === b) return basename(p)
+  if (p.startsWith(b + '/') || p.startsWith(b + '\\')) return p.slice(b.length + 1)
+  return basename(p)
+}
 
 export function createFileTree({ onOpenFile }) {
   const container = document.getElementById('file-tree')
   let root = null
   const expanded = new Set() // absolute paths of expanded folders
   let selected = null // absolute path of selected row
+  let clipboardPath = null // absolute path of the entry copied with ⌘C, for ⌘V paste
 
   // ---------- Rendering ----------
   // We render the visible tree from a cache of directory children so that
@@ -638,6 +648,11 @@ export function createFileTree({ onOpenFile }) {
     const dirForCreate = entry.isDir ? entry.path : dirname(entry.path)
     const items = [
       {
+        label: api.platform === 'darwin' ? 'Reveal in Finder' : 'Show in File Explorer',
+        action: () => api.shell.showItemInFolder(entry.path)
+      },
+      { sep: true },
+      {
         label: 'New File',
         action: async () => {
           await expandTo(dirForCreate)
@@ -665,8 +680,12 @@ export function createFileTree({ onOpenFile }) {
       },
       { sep: true },
       {
-        label: api.platform === 'darwin' ? 'Reveal in Finder' : 'Show in File Explorer',
-        action: () => api.shell.showItemInFolder(entry.path)
+        label: 'Copy Path',
+        action: () => api.clipboard.writeText(entry.path)
+      },
+      {
+        label: 'Copy Relative Path',
+        action: () => api.clipboard.writeText(relativeTo(root, entry.path))
       },
       { sep: true },
       { label: 'Rename', action: () => startRename(entry) },
@@ -853,6 +872,44 @@ export function createFileTree({ onOpenFile }) {
     if (!entry) return
     e.preventDefault()
     startRename(entry)
+  })
+
+  // ---------- Keyboard: ⌘C copies, ⌘V pastes into the target folder ----------
+  // A lightweight internal clipboard: ⌘C stashes the selected path, ⌘V copies it
+  // into the target directory (selected folder, a file's parent, or the root)
+  // via the same clash-safe importDrop the drag-drop path uses. Scoped to when
+  // the explorer owns focus so it never hijacks the editor's or a terminal's own
+  // copy/paste. Copying in place is allowed — importDrop suffixes " (n)".
+  function inExplorerFocus() {
+    const ae = document.activeElement
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) {
+      return false
+    }
+    return ae === document.body || (ae && ae.closest && ae.closest('#explorer-panel'))
+  }
+  async function pasteInto(dir) {
+    if (!clipboardPath || !root) return
+    try {
+      const created = await api.fs.importDrop(dir, clipboardPath)
+      if (dir !== root) expanded.add(dir)
+      await refresh()
+      selectRow(created)
+    } catch { /* source gone / perms: nothing to paste */ }
+  }
+  document.addEventListener('keydown', (e) => {
+    if (!e.metaKey || e.ctrlKey || e.altKey) return
+    const key = e.key.toLowerCase()
+    if (key !== 'c' && key !== 'v') return
+    if (!inExplorerFocus()) return
+    if (key === 'c') {
+      if (!selected) return
+      e.preventDefault()
+      clipboardPath = selected
+    } else {
+      if (!clipboardPath) return
+      e.preventDefault()
+      pasteInto(targetDir())
+    }
   })
 
   // ---------- Drag external files in: copy them into the workspace ----------

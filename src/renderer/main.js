@@ -183,7 +183,10 @@ function notifyAwait(info) {
       awaitNotifs.set(id, n)
     }
     if (Notification.permission === 'granted') show()
-    else Notification.requestPermission().then((p) => p === 'granted' && show()).catch(() => {})
+    else
+      Notification.requestPermission()
+        .then((p) => p === 'granted' && show())
+        .catch(() => {})
   } catch {
     /* notifications unsupported — the come-look pulse + title flag still carry it */
   }
@@ -212,14 +215,15 @@ document.addEventListener('visibilitychange', () => {
 })
 
 // Command palette (⌘K): TYPES a command onto the active prompt (the user presses
-// Enter; ⌘↵ runs it immediately). Surfaces ♥ favorites + this project's commands +
-// frecency-ranked shell history, all from the main process; the curated cheatsheet
-// shows below.
+// Enter; ⌘↵ runs it immediately). Surfaces ♥ favorites + a model-curated Suggested
+// group + this project's commands + frecency-ranked shell history, all from the main
+// process.
 const palette = createCommandPalette({
   typeInto: (cmd, opts) => terminals.typeIntoActive(cmd, opts),
-  // The palette's three dynamic sources (♥ favorites · project commands · frecency
-  // history) and the ♥ toggle, all backed by the main process (api.commands).
+  // The palette's dynamic sources (♥ favorites · Suggested · project commands ·
+  // frecency history) and the ♥ toggle, all backed by the main process (api.commands).
   listCommands: () => api.commands.list(),
+  suggest: () => api.commands.suggest(),
   favorite: (cmd, label, opts) => api.commands.favorite(cmd, label, opts),
   unfavorite: (id) => api.commands.unfavorite(id)
 })
@@ -292,7 +296,9 @@ keys.register('mod+b', () => document.getElementById('toggle-sidebar').click())
 keys.register('mod+shift+j', () => document.getElementById('toggle-panel').click())
 // Cmd/Ctrl+Shift+F jumps to the search view. (Cmd+S save and Cmd+F find are
 // handled by the editor / Monaco directly when an editor is focused.)
-keys.register('mod+shift+f', () => document.querySelector('.activity-btn[data-view="search"]').click())
+keys.register('mod+shift+f', () =>
+  document.querySelector('.activity-btn[data-view="search"]').click()
+)
 
 // ---------- Activity bar (view switching) ----------
 const panels = {
@@ -303,7 +309,9 @@ const panels = {
 document.querySelectorAll('.activity-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     const view = btn.dataset.view
-    document.querySelectorAll('.activity-btn').forEach((b) => b.classList.toggle('active', b === btn))
+    document
+      .querySelectorAll('.activity-btn')
+      .forEach((b) => b.classList.toggle('active', b === btn))
     for (const [name, el] of Object.entries(panels)) el.hidden = name !== view
     if (view === 'scm') git.refresh()
     if (view === 'search') search.focus()
@@ -415,9 +423,30 @@ function applyTabStatus(next, { persist = true } = {}) {
   document.documentElement.dataset.tabStatus = tabStatus
   localStorage.setItem(TAB_STATUS_KEY, tabStatus)
   // Boot call skips the write (localStorage is authoritative); see applyTheme above.
-  if (persist) Promise.resolve(api.settings?.set?.('appearance.tabStatus', tabStatus)).catch(() => {})
+  if (persist)
+    Promise.resolve(api.settings?.set?.('appearance.tabStatus', tabStatus)).catch(() => {})
 }
 applyTabStatus(tabStatus, { persist: false })
+
+// ---------- Rail card preview lines (master-stack / master-deck, persisted) ----------
+// How many lines of summary each Pulse rail card shows beneath its title. Exposed as a
+// CSS var (--card-sum-lines on <html>) the .card-sum clamp reads, so the switch is pure
+// CSS. Like tabStatus: localStorage is boot-authoritative (no flash) and the value is
+// echoed into the central store so the Settings window stays in sync.
+const CARD_LINES_KEY = 'concourse-card-lines'
+let cardLines = clampCardLines(localStorage.getItem(CARD_LINES_KEY))
+function clampCardLines(v) {
+  const n = Math.round(parseFloat(v))
+  return Number.isFinite(n) ? Math.max(1, Math.min(6, n)) : 3
+}
+function applyCardLines(next, { persist = true } = {}) {
+  cardLines = clampCardLines(next)
+  document.documentElement.style.setProperty('--card-sum-lines', String(cardLines))
+  localStorage.setItem(CARD_LINES_KEY, String(cardLines))
+  if (persist)
+    Promise.resolve(api.settings?.set?.('appearance.cardSummaryLines', cardLines)).catch(() => {})
+}
+applyCardLines(cardLines, { persist: false })
 
 // ---------- Terminal header palette (identity colours, persisted) ----------
 // Which palette the terminal identity headers use (appearance.headerTheme) and the
@@ -471,9 +500,15 @@ function applyEditorTerminalSettings(v) {
 }
 function applyAppearanceSettings(v, { skipTheme = false } = {}) {
   if (!v) return
-  if (!skipTheme && v['appearance.theme'] && v['appearance.theme'] !== theme) applyTheme(v['appearance.theme'])
+  if (!skipTheme && v['appearance.theme'] && v['appearance.theme'] !== theme)
+    applyTheme(v['appearance.theme'])
   if (v['appearance.tabStatus'] && v['appearance.tabStatus'] !== tabStatus)
     applyTabStatus(v['appearance.tabStatus'])
+  if (
+    v['appearance.cardSummaryLines'] != null &&
+    clampCardLines(v['appearance.cardSummaryLines']) !== cardLines
+  )
+    applyCardLines(v['appearance.cardSummaryLines'])
   // Default terminal layout is a "next time you open a workspace" preference, not a
   // live switch — cache it so terminals.js reads it (flash-free) at the next boot /
   // workspace open. The current workspace keeps its layout; the layout buttons remain
@@ -507,7 +542,9 @@ api.settings?.onChanged?.((payload) => {
 })
 // Titlebar gear opens (or focuses) the Settings window; the Settings… menu item
 // (⌘,) routes through the same main-process handler.
-document.getElementById('open-settings')?.addEventListener('click', () => api.window?.openSettings?.())
+document
+  .getElementById('open-settings')
+  ?.addEventListener('click', () => api.window?.openSettings?.())
 
 // ---------- Open folder ----------
 async function setWorkspace(root) {

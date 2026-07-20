@@ -65,6 +65,20 @@ export function registerFs(ctx) {
     return fs.readFile(filePath, 'utf8')
   })
 
+  // Cheap on-disk metadata for the editor's stale-write guard. Returns null (not
+  // a throw) when the file is missing/unreadable so a not-yet-saved buffer or a
+  // deleted file is a clean "no known disk state", not an error the caller must
+  // special-case.
+  ipcMain.handle('fs:stat', async (_e, filePath) => {
+    filePath = confine(ctx.getRoot(_e.sender), filePath)
+    try {
+      const st = await fs.stat(filePath)
+      return { mtimeMs: st.mtimeMs, size: st.size }
+    } catch {
+      return null
+    }
+  })
+
   ipcMain.handle('fs:writeFile', async (_e, filePath, content) => {
     filePath = confine(ctx.getRoot(_e.sender), filePath)
     await fs.writeFile(filePath, content)

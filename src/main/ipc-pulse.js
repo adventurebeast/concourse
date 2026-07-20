@@ -179,7 +179,10 @@ function dropStatusPreamble(summary) {
   // linking verb is REQUIRED so a real work-summary that merely starts with "Terminal" or
   // "Pane" (no "is/was") is left untouched. The leading bare "Currently …" is also dropped.
   s = s
-    .replace(/^\s*(?:the\s+)?(?:agent|assistant|user|terminal|pane|tab|this\s+pane|it|i)\b\s+(?:is|am|are|was|were|has\s+been|appears\s+to\s+be|seems\s+to\s+be)\s+(?:currently\s+)?/i, '')
+    .replace(
+      /^\s*(?:the\s+)?(?:agent|assistant|user|terminal|pane|tab|this\s+pane|it|i)\b\s+(?:is|am|are|was|were|has\s+been|appears\s+to\s+be|seems\s+to\s+be)\s+(?:currently\s+)?/i,
+      ''
+    )
     .replace(/^\s*currently\s+/i, '')
   // Upcase the new first letter so "experiencing issues …" reads cleanly.
   return s.charAt(0).toUpperCase() + s.slice(1)
@@ -200,7 +203,8 @@ function sanitizeSummary(s) {
 // ban — that's never a work label, so we blank it rather than show "Working" as the summary.
 // Anchored + single trailing token so a real label that NAMES work ("Waiting on /token") is
 // left intact.
-const STATUS_ONLY = /^(?:working|idle|done|running|active|busy|pending|waiting|awaiting(?:\s+input)?|in\s+progress)\.?$/i
+const STATUS_ONLY =
+  /^(?:working|idle|done|running|active|busy|pending|waiting|awaiting(?:\s+input)?|in\s+progress)\.?$/i
 
 // A 0.5b model handed thin/ambiguous input tends to echo a few-shot example verbatim rather
 // than admit it has nothing to say — which is why the demo phrase "Indexing the repository,
@@ -209,7 +213,11 @@ const STATUS_ONLY = /^(?:working|idle|done|running|active|busy|pending|waiting|a
 // Any summary that reduces to one of the example outputs is therefore a parrot, never a real
 // observation, so we blank it and the pane falls back to its base name / OSC title. Normalise
 // both sides (case, punctuation, whitespace) so a stray period/comma/quote can't dodge it.
-const normForEcho = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+const normForEcho = (s) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
 const EXAMPLE_ECHOES = new Set(FEWSHOT.map((ex) => normForEcho(ex.summary)))
 
 function parseVerdict(text) {
@@ -230,7 +238,9 @@ function parseVerdict(text) {
   if (typeof parsed.summary === 'string') {
     // sanitise (key echo / wrapping quotes / whitespace) -> strip a trailing period the
     // prompt forbids but a small model still emits -> drop any "Agent is …" status preamble.
-    let s = sanitizeSummary(parsed.summary).replace(/[.\s]+$/, '').trim()
+    let s = sanitizeSummary(parsed.summary)
+      .replace(/[.\s]+$/, '')
+      .trim()
     s = dropStatusPreamble(s)
     if (STATUS_ONLY.test(s)) s = '' // pure status word survived: not a work label
     if (s && EXAMPLE_ECHOES.has(normForEcho(s))) s = '' // a parroted few-shot example, not a real label
@@ -277,37 +287,44 @@ function claudeProvider(apiKey) {
       // Key present; we don't ping Anthropic just to render a status badge.
       return true
     },
-    async summarize(payload) {
+    // Generic one-shot JSON chat, shared by Pulse's pane summary and the command
+    // suggester. Prompt-caches the (stable) system block so the 2nd+ consecutive
+    // call reads it from cache instead of reprocessing it. NOTE: system must clear
+    // Haiku's ~4K-token minimum cacheable prefix to actually cache — below that the
+    // API silently skips the cache. Returns raw model text (or null).
+    async chat({ system, user, maxTokens = 200, schema }) {
       const client = await getClient()
       if (!client) return null
-      // Prompt-cache the stable SYSTEM block so the 2nd+ consecutive Haiku call
-      // reads it from cache (usage.cache_read_input_tokens > 0) instead of
-      // reprocessing it. NOTE: SYSTEM must clear Haiku's ~4K-token minimum
-      // cacheable prefix to actually cache — below that the API silently skips
-      // the cache (cache_creation_input_tokens stays 0). Token-count to verify;
-      // not a blocker here. The user text (volatile) stays uncached after it.
       const base = {
         model,
-        max_tokens: 200,
-        messages: [{ role: 'user', content: buildUserText(payload) }],
-        output_config: { format: { type: 'json_schema', schema: SCHEMA } }
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: user }],
+        ...(schema && { output_config: { format: { type: 'json_schema', schema } } })
       }
       let resp
       try {
         resp = await client.messages.create({
           ...base,
-          system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }]
+          system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
         })
       } catch (err) {
         // Fall back to the plain-string system if the SDK rejects the
         // array + cache_control shape — output must be unchanged either way.
         console.log('[pulse] cache_control system rejected, retrying plain:', err?.message || err)
-        resp = await client.messages.create({ ...base, system: SYSTEM })
+        resp = await client.messages.create({ ...base, system })
       }
       return (resp.content || [])
         .filter((b) => b.type === 'text')
         .map((b) => b.text)
         .join('')
+    },
+    summarize(payload) {
+      return this.chat({
+        system: SYSTEM,
+        user: buildUserText(payload),
+        maxTokens: 200,
+        schema: SCHEMA
+      })
     }
   }
 }
@@ -320,7 +337,10 @@ function openAICompatibleProvider() {
   const baseUrl = resolveLocalBaseUrl()
   const model = resolveLocalModel()
   const key = settingOrEnv('pulse.localApiKey', 'CONCOURSE_PULSE_API_KEY')
-  const headers = { 'content-type': 'application/json', ...(key && { authorization: `Bearer ${key}` }) }
+  const headers = {
+    'content-type': 'application/json',
+    ...(key && { authorization: `Bearer ${key}` })
+  }
   // Ollama is the common local backend, and only its NATIVE /api/chat honours the footprint
   // caps (num_ctx / num_predict / keep_alive) that keep Pulse light — the /v1 OpenAI-compat
   // shim drops them. So when the runtime is Ollama, talk to it natively; every other
@@ -335,7 +355,10 @@ function openAICompatibleProvider() {
       const r = await fetchWithTimeout(`${baseUrl}/models`, { headers }, 1500)
       return !!r && r.ok
     },
-    async summarize(payload) {
+    // Generic one-shot JSON chat, shared by Pulse's pane summary and the command
+    // suggester. numCtx/maxTokens default to the tight per-pane caps; the suggester
+    // (an infrequent, cached call) passes larger values. Returns raw text (or null).
+    async chat({ system, user, maxTokens = LOCAL_NUM_PREDICT, numCtx = LOCAL_NUM_CTX }) {
       if (isOllama) {
         // Native Ollama: /api/chat sits next to /v1 (strip the /v1 suffix). `format: 'json'`
         // is Ollama's JSON mode; `options`/`keep_alive` are the footprint caps the /v1 shim
@@ -351,10 +374,10 @@ function openAICompatibleProvider() {
               stream: false,
               format: 'json',
               keep_alive: LOCAL_KEEP_ALIVE,
-              options: { temperature: 0, num_ctx: LOCAL_NUM_CTX, num_predict: LOCAL_NUM_PREDICT },
+              options: { temperature: 0, num_ctx: numCtx, num_predict: maxTokens },
               messages: [
-                { role: 'system', content: SYSTEM },
-                { role: 'user', content: buildUserText(payload) }
+                { role: 'system', content: system },
+                { role: 'user', content: user }
               ]
             })
           },
@@ -371,14 +394,14 @@ function openAICompatibleProvider() {
           headers,
           body: JSON.stringify({
             model,
-            max_tokens: LOCAL_NUM_PREDICT,
+            max_tokens: maxTokens,
             temperature: 0,
             // json_object is the lowest-common-denominator across local servers; the
             // prompt already pins the exact keys and we validate the parsed result.
             response_format: { type: 'json_object' },
             messages: [
-              { role: 'system', content: SYSTEM },
-              { role: 'user', content: buildUserText(payload) }
+              { role: 'system', content: system },
+              { role: 'user', content: user }
             ]
           })
         },
@@ -387,6 +410,9 @@ function openAICompatibleProvider() {
       if (!r || !r.ok) return null
       const data = await r.json().catch(() => null)
       return data?.choices?.[0]?.message?.content ?? null
+    },
+    summarize(payload) {
+      return this.chat({ system: SYSTEM, user: buildUserText(payload) })
     }
   }
 }
@@ -463,6 +489,15 @@ function createResolver() {
   }
 }
 
+// A single shared resolver for the whole app, so Pulse's per-pane summaries and the
+// command suggester pick the same backend and share its TTL cache (one probe, not
+// two). Returns the resolved provider (or null when Pulse is off/unavailable).
+let sharedResolver = null
+export function getPulseProvider() {
+  if (!sharedResolver) sharedResolver = createResolver()
+  return sharedResolver()
+}
+
 // Global concurrency cap across ALL panes/windows: with 8+ panes pulsing at
 // once we'd otherwise fire 8 model calls in parallel. Run at most MAX_CONCURRENT
 // and FIFO-queue the rest. Queued requests carry their pane key so a newer
@@ -518,7 +553,7 @@ function createSemaphore(max) {
 }
 
 export function registerPulse() {
-  const getProvider = createResolver()
+  const getProvider = getPulseProvider
 
   // Coalesce bursts: at most one in-flight summary per pane.
   const inFlight = new Set()

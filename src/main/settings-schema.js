@@ -106,6 +106,18 @@ export const SETTINGS_GROUPS = [
         ]
       },
       {
+        key: 'appearance.cardSummaryLines',
+        label: 'Rail Card Preview Lines',
+        description:
+          'How many lines of the summary preview each master-stack / master-deck rail card shows beneath its title before clipping.',
+        type: 'number',
+        default: 3,
+        min: 1,
+        max: 6,
+        step: 1,
+        unit: 'lines'
+      },
+      {
         key: 'appearance.headerTheme',
         label: 'Terminal Header Palette',
         description: 'Colour palette for terminal identity headers. "Custom…" uses the colours below.',

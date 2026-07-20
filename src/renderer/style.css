@@ -256,7 +256,7 @@ body {
 
 /* ---------- Activity bar ---------- */
 #activity-bar {
-  width: 48px;
+  width: 38px;
   flex-shrink: 0;
   background: var(--bg-activity);
   display: flex;
@@ -266,8 +266,8 @@ body {
   border-right: 1px solid var(--border);
 }
 .activity-btn {
-  width: 48px;
-  height: 48px;
+  width: 38px;
+  height: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -567,7 +567,8 @@ body {
    from their .term-cell ancestor. */
 .term-tab,
 .term-cell,
-.term-stub {
+.term-stub,
+.term-card {
   /* Tones via color-mix toward the theme's base (white in light, near-black in dark) — the
      RENDER-PROVEN path. (The old oklch(from …) relative-colour syntax did not render reliably
      here and washed every tone out — the "colours all fucked up" bug.) Mixed per-pane so each

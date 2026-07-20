@@ -209,12 +209,71 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
   display: none;
 }
 
+/* The rail splitter: a thin draggable divider between the primary pane and the rail —
+   stack shows a vertical bar (drag to set the rail WIDTH), deck a horizontal one (drag
+   to set its HEIGHT). Hidden everywhere else (JS parks it outside stack/deck). It sits
+   flush against its neighbours — the negative margin cancels the panesEl 1px gap on
+   each side — so its own centred hairline is the only seam; that hairline lifts to the
+   accent on hover / while dragging. */
+.rail-splitter {
+  display: none;
+  position: relative;
+  flex: 0 0 auto;
+  z-index: 3;
+  background: var(--bg-panel);
+}
+.rail-splitter::after {
+  content: '';
+  position: absolute;
+  background: var(--border);
+  transition: background 0.1s ease;
+}
+#term-panes.stack > .rail-splitter {
+  display: block;
+  width: 6px;
+  margin: 0 -1px;
+  cursor: col-resize;
+}
+#term-panes.stack > .rail-splitter::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+#term-panes.deck > .rail-splitter {
+  display: block;
+  height: 6px;
+  margin: -1px 0;
+  cursor: row-resize;
+}
+#term-panes.deck > .rail-splitter::after {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+.rail-splitter:hover::after,
+body.rail-dragging .rail-splitter::after {
+  background: var(--accent);
+  box-shadow: 0 0 0 0.5px var(--accent);
+}
+/* While dragging the divider, suppress text selection across the whole window. */
+body.rail-dragging {
+  user-select: none;
+}
+
 /* ---------- Pulse cards (the rail's content) ----------
    One per session, parked hidden outside the rail. Identity edge + state dot (the
    SAME figure element the tabs animate — paintFigure writes all three) + name +
-   up to two lines of summary. Click promotes; the active pane's card wears .active
-   (its live view is the primary). State tints reuse the tab semantics: working
-   wears the hue wash (the figure animates on top), awaiting holds the lifted tint. */
+   summary preview. Click promotes; the active pane's card wears .active (its live view
+   is the primary).
+   COLOUR follows the tab strip EXACTLY: focus is the only thing that recolours the fill.
+   Unfocused cards hold the light identity wash (--tone-wash); the focused one lifts to
+   the mid focus tone (--tone-focus). Working/awaiting no longer tint the background —
+   just like a tab, working lifts the NAME into its hue (the figure carries the motion)
+   and awaiting is signalled by the OS notification, not a card colour. */
 .term-card {
   display: none;
   align-items: flex-start;
@@ -222,10 +281,10 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
   padding: 7px 10px 8px;
   border: none;
   border-left: 2px solid var(--term-color, var(--accent));
-  background: var(--bg-panel);
+  background: var(--tone-wash); /* unfocused = the light wash every inactive tab wears */
   font: inherit;
   text-align: left;
-  color: var(--text);
+  color: var(--text-dim); /* inactive text tone, like the tab; focus/hover lifts it to --text */
   cursor: pointer;
   min-width: 0;
 }
@@ -240,22 +299,42 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
   border-left: none;
   border-top: 2px solid var(--term-color, var(--accent));
 }
-.term-card:hover {
-  background: var(--hover);
+/* Hover an unfocused card: lift the wash one tonal step and brighten the text — the
+   same move the inactive tab makes on hover (--tone-light). The focused card is handled
+   separately below so hover never drops it back to the light wash. */
+.term-card:not(.active):hover {
+  background: var(--tone-light);
+  color: var(--text);
 }
 .term-card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-.term-card[data-state='working'] {
-  background: color-mix(in srgb, var(--term-color, var(--accent)) 9%, var(--bg-panel));
+/* Working (and not the focused card): lift the NAME into its identity hue — the exact
+   steady tint a working tab's label wears. No background change; the animated figure
+   carries the motion. */
+.term-card[data-state='working']:not(.active) .card-label {
+  color: var(--term-color, var(--accent));
 }
-.term-card[data-state='awaiting'] {
-  background: color-mix(in srgb, var(--term-color, var(--accent)) 20%, var(--bg-panel));
-}
-/* This card's pane IS the master — mark it like the stub used to (inset identity tint). */
+/* Focused card = the FOCUSED tab's fill (var(--tone-focus), resolved against this card's
+   own hue), so "which pane am I driving" reads identically in the rail and the tab
+   strip. Focus is the ONLY thing that recolours the fill — overrides the working
+   label-hue above, exactly like the active tab shows focus regardless of state. */
 .term-card.active {
-  box-shadow: inset 0 0 0 9999px color-mix(in srgb, var(--term-color, var(--accent)) 8%, transparent);
+  background: var(--tone-focus);
+  color: var(--text);
+}
+.term-card.active:hover {
+  filter: brightness(1.08); /* the focused card brightens a touch on hover, like the active tab */
+}
+/* On the focus fill: keep the summary legible and lift the resting figure a step so it
+   doesn't sink into the tint (mirrors the active-tab dot rules up top). */
+.term-card.active .card-sum {
+  color: var(--text);
+  opacity: 0.62;
+}
+.term-card.active .dot:not(.working) {
+  color: var(--text-dim);
 }
 .term-card .dot {
   margin-top: 2px;
@@ -270,7 +349,7 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
 .card-label {
   font-size: 12px;
   font-weight: 600;
-  color: var(--text);
+  color: inherit; /* follows the card: dim unfocused, --text on focus/hover — like the tab label */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -281,7 +360,10 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
   color: var(--text-dim);
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2; /* "a little more room" — two summary lines, then clip */
+  /* Line count is user-configurable (appearance.cardSummaryLines → --card-sum-lines
+     on <html>, set flash-free at boot by main.js). Fallback matches the schema default. */
+  -webkit-line-clamp: var(--card-sum-lines, 3);
+  line-clamp: var(--card-sum-lines, 3);
   overflow: hidden;
   overflow-wrap: anywhere;
 }

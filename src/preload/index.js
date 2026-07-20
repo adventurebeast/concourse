@@ -69,6 +69,10 @@ contextBridge.exposeInMainWorld('api', {
   fs: {
     readDir: (p) => ipcRenderer.invoke('fs:readDir', p),
     readFile: (p) => ipcRenderer.invoke('fs:readFile', p),
+    // Lightweight on-disk metadata ({ mtimeMs, size } or null if missing). The
+    // editor snapshots mtime on open/save so a Cmd+S can detect that the file
+    // changed underneath it (e.g. an agent wrote to it) instead of clobbering.
+    stat: (p) => ipcRenderer.invoke('fs:stat', p),
     writeFile: (p, content) => ipcRenderer.invoke('fs:writeFile', p, content),
     createFile: (p) => ipcRenderer.invoke('fs:createFile', p),
     createDir: (p) => ipcRenderer.invoke('fs:createDir', p),
@@ -140,6 +144,11 @@ contextBridge.exposeInMainWorld('api', {
     openPath: (p) => ipcRenderer.invoke('shell:openPath', p)
   },
 
+  // System clipboard — handler in src/main/ipc-shell.js (Copy Path items).
+  clipboard: {
+    writeText: (text) => ipcRenderer.invoke('clipboard:writeText', text)
+  },
+
   // Pulse — Layer B model summariser, handlers in src/main/ipc-pulse.js.
   // The API key lives only in the main process; the renderer sends a text tail and
   // gets back a { state, summary } verdict (or null when disabled).
@@ -179,6 +188,7 @@ contextBridge.exposeInMainWorld('api', {
   // onChanged() fires in every window when favorites change.
   commands: {
     list: () => ipcRenderer.invoke('commands:list'),
+    suggest: () => ipcRenderer.invoke('commands:suggest'),
     favorite: (cmd, label) => ipcRenderer.invoke('commands:favorite', { cmd, label }),
     unfavorite: (id) => ipcRenderer.invoke('commands:unfavorite', id),
     onChanged: (cb) => ipcRenderer.on('commands:changed', () => cb())

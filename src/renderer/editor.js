@@ -462,6 +462,16 @@ export function createEditor() {
       readOnly = true
     }
 
+    // Snapshot the file's on-disk mtime so a later Cmd+S can tell whether the file
+    // changed underneath us — an agent, a terminal, or an external editor writing
+    // to it — before blindly overwriting. Only for editable text tabs; read-only
+    // previews are never written back. See saveTab / reconcileExternalChanges.
+    let initialMtime = null
+    if (readError == null && !readOnly) {
+      const st = await api.fs.stat(path)
+      initialMtime = st ? st.mtimeMs : null
+    }
+
     // A concurrent openFile(path) for the same not-yet-open path (fast double-click,
     // or a reveal racing session-restore) may have created the tab while we awaited
     // the read. Re-check before allocating a Monaco model — otherwise the second
@@ -490,13 +500,21 @@ export function createEditor() {
       readOnly,
       viewState: null,
       dirty: false,
+      // Last-known on-disk mtime; compared on save + external-change events to
+      // detect a stale buffer. null = no known disk state (never stat it away).
+      diskMtime: initialMtime,
+      // Set while we programmatically replace the model's content from disk, so the
+      // resulting change event doesn't flip the tab dirty. See reloadTab.
+      reloading: false,
       tabEl: el,
       dotEl,
       closeEl,
       labelEl
     }
 
-    model.onDidChangeContent(() => setDirty(tab, true))
+    model.onDidChangeContent(() => {
+      if (!tab.reloading) setDirty(tab, true)
+    })
 
     tabs.set(key, tab)
     tabBar.appendChild(el)
@@ -560,6 +578,24 @@ export function createEditor() {
     // Never write back read-only tabs (read-error / binary previews); their
     // model holds a placeholder notice, not the real file contents.
     if (tab.readOnly) return true
+
+    // Stale-write guard: if the file changed on disk since we loaded/last-saved it
+    // (an agent or terminal wrote to it while it was open here), a blind overwrite
+    // would destroy that work. Ask first. Cancel aborts; Reload adopts the disk
+    // copy; Overwrite falls through to the write below.
+    if (tab.diskMtime != null) {
+      const st = await api.fs.stat(tab.path)
+      if (st && st.mtimeMs !== tab.diskMtime) {
+        const choice = await confirmOverwrite(tab)
+        if (choice === 'cancel') return false
+        if (choice === 'reload') {
+          await reloadTab(tab)
+          return true // disk copy is now loaded and clean; nothing to write
+        }
+        // choice === 'overwrite' → fall through
+      }
+    }
+
     const value = tab.model.getValue()
     try {
       await api.fs.writeFile(tab.path, value)
@@ -571,6 +607,15 @@ export function createEditor() {
       return false
     }
     setDirty(tab, false)
+    // Re-baseline the mtime to what we just wrote, so the next save compares against
+    // our own write (and the watcher echo of it doesn't look like an external edit).
+    try {
+      const st = await api.fs.stat(tab.path)
+      if (st) tab.diskMtime = st.mtimeMs
+    } catch {
+      /* best-effort; a failed re-stat just leaves the old baseline */
+    }
+    tab.conflictNotified = false
     for (const cb of saveListeners) {
       try {
         cb(tab.path)
@@ -579,6 +624,159 @@ export function createEditor() {
       }
     }
     return true
+  }
+
+  // Replace a tab's buffer with the current on-disk contents (used by the conflict
+  // dialog's "Reload" and by auto-reconcile for clean tabs). Preserves cursor/scroll
+  // best-effort and never flips the tab dirty (the reloading flag suppresses that).
+  async function reloadTab(tab) {
+    if (!tab || tab.kind !== 'file' || tab.readOnly) return
+    let content
+    try {
+      content = await api.fs.readFile(tab.path)
+    } catch {
+      return // file vanished/unreadable — leave the buffer as-is
+    }
+    if (content == null) content = ''
+    // Identical bytes (a touch, or our own write echoing back): re-baseline the
+    // mtime but never call setValue — that would jolt the viewport and clear the
+    // undo stack for nothing.
+    if (content === tab.model.getValue()) {
+      try {
+        const st = await api.fs.stat(tab.path)
+        if (st) tab.diskMtime = st.mtimeMs
+      } catch {
+        /* best-effort */
+      }
+      setDirty(tab, false)
+      tab.conflictNotified = false
+      return
+    }
+    const isActive = activeKey === tab.key
+    const vs = isActive ? fileEditor.saveViewState() : tab.viewState
+    tab.reloading = true
+    tab.model.setValue(content)
+    tab.reloading = false
+    setDirty(tab, false)
+    tab.conflictNotified = false
+    if (isActive && vs) fileEditor.restoreViewState(vs)
+    else if (vs) tab.viewState = vs
+    try {
+      const st = await api.fs.stat(tab.path)
+      if (st) tab.diskMtime = st.mtimeMs
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  // "This file changed on disk" resolver, shown before a save that would clobber a
+  // newer on-disk copy. Reuses the terminal confirm overlay styling. Resolves to
+  // 'overwrite' | 'reload' | 'cancel'. One dialog at a time.
+  let overwriteOverlay = null
+  function confirmOverwrite(tab) {
+    return new Promise((resolve) => {
+      if (overwriteOverlay) {
+        overwriteOverlay.querySelector('.tc-cancel')?.focus()
+        resolve('cancel')
+        return
+      }
+      const overlay = document.createElement('div')
+      overlay.className = 'term-confirm-overlay'
+      const box = document.createElement('div')
+      box.className = 'term-confirm'
+      const title = document.createElement('div')
+      title.className = 'tc-title'
+      title.textContent = `“${baseName(tab.path)}” changed on disk`
+      const msg = document.createElement('div')
+      msg.className = 'tc-msg'
+      msg.textContent =
+        'This file was modified outside the editor since you opened it — likely by an agent or another program. Overwriting will replace those changes with your version.'
+      box.append(title, msg)
+      const actions = document.createElement('div')
+      actions.className = 'tc-actions'
+      const cancel = document.createElement('button')
+      cancel.className = 'btn tc-cancel'
+      cancel.textContent = 'Cancel'
+      const reload = document.createElement('button')
+      reload.className = 'btn'
+      reload.textContent = 'Reload from Disk'
+      const overwrite = document.createElement('button')
+      overwrite.className = 'btn tc-danger'
+      overwrite.textContent = 'Overwrite'
+      actions.append(cancel, reload, overwrite)
+      box.appendChild(actions)
+      overlay.appendChild(box)
+      document.body.appendChild(overlay)
+      overwriteOverlay = overlay
+      cancel.focus()
+
+      const finish = (result) => {
+        if (overwriteOverlay !== overlay) return
+        overwriteOverlay = null
+        overlay.remove()
+        document.removeEventListener('keydown', onKey, true)
+        resolve(result)
+      }
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          finish('cancel')
+        }
+      }
+      document.addEventListener('keydown', onKey, true)
+      cancel.addEventListener('click', () => finish('cancel'))
+      overlay.addEventListener('mousedown', (e) => {
+        if (e.target === overlay) finish('cancel')
+      })
+      reload.addEventListener('click', () => finish('reload'))
+      overwrite.addEventListener('click', () => finish('overwrite'))
+    })
+  }
+
+  // The workspace watcher fired (something changed on disk). Reconcile open file
+  // tabs: silently adopt the new content for clean buffers so the editor shows the
+  // agent's latest work instead of a stale copy; for dirty buffers, leave the user's
+  // edits untouched but flag the conflict once (the save guard will prompt).
+  // Guard against overlapping runs: the watcher, the poll and a window focus can
+  // all fire within the same tick, and two reconciles racing on one tab would
+  // double-reload it (and could re-baseline the mtime from the wrong read).
+  let reconciling = false
+  async function reconcileExternalChanges() {
+    if (reconciling) return
+    reconciling = true
+    try {
+      await doReconcile()
+    } finally {
+      reconciling = false
+    }
+  }
+  async function doReconcile() {
+    for (const tab of tabs.values()) {
+      if (tab.kind !== 'file' || tab.readOnly) continue
+      let st
+      try {
+        st = await api.fs.stat(tab.path)
+      } catch {
+        continue
+      }
+      if (!st) continue
+      // No baseline yet (the stat at open failed, e.g. the file didn't exist yet):
+      // adopt this one silently rather than skipping the tab forever.
+      if (tab.diskMtime == null) {
+        tab.diskMtime = st.mtimeMs
+        continue
+      }
+      if (st.mtimeMs === tab.diskMtime) continue // unchanged
+      if (!tab.dirty) {
+        await reloadTab(tab)
+      } else if (!tab.conflictNotified) {
+        tab.conflictNotified = true
+        showToast(
+          baseName(tab.path) + ' changed on disk — your unsaved edits are kept; saving will ask before overwriting.',
+          { kind: 'warn' }
+        )
+      }
+    }
   }
   async function save() {
     if (!activeKey) return
@@ -646,6 +844,36 @@ export function createEditor() {
       e.preventDefault()
       save()
     }
+  })
+
+  // Keep open buffers in sync with on-disk changes made outside the editor (an
+  // agent or terminal writing files). Without this the editor holds a stale copy
+  // and a later save silently overwrites that external work. Best-effort: the same
+  // event also drives the file-tree refresh (separate listener).
+  if (api?.fs?.onChanged) {
+    api.fs.onChanged(() => {
+      reconcileExternalChanges()
+    })
+  }
+
+  // …and don't depend on the watcher alone. Recursive fs.watch is best-effort: it
+  // can be degraded (see watcher.js backoff), it ignores whole subtrees (dist/,
+  // build/ — an agent editing there would never repaint), and a long write burst
+  // keeps resetting the debounce. Open file tabs are a handful of paths, so a
+  // 1s stat poll is cheap insurance that the buffer you're looking at is never
+  // more than a second stale. Only runs while the window is visible and something
+  // is actually open.
+  const POLL_MS = 1000
+  setInterval(() => {
+    if (document.hidden || tabs.size === 0) return
+    reconcileExternalChanges()
+  }, POLL_MS)
+
+  // Immediate catch-up on the two moments a stale buffer is most visible: coming
+  // back to the window after watching an agent work, and un-hiding it.
+  window.addEventListener('focus', () => reconcileExternalChanges())
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) reconcileExternalChanges()
   })
 
   syncWelcome()

@@ -1,10 +1,12 @@
 import './commandPalette.css'
 import { icon } from './icons.js'
 
-// Command palette (⌘K). Two layers:
-//   • Dynamic sources from the main process (api.commands), all driven by what you
-//     actually run (captured via the shell hook), newest run weighted up:
+// Command palette (⌘K). Every group is dynamic and driven by this project — no
+// static cheatsheet (a generic ls/cd/git list ignored the project and was just noise):
 //       ♥ Favorites  → commands you pinned in this project (no run-count gate)
+//       Suggested    → up to 5 quick commands the Pulse model curates from this
+//                      project's declared scripts + your real history (grounded —
+//                      it only ever names commands that actually exist)
 //       Project      → scripts/recipes/targets declared in this folder
 //                      (package.json, justfile, Makefile) — shown without running
 //       This Project → commands you've entered in THIS project
@@ -13,9 +15,9 @@ import { icon } from './icons.js'
 //     Up-Arrow: visible, searchable, ranked by what you actually use, and you can
 //     ♥ the ones that matter so they're always on top. A command only appears in
 //     one group (de-duped top-down).
-//   • A hand-curated cheatsheet (below), always at the bottom.
 // Anything you type that isn't in the list becomes a row of its own, so a novel
-// command is one ⌥↵ away from being a saved favorite.
+// command is one Save-click (or ⌥↵) away from being a pinned favorite.
+// (COMMANDS below is now only the seed for the always-visible starter chip strip.)
 // Picking a command TYPES it onto the active prompt but does NOT run it — the user
 // reads it and presses Enter themselves, so the terminal stays a dumb display and
 // we never fight the shell's byte stream. ⌘↵ (or ⌘-click) is the deliberate
@@ -101,7 +103,13 @@ const STARTERS = [
 // Once dismissed, the starter strip stays gone (per machine, like coach marks).
 const STRIP_DISMISS_KEY = 'concourse.strip.dismissed'
 
-export function createCommandPalette({ typeInto, listCommands, favorite, unfavorite } = {}) {
+export function createCommandPalette({
+  typeInto,
+  listCommands,
+  suggest,
+  favorite,
+  unfavorite
+} = {}) {
   // ---- DOM (built once, appended to body, toggled with [hidden]) -------------
   const overlay = document.createElement('div')
   overlay.id = 'cmd-palette'
@@ -129,9 +137,11 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
   let rows = [] // rendered selectable rows, in display order: { el, item, favId }
   let active = 0 // index into rows of the highlighted item
   // Dynamic sources from the main process; empty until load() resolves (and when
-  // listCommands isn't wired, e.g. in isolation), so the palette degrades to the
-  // curated cheatsheet alone.
+  // listCommands isn't wired, e.g. in isolation), so the palette degrades gracefully.
   let dynamic = { favorites: [], project: [], thisProject: [], global: [] }
+  // Model-curated "Suggested" group ({ cmd, label }), fetched independently of the
+  // list so the palette never blocks on the model — it fills in when suggest() lands.
+  let suggested = []
   // Bumped on every close(); open() captures it before awaiting load() so a stale
   // in-flight fetch from a previous open can't repaint a freshly-reopened palette.
   let openGen = 0
@@ -153,6 +163,18 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
     }
   }
 
+  // The Suggested group is a separate fetch: it may wait on a model call, so it must
+  // not hold up the rest of the list. Keeps the last-known set on failure.
+  async function loadSuggestions() {
+    if (!suggest) return
+    try {
+      const s = await suggest()
+      if (Array.isArray(s)) suggested = s.filter((x) => x && typeof x.cmd === 'string')
+    } catch {
+      /* keep last-known suggestions — a failed fetch must not blank the group */
+    }
+  }
+
   // ---- Render the (optionally filtered) list --------------------------------
   function render(filter = '') {
     const q = filter.trim().toLowerCase()
@@ -166,6 +188,9 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
 
     list.innerHTML = ''
     rows = []
+    // Commands already placed in a higher group — keeps each command in a single
+    // group, top-down (favorites are tracked separately via favById).
+    const shown = new Set()
 
     // 1) Favorites — pinned to this project (see commands:favorite). Any older
     // global favorites still surface here too; they just aren't badged.
@@ -183,23 +208,33 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       favById
     )
 
-    // 2) Project — named scripts/recipes/targets discovered in the open folder
+    // 2) Suggested — up to 5 quick commands the Pulse model curates from THIS
+    // project's declared scripts + your real history (see command-suggest.js).
+    // Grounded, so it only ever names commands that actually exist. Sits right
+    // under your ♥ favorites and de-dupes out of every group below.
+    appendGroup(
+      'Suggested',
+      suggested
+        .filter((s) => !favById.has(s.cmd) && match(s.cmd, s.label))
+        .map((s) => ({ cmd: s.cmd, label: s.label || s.cmd, icon: 'compass' })),
+      favById
+    )
+    for (const s of suggested) shown.add(s.cmd)
+
+    // 3) Project — named scripts/recipes/targets discovered in the open folder
     // (package.json, justfile, Makefile). Declarative and version-controlled, so
-    // they show without ever having been run. De-duped against favorites.
+    // they show without ever having been run. De-duped against favorites + Suggested.
     appendGroup(
       'Project',
       dynamic.project
-        .filter((p) => !favById.has(p.cmd) && match(p.cmd, p.label))
+        .filter((p) => !favById.has(p.cmd) && !shown.has(p.cmd) && match(p.cmd, p.label))
         .map((p) => ({ cmd: p.cmd, label: p.label, badge: p.source, icon: 'box' })),
       favById
     )
+    for (const p of dynamic.project) shown.add(p.cmd)
 
-    // Commands already shown above (favorites + project) — used to keep each
-    // command in a single group, top-down.
-    const shown = new Set(dynamic.project.map((p) => p.cmd))
-
-    // 3) This Project — commands you've actually entered here (run ≥ 2×),
-    // frecency-ranked, de-duped against favorites and the Project group.
+    // 4) This Project — commands you've actually entered here, frecency-ranked,
+    // de-duped against favorites, Suggested and the Project group.
     appendGroup(
       'This Project',
       dynamic.thisProject
@@ -208,8 +243,8 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       favById
     )
 
-    // 4) Global — commands entered across all projects (run ≥ 2× in total),
-    // de-duped against favorites, Project AND This Project so each shows once.
+    // 5) Global — commands entered across all projects, de-duped against every
+    // group above so each command shows exactly once.
     for (const h of dynamic.thisProject) shown.add(h.cmd)
     appendGroup(
       'Global',
@@ -219,21 +254,13 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       favById
     )
 
-    // 5) Curated cheatsheet, at the bottom.
-    for (const g of COMMANDS) {
-      appendGroup(
-        g.group,
-        g.items
-          .filter((it) => match(it.cmd, it.label))
-          .map((it) => ({ cmd: it.cmd, label: it.label, hint: it.hint, icon: it.icon })),
-        favById
-      )
-    }
-
     // 6) Whatever you typed, as a row of its own — the "just let me save my
     // command" path. Shown whenever the query isn't already a listed command:
-    // ↵ types it, ⌘↵ runs it, ⌥↵ pins it as a favorite. Uses the RAW query
-    // (commands are case-sensitive), not the lowercased match key.
+    // ↵ types it, ⌘↵ runs it, and the row's explicit Save button (or ⌥↵) pins
+    // it as a favorite. `save: true` swaps this row's faint ♡ for a labelled
+    // Save button — the whole point of a novel command is that saving it should
+    // be an obvious click, not a hidden shortcut. Uses the RAW query (commands
+    // are case-sensitive), not the lowercased match key.
     const typed = filter.trim()
     if (typed && !rows.some((r) => r.item.cmd === typed)) {
       appendGroup(
@@ -242,8 +269,9 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
           {
             cmd: typed,
             label: 'Use what you typed',
-            hint: '⌥↵ saves it as a favorite',
-            icon: 'terminal'
+            hint: 'Save it to keep it in ⌘K',
+            icon: 'terminal',
+            save: true
           }
         ],
         favById
@@ -278,6 +306,15 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
           it.hint ? `<span class="cmd-row-hint"> — ${escapeHtml(it.hint)}</span>` : ''
         }</span><span class="cmd-row-cmd">${escapeHtml(it.cmd)}</span>`
     const badge = it.badge ? `<span class="cmd-badge">${escapeHtml(it.badge)}</span>` : ''
+    // Every not-yet-favorited row shows an explicit Save button (revealed on
+    // hover/active, same as the old ♡) instead of a faint empty heart — saving
+    // reads as a real, labelled action rather than a mystery glyph. Clicking it
+    // favorites the command, which on the next render lifts it into ♥ Favorites
+    // with a filled heart. Already-favorited rows keep the filled ♥ (click to
+    // remove).
+    const trailing = !faved
+      ? `<button class="cmd-save" type="button" tabindex="-1" title="Save to your commands (favorites it)">${icon('plus', 12)}<span>Save</span></button>`
+      : `<button class="cmd-fav on" type="button" tabindex="-1" title="Remove favorite" aria-label="favorite">♥</button>`
 
     const row = document.createElement('div')
     row.className = 'cmd-row'
@@ -286,16 +323,14 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       `<span class="cmd-row-icon">${icon(it.icon || 'terminal', 16)}</span>` +
       `<span class="cmd-row-text">${labelHtml}</span>` +
       badge +
-      `<button class="cmd-fav${faved ? ' on' : ''}" type="button" tabindex="-1" title="${
-        faved ? 'Remove favorite' : 'Favorite for this project'
-      }" aria-label="favorite">${faved ? '♥' : '♡'}</button>`
+      trailing
 
     const idx = rows.length
     row.addEventListener('mouseenter', () => setActive(idx))
     row.addEventListener('click', (e) => choose(it, { run: e.metaKey || e.ctrlKey }))
-    const favBtn = row.querySelector('.cmd-fav')
-    favBtn.addEventListener('click', (e) => {
-      e.stopPropagation() // never let the heart also "choose" the row
+    const toggleBtn = row.querySelector('.cmd-save, .cmd-fav')
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation() // never let the button also "choose" the row
       toggleFavorite(it, favId)
     })
     list.appendChild(row)
@@ -326,7 +361,9 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
       if (favId) {
         if (unfavorite) await unfavorite(favId)
       } else if (favorite) {
-        await favorite(it.cmd, it.label)
+        // Save rows carry a generic display label ("Use what you typed") — never
+        // persist that; the command itself is its own best name.
+        await favorite(it.cmd, it.save ? it.cmd : it.label)
       } else {
         return
       }
@@ -338,15 +375,20 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
   }
 
   // ---- Open / close ----------------------------------------------------------
-  async function open() {
+  function open() {
     const gen = ++openGen // claim this open; a later close()/open() invalidates it
     overlay.hidden = false
     search.value = ''
-    render('') // paint cached content immediately
+    render('') // paint cached content (incl. last-known suggestions) immediately
     search.focus()
-    await load() // then refresh from disk and repaint
-    if (gen !== openGen) return // closed (or reopened) while load() was in flight
-    if (!overlay.hidden) render(search.value)
+    // List (fast) and suggestions (may wait on the model) load independently, each
+    // repainting when it lands — so the palette is never blocked on the model. The gen
+    // guard drops a repaint from a load that finished after we closed/reopened.
+    const repaint = () => {
+      if (gen === openGen && !overlay.hidden) render(search.value)
+    }
+    load().then(repaint)
+    loadSuggestions().then(repaint)
   }
   function close() {
     openGen++ // invalidate any in-flight open() so it can't repaint after we close
@@ -355,10 +397,11 @@ export function createCommandPalette({ typeInto, listCommands, favorite, unfavor
   function toggle() {
     overlay.hidden ? open() : close()
   }
-  // Re-fetch when favorites change elsewhere; only repaint if we're open.
+  // Re-fetch when favorites change elsewhere; only repaint if we're open. Suggestions
+  // exclude your favorites, so a pin/unpin can shift them too — reload both.
   async function refresh() {
     if (overlay.hidden) return
-    await load()
+    await Promise.all([load(), loadSuggestions()])
     if (!overlay.hidden) render(search.value)
   }
 

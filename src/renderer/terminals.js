@@ -77,6 +77,54 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   const railEl = document.createElement('div')
   railEl.className = 'term-rail'
   panesEl.appendChild(railEl)
+  // The rail splitter: a thin draggable divider between the primary pane and the rail,
+  // so the Pulse-card rail can be sized to taste. Stack remembers a WIDTH, deck a HEIGHT
+  // (independent axes, each kept in localStorage). It only lives between the primary cell
+  // and railEl in stack/deck (applyRail inserts it; resetCellStyles detaches it), so it
+  // never shows in tabs/grid/flow.
+  const RAIL_SIZE_KEYS = { stack: 'concourse-rail-size-stack', deck: 'concourse-rail-size-deck' }
+  function savedRailSize(mode) {
+    const v = parseInt(localStorage.getItem(RAIL_SIZE_KEYS[mode] || ''), 10)
+    return Number.isFinite(v) && v > 0 ? v : null
+  }
+  function applyRailSize() {
+    // Pin the saved size for the current axis (flex-basis is width in stack, height in
+    // deck); with none saved, clear the inline flex so the CSS default wins.
+    const size = (layout === 'stack' || layout === 'deck') ? savedRailSize(layout) : null
+    railEl.style.flex = size ? `0 0 ${size}px` : ''
+  }
+  const railSplitter = document.createElement('div')
+  railSplitter.className = 'rail-splitter'
+  railSplitter.addEventListener('mousedown', (e) => {
+    e.preventDefault()
+    const mode = layout // 'stack' (side rail → width) or 'deck' (bottom rail → height)
+    if (mode !== 'stack' && mode !== 'deck') return
+    const vertical = mode === 'deck' // deck rail sits BELOW → dragging adjusts height
+    const startPos = vertical ? e.clientY : e.clientX
+    const startSize = vertical ? railEl.offsetHeight : railEl.offsetWidth
+    const box = panesEl.getBoundingClientRect()
+    const min = vertical ? 80 : 160
+    const max = Math.max(min, (vertical ? box.height : box.width) - 160) // keep the primary usable
+    document.body.classList.add('rail-dragging')
+    document.body.style.cursor = vertical ? 'row-resize' : 'col-resize'
+    const move = (ev) => {
+      // The rail is AFTER the splitter, so dragging TOWARD it (right/down) shrinks it.
+      const delta = startPos - (vertical ? ev.clientY : ev.clientX)
+      const size = Math.max(min, Math.min(max, startSize + delta))
+      railEl.style.flex = `0 0 ${size}px`
+      fitActive() // reflow the primary terminal as its box changes
+    }
+    const up = () => {
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+      document.body.classList.remove('rail-dragging')
+      document.body.style.cursor = ''
+      const size = vertical ? railEl.offsetHeight : railEl.offsetWidth
+      localStorage.setItem(RAIL_SIZE_KEYS[mode], String(size))
+    }
+    document.addEventListener('mousemove', move)
+    document.addEventListener('mouseup', up)
+  })
 
   // ---- pulse ----
   // Byte flow drives the base state: bytes ⇒ `working`; IDLE_AFTER_MS of silence after
@@ -594,6 +642,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // rail. Re-appending in Map order preserves the DOM-order == tab-order invariant that
   // grid/flow rely on; railEl is parked last so it never lands between cells.
   function resetCellStyles() {
+    railSplitter.remove() // parked outside stack/deck; applyRail re-inserts it
     for (const s of sessions.values()) {
       s.cell.style.gridColumn = ''
       s.cell.style.gridRow = ''
@@ -644,6 +693,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // only visible cell in these layouts) and placed just before the rail.
     active.cell.classList.add('rail-primary')
     panesEl.insertBefore(active.cell, railEl)
+    panesEl.insertBefore(railSplitter, railEl) // draggable divider between primary and rail
+    applyRailSize()
     for (const s of order) {
       s.card.classList.toggle('active', s === active)
       railEl.appendChild(s.card)
