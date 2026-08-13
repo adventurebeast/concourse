@@ -9,6 +9,12 @@ import { matchesAwaitPrompt } from './pulse-detect.js'
 import { RESTING_GRID, STATIC_GRID, MIN_WORKING_GRID, createThinker } from './braille-thinker.js' // working-figure engine
 import { makeFigure, paint } from './dot-figure.js' // SVG dot-matrix renderer for the figure
 import { colorsFor } from './term-palettes.js'
+import {
+  automaticTerminalLabel,
+  persistedCustomLabel,
+  safeAgentResumeCommand,
+  terminalCardSummary
+} from './terminal-context-policy.js'
 
 // The one-time coach mark that explains Pulse the first time a tab starts
 // working. Fired from every path that starts an agent (launcher reuse, '+' preset,
@@ -403,7 +409,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       `<div class="pl-sub">Concourse runs your CLI coding agents side by side. Start one in this pane:</div>` +
       `<div class="pl-actions">` +
       agentBtn('wand', 'Run Claude Code', 'claude', true) +
-      agentBtn('code', 'Run Codex', 'codex', false) +
+      // Codex normally uses the terminal's alternate screen, which has no scrollback.
+      // Concourse is conversation-first, so keep Codex in the normal buffer where the
+      // user can scroll up while the agent is still running.
+      agentBtn('code', 'Run Codex', 'codex --no-alt-screen', false) +
       `</div>` +
       `<button class="pl-link" data-shell="1">Just open a shell</button>` +
       `</div>`
@@ -422,27 +431,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     s.launcher.remove()
     s.launcher = null
     s.resumeCmd = null
-  }
-
-  // ---- fleet resurrection (restored panes) ----
-  // Agents we know how to bring back after a restart. claude resumes its most
-  // recent conversation for the pane's cwd (--continue — which is exactly why we
-  // restore the cwd first); the rest relaunch fresh, since their CLIs own their
-  // session state. Anything not listed restores as a plain shell — deliberately:
-  // auto-rerunning arbitrary commands (rm, deploys…) is not a risk worth taking.
-  const AGENT_RESUME = [
-    {
-      re: /^claude\b/,
-      resume: (c) =>
-        /(^|\s)(-c|--continue|-r|--resume)\b/.test(c) ? c : c.replace(/^claude\b/, 'claude --continue')
-    },
-    { re: /^(codex|aider|gemini|amp|goose)\b/, resume: (c) => c }
-  ]
-  function resumeCommandFor(cmd) {
-    const c = (cmd || '').trim()
-    if (!c) return null
-    for (const a of AGENT_RESUME) if (a.re.test(c)) return a.resume(c)
-    return null
   }
 
   // The restored-pane twin of mountPaneLauncher: this pane was running an agent
@@ -490,7 +478,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function launchAgentInPane(s, command) {
     dismissPaneLauncher(s)
     s.used = true
-    s.lastCommand = command // resurrection: remember what this pane runs
+    s.resumeCommand = safeAgentResumeCommand(command)
     setState(s, 'working') // pulse the tab the instant they click — immediate feedback
     coachOnce('pulse', PULSE_COACH)
     api.term.input(s.id, command + '\r')
@@ -901,19 +889,20 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   }
 
   // ---- create / destroy ----
-  // `cwd` and `lastCommand` arrive on restored panes (from the session blob):
-  // the shell reopens in its old directory and, when lastCommand is a known
+  // `cwd` and `resumeCommand` arrive on restored panes (from the session blob):
+  // the shell reopens in its old directory and, when resumeCommand is a known
   // agent, the pane offers to resume it (mountResumeCard).
-  function create({ name, command, label, bare, restored, cwd, lastCommand } = {}) {
+  function create({ name, command, customLabel, bare, restored, cwd, resumeCommand } = {}) {
     const id = 'term-' + ++counter
     // Is this the first pane in an otherwise-empty workbench? Gates the one-time
     // beginner launcher overlay so it only greets a genuinely fresh start, not every
     // '+'-spawned shell.
     const firstPane = sessions.size === 0
     // The plainest possible default ("Tab 1"). A preset name (e.g. an agent) wins.
-    // `label` is used verbatim (session restore) — it skips the counter suffix.
+    // An explicit manual label is used verbatim on session restore. Automatic
+    // context is deliberately never persisted (see getState and the v3 migration).
     const defaultName = `Tab ${counter}`
-    const displayName = label || (name ? `${name} ${counter}` : defaultName)
+    const displayName = customLabel || (name ? `${name} ${counter}` : defaultName)
     // Stable per-pane colour slot: store the raw ordinal so recolorAll() can re-pick
     // this pane's hue from any palette/theme (modulo its length) and keep it on its
     // OWN slot across palette swaps, light/dark toggles and drag-reorders.
@@ -1018,7 +1007,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     const s = {
       id, term, fit, cell, body: cellBody, tabEl, tabDot, tabLabel, cellLabel, cellDot, color, colorIndex,
       card, cardDot, cardLabel, cardSum,
-      status: 'running', custom: false,
+      status: 'running', custom: !!customLabel,
       // Three states: `working` (output flowing — pulsing), `awaiting` (at rest, your
       // move) or `idle` (gone quiet, nothing pending). An agent preset (command)
       // auto-fires on open, so it starts working. A plain shell just sits at its prompt,
@@ -1050,15 +1039,15 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       used: false, // true once the user types or a command runs — then we won't auto-cd it
       lastInputAt: 0, // timestamp of the last genuine keystroke; PTY output arriving right
       //                 after it is the prompt ECHOING what you typed, not work (see onData)
-      isShell: !command, // plain shell vs an agent preset — gates command capture
-      lineBuf: '', // keystroke accumulator for the last-command heuristic
-      lastCommand: command || lastCommand || null, // last real shell command (main echoes the
-      //                 capture hook per pane) — persisted so a restart can offer a resume
+      isShell: !command, // plain shell vs an agent preset — gates untouched-shell state detection
+      resumeCommand:
+        safeAgentResumeCommand(command) || safeAgentResumeCommand(resumeCommand) || null,
+      //                 Only a normalized allowlisted agent command is persisted; never
+      //                 arbitrary shell input or arguments (see terminal-context-policy.js).
       cwd: cwd || null, // shell's cwd at the last prompt (OSC 5152) — persisted with the blob
       resumeCmd: null, // set while a restored pane's resume card is up (see mountResumeCard)
       baseName: displayName, // fallback label shown when nothing better is known
       oscTitle: null, // last OSC 0/2 title the program emitted (Layer 0) — always leads the label
-      heurTitle: null, // last heuristic label (the typed command line; branch not shown)
       titleTimer: null // debounce handle for onTitleChange
     }
     sessions.set(id, s)
@@ -1069,7 +1058,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     labelResizeObserver.observe(tabLabel) // re-measure the hover-marquee on width changes
     labelResizeObserver.observe(cellLabel)
     updateIndicators(s) // paint the initial working/idle tab tint
-    updateCardMeta(s) // rail card's summary line (a restored pane already knows its lastCommand)
+    updateCardMeta(s)
     // A preset pane starts `working` by literal (not via setState), so give it what the
     // rest→work edge gives every other working pane: an actual first frame (else it shows the
     // full resting block until the ticker's first tick) and an armed settle (else a preset
@@ -1091,9 +1080,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // Fleet resurrection: a restored pane that was running a known agent offers
     // to bring it back with one click. Mounted like the launcher above — typing
     // into the pane dismisses it.
-    if (restored && lastCommand) {
-      const resumeCmd = resumeCommandFor(lastCommand)
-      if (resumeCmd) mountResumeCard(s, lastCommand, resumeCmd)
+    if (restored && resumeCommand) {
+      const safeResume = safeAgentResumeCommand(resumeCommand)
+      if (safeResume) mountResumeCard(s, safeResume, safeResume)
     }
 
     // A restored pane reopens in its persisted cwd (main confines it to the
@@ -1143,7 +1132,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       s.lastInputAt = Date.now() // mark "just typed" so the echo of these keys doesn't pulse
       s.follow = true // typing/paste means "show me what I'm doing" — re-engage sticky-bottom
       if (s.launcher) dismissPaneLauncher(s) // typing into the pane = "I'll drive it myself"
-      if (s.isShell) captureCommand(s, data)
     })
     term.onResize(({ cols, rows }) => api.term.resize(id, cols, rows))
     // Track the user's scroll intent so sticky-bottom never fights them. Every scroll —
@@ -1228,7 +1216,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // In album flow a brand-new terminal becomes the centre; elsewhere just focus.
     if (layout === 'flow') centerOn(id)
     else activate(id)
-    refreshBranch() // warm the git-branch cache for the last-command heuristic
+    refreshBranch() // warm the git-branch cache for Pulse model context
 
     // Just-in-time layout teaching: the moment you have TWO agents and are still
     // in the single-pane tabs view, point at Grid so you can watch both at once.
@@ -1250,15 +1238,14 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   }
 
   // ---- session restore (Tier A: fresh shells, same layout) ----
-  // Snapshot the terminal set for persistence: tab labels, layout, active index,
-  // plus each pane's cwd and last shell command (fleet resurrection). Live
-  // process state and scrollback are intentionally not captured.
+  // Snapshot only explicit user labels, layout, cwd, and normalized agent-resume
+  // commands. Automatic headers and terminal input are intentionally not captured.
   function getState() {
     const list = [...sessions.values()]
     const tabs = list.map((s) => ({
-      label: s.tabLabel.textContent || s.baseName,
+      customLabel: persistedCustomLabel(s.custom, s.tabLabel.textContent),
       cwd: s.cwd || null,
-      lastCommand: s.lastCommand || null
+      resumeCommand: s.resumeCommand || null
     }))
     const active = Math.max(0, list.findIndex((s) => s.id === activeId))
     return { layout, active, tabs }
@@ -1269,7 +1256,12 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (!state || !Array.isArray(state.tabs) || state.tabs.length === 0) return false
     for (const t of state.tabs) {
       if (!t) continue
-      create({ label: t.label, restored: true, cwd: t.cwd, lastCommand: t.lastCommand })
+      create({
+        customLabel: t.customLabel,
+        restored: true,
+        cwd: t.cwd,
+        resumeCommand: t.resumeCommand
+      })
     }
     if (state.layout) setLayout(state.layout)
     if (Number.isInteger(state.active)) activateIndex(state.active)
@@ -1417,13 +1409,12 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
 
   // ---- auto-title resolver ----------------------------------------------------
   // Priority: a manual rename (s.custom) wins; else the live OSC title a program
-  // emits (Layer 0) wins; else the free heuristic (last command + git branch);
-  // else the base name ("shell 2"). One resolver keeps the layers from fighting
-  // and is where a model-generated summary would slot in later.
+  // emits (Layer 0) wins; else Pulse's output-derived summary; else the base name.
+  // Terminal input is never a title source: input may be a password or other secret.
   // The REAL, width-aware truncation is CSS's job: every label (.cell-label, .term-tab-label,
   // .card-label) is `overflow:hidden; text-overflow:ellipsis`, each bounded to its own width —
   // so a full-width cell header shows far more than a 180px tab, and each ellipsises exactly at
-  // its own pixel edge. MAX_TITLE is only a sanity bound so a pathologically long typed line
+  // its own pixel edge. MAX_TITLE is only a sanity bound so a pathological program/model title
   // never becomes a giant DOM text node / tooltip; it should stay well above any width we render.
   const MAX_TITLE = 200
   // The auto label carries TWO writers on ONE line, deliberately split into two spans so
@@ -1439,7 +1430,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // reveal more before the clip. A manual rename (s.custom) still trumps both.
   const clamp = (v) => (v && v.length > MAX_TITLE ? v.slice(0, MAX_TITLE - 1) + '…' : v || '')
   function visibleLabel(s) {
-    return s.oscTitle || s.summaryText || s.heurTitle || s.baseName
+    return automaticTerminalLabel(s)
   }
   // Write [primary] + optional dim [— secondary] into a clip element, reusing a single
   // .lbl-inner track (the marquee transforms this child; the clip element stays put).
@@ -1480,12 +1471,12 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     }
   }
   // The rail card's summary line: the Pulse one-liner, falling back to the last
-  // typed/captured command so a plain shell's card still says something useful.
+  // output-derived Pulse summary. Raw shell commands and terminal input never appear here.
   // Updated even for custom-renamed panes (the rename freezes the NAME, not what
   // the pane is doing); hidden entirely when nothing adds to the name.
   function updateCardMeta(s) {
     const name = s.custom ? s.cardLabel.textContent : clamp(visibleLabel(s))
-    const sum = [s.summaryText, s.heurTitle, s.lastCommand].find((v) => v && v !== name) || ''
+    const sum = terminalCardSummary(s, name)
     s.cardSum.textContent = sum
     s.cardSum.hidden = !sum
   }
@@ -1533,13 +1524,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     applyTitle(s)
   }
 
-  // ---- free heuristic: the last typed command line ---------------------------
-  // Zero-cost, harness-agnostic "clue" for shell/command panes. We reconstruct
-  // the command line straight from the user's keystrokes — no output parsing, no
-  // prompt-format assumptions, no shell integration. Best-effort: bail on escape
-  // sequences (arrow keys / history recall) rather than guess. The branch is NOT
-  // shown in the label (it's elsewhere in the UI); we still cache it as Pulse model
-  // context, since an agent may be working in a different worktree than you expect.
+  // Cache branch as Pulse model context. Unlike the removed command-line heuristic,
+  // this is workspace metadata and never observes terminal input.
   let cachedBranch = null
   let branchPending = false
   function refreshBranch() {
@@ -1555,34 +1541,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
         branchPending = false
       })
   }
-  function captureCommand(s, data) {
-    for (const ch of data) {
-      const code = ch.charCodeAt(0)
-      if (ch === '\r' || ch === '\n') {
-        const cmd = s.lineBuf.trim()
-        s.lineBuf = ''
-        if (cmd) setHeuristic(s, cmd)
-      } else if (ch === '\x7f' || ch === '\b') {
-        s.lineBuf = s.lineBuf.slice(0, -1)
-      } else if (code === 0x1b) {
-        s.lineBuf = '' // escape sequence (arrows, history, paste) — don't guess
-        return
-      } else if (code === 0x03 || code === 0x15) {
-        s.lineBuf = '' // Ctrl-C / Ctrl-U: line cancelled
-      } else if (code >= 0x20) {
-        s.lineBuf += ch
-      }
-    }
-  }
-  function setHeuristic(s, cmd) {
-    // Just the typed line — no " · branch" tail. The branch is already shown elsewhere in
-    // the UI, so repeating it here only ate header room; CSS truncates the line to the
-    // label's own width. Generous bound (CSS does the visible cut); keeps storage sane.
-    s.heurTitle = cmd.replace(/\s+/g, ' ').trim().slice(0, 160)
-    applyTitle(s)
-    refreshBranch() // still warm the branch cache — Pulse passes it to the model as context
-  }
-
   // ---- fit ----
   // A pane's ROLE in the current layout decides whether it drives its PTY size.
   // Only a "primary" pane — the surface you actually work in — is fitted and has its
@@ -1764,13 +1722,12 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // ---- pty output -> terminal: drives the two-state (working/idle) indicator ----
   // Fleet-resurrection bookkeeping: main echoes each pane's captured shell
   // commands and prompt cwd off the shell-integration hook (see ipc-pty.js).
-  // Stashed on the session and persisted via getState() so a restored pane can
-  // reopen where it was and offer to bring its agent back.
+  // Only a normalized allowlisted agent identity is retained for resurrection;
+  // arbitrary command text and arguments are discarded immediately.
   api.term.onCommand?.(({ id, cmd }) => {
     const s = sessions.get(id)
     if (!s || !cmd) return
-    s.lastCommand = cmd
-    updateCardMeta(s) // a shell card's summary line may be this command
+    s.resumeCommand = safeAgentResumeCommand(cmd)
   })
   api.term.onCwd?.(({ id, cwd }) => {
     const s = sessions.get(id)
@@ -2005,7 +1962,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
         id: s.id,
         tail,
         baseName: s.baseName,
-        lastCommand: s.heurTitle || null,
         branch: cachedBranch || null
       })
     } catch {

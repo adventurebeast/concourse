@@ -1,4 +1,5 @@
 import './style.css'
+import { stripLegacyTerminalContext } from './terminal-context-policy.js'
 import { createEditor } from './editor.js'
 import { createFileTree } from './fileTree.js'
 import { createGit } from './git.js'
@@ -215,9 +216,9 @@ document.addEventListener('visibilitychange', () => {
 })
 
 // Command palette (⌘K): TYPES a command onto the active prompt (the user presses
-// Enter; ⌘↵ runs it immediately). Surfaces ♥ favorites + a model-curated Suggested
-// group + this project's commands + frecency-ranked shell history, all from the main
-// process.
+// Enter; ⌘↵ runs it immediately). Empty shows only ♥ favorites; typing searches the
+// model-curated suggestions, project commands and frecency-ranked shell history from
+// the main process.
 const palette = createCommandPalette({
   typeInto: (cmd, opts) => terminals.typeIntoActive(cmd, opts),
   // The palette's dynamic sources (♥ favorites · Suggested · project commands ·
@@ -640,7 +641,7 @@ const $ = (id) => document.getElementById(id)
 
 // Current session-blob schema version. Bumped when the blob shape changes; old
 // blobs are upgraded by migrateSession() on restore.
-const SESSION_VERSION = 2
+const SESSION_VERSION = 3
 
 // Snapshot the restorable workbench state for the current workspace.
 function gatherSession() {
@@ -718,6 +719,17 @@ function migrateSession(blob) {
     // resurrection). Absent fields restore as plain shells, so only the stamp
     // changes.
     blob = { ...blob, version: 2 }
+  }
+  if (blob.version < 3) {
+    // v0-v2 persisted rendered automatic terminal labels and arbitrary last
+    // commands. Either may contain secrets captured from terminal input. Drop
+    // those ambiguous fields; v3 stores only explicit manual labels and
+    // normalized allowlisted agent-resume commands.
+    blob = {
+      ...blob,
+      version: 3,
+      terminals: stripLegacyTerminalContext(blob.terminals)
+    }
   }
   return blob
 }

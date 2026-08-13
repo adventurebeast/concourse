@@ -1,20 +1,13 @@
 import './commandPalette.css'
 import { icon } from './icons.js'
 
-// Command palette (⌘K). Every group is dynamic and driven by this project — no
-// static cheatsheet (a generic ls/cd/git list ignored the project and was just noise):
-//       ♥ Favorites  → commands you pinned in this project (no run-count gate)
-//       Suggested    → up to 5 quick commands the Pulse model curates from this
-//                      project's declared scripts + your real history (grounded —
-//                      it only ever names commands that actually exist)
-//       Project      → scripts/recipes/targets declared in this folder
-//                      (package.json, justfile, Makefile) — shown without running
-//       This Project → commands you've entered in THIS project
-//       Global       → commands you've entered across ALL projects
-//     This is the "call up the command I always run" surface — far better than
-//     Up-Arrow: visible, searchable, ranked by what you actually use, and you can
-//     ♥ the ones that matter so they're always on top. A command only appears in
-//     one group (de-duped top-down).
+// Command palette (⌘K). At rest it is deliberately tiny: show only the commands
+// the user chose as Favorites. The larger catalog (model suggestions, declared
+// project scripts and command history) is retrieval material, not a dashboard, so
+// it appears only after the user starts searching. With no favorites yet, a small
+// starter set teaches the interaction without dumping the whole catalog onscreen.
+// Search results stay de-duped top-down: Favorites → Suggested → Project → this
+// project's history → global history.
 // Anything you type that isn't in the list becomes a row of its own, so a novel
 // command is one Save-click (or ⌥↵) away from being a pinned favorite.
 // (COMMANDS below is now only the seed for the always-visible starter chip strip.)
@@ -28,7 +21,7 @@ const COMMANDS = [
     items: [
       { cmd: 'claude', label: 'Run Claude Code', icon: 'wand' },
       { cmd: 'claude -c', label: 'Continue your last Claude session', icon: 'wand' },
-      { cmd: 'codex', label: 'Run Codex', icon: 'code' },
+      { cmd: 'codex --no-alt-screen', label: 'Run Codex', icon: 'code' },
       {
         cmd: 'ssh ',
         label: 'SSH into a machine',
@@ -207,6 +200,25 @@ export function createCommandPalette({
         })),
       favById
     )
+
+    // No query means "give me the commands I deliberately kept", not "show me
+    // everything Concourse knows". This is the fast repeat-command path: ⌘K then
+    // Enter acts on the first favorite without the project catalog pushing it into
+    // a wall of unrelated rows. A brand-new user with no favorites gets only the
+    // compact starter set; typing still searches every source below.
+    if (!q) {
+      if (!dynamic.favorites.length) {
+        appendGroup(
+          'Start here',
+          STARTERS.map((starter) => FLAT.find((it) => it.cmd === starter.cmd))
+            .filter(Boolean)
+            .map((it) => ({ ...it })),
+          favById
+        )
+      }
+      setActive(0)
+      return
+    }
 
     // 2) Suggested — up to 5 quick commands the Pulse model curates from THIS
     // project's declared scripts + your real history (see command-suggest.js).

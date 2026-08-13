@@ -155,10 +155,9 @@ const TAIL_MAX = 2500
 const FIELD_MAX = 200
 const cap = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '')
 
-function buildUserText({ tail, baseName, lastCommand, branch }) {
+function buildUserText({ tail, baseName, branch }) {
   const ctxLines = []
   if (baseName) ctxLines.push(`pane: ${cap(baseName, FIELD_MAX)}`)
-  if (lastCommand) ctxLines.push(`last command typed: ${cap(lastCommand, FIELD_MAX)}`)
   if (branch) ctxLines.push(`git branch: ${cap(branch, FIELD_MAX)}`)
   const head = ctxLines.length ? ctxLines.join('\n') + '\n\n' : ''
   return `${head}recent output (last lines of the pane):\n\n${cap(tail, TAIL_MAX) || '(no output captured)'}`
