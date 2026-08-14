@@ -7,8 +7,7 @@ import { getProjectCommands } from '../src/main/command-sources.js'
 // command-sources.js is pure Node (no electron import), so the project-command
 // parsing — the riskiest read-from-disk logic behind the palette — is
 // unit-testable directly. getProjectCommands reads real files from a root we
-// point at a temp dir. (The per-project history ranking lives in command-capture
-// and is covered in command-capture.test.mjs.)
+// point at a temp dir.
 
 describe('getProjectCommands — npm / just / make parsing', () => {
   let dir

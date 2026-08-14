@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs'
 import {
   automaticTerminalLabel,
   persistedCustomLabel,
+  safeAgentLabel,
   safeAgentResumeCommand,
-  stripLegacyTerminalContext,
-  terminalCardSummary
+  stripLegacyTerminalContext
 } from '../src/renderer/terminal-context-policy.js'
 
 describe('terminal context privacy policy', () => {
@@ -21,6 +21,17 @@ describe('terminal context privacy policy', () => {
     expect(inputHandler).not.toMatch(
       /lineBuf|heurTitle|captureCommand|applyTitle|tabLabel|cardLabel/
     )
+    expect(source).not.toMatch(/onTitleChange|api\.pulse\.summarize|api\.term\.onCommand/)
+  })
+
+  it('does not mount the removed beginner controls around terminal panes', () => {
+    const html = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8')
+    const main = readFileSync(new URL('../src/renderer/main.js', import.meta.url), 'utf8')
+    const terminals = readFileSync(new URL('../src/renderer/terminals.js', import.meta.url), 'utf8')
+
+    expect(html).not.toMatch(/cmd-strip/)
+    expect(main).not.toMatch(/mountStrip/)
+    expect(terminals).not.toMatch(/mountPaneLauncher/)
   })
 
   it('builds automatic headers only from program/output metadata', () => {
@@ -32,8 +43,7 @@ describe('terminal context privacy policy', () => {
       lastCommand: 'login --password correct-horse'
     }
 
-    expect(automaticTerminalLabel(state)).toBe('Running the test suite')
-    expect(terminalCardSummary(state, 'Tab 1')).toBe('Running the test suite')
+    expect(automaticTerminalLabel(state)).toBe('Tab 1')
   })
 
   it('persists only labels created by an explicit manual rename', () => {
@@ -45,6 +55,8 @@ describe('terminal context privacy policy', () => {
     expect(safeAgentResumeCommand('claude --api-key correct-horse')).toBe('claude --continue')
     expect(safeAgentResumeCommand('codex --config token=secret')).toBe('codex --no-alt-screen')
     expect(safeAgentResumeCommand('deploy --password correct-horse')).toBeNull()
+    expect(safeAgentLabel('claude --api-key correct-horse')).toBe('Claude')
+    expect(safeAgentLabel('deploy --password correct-horse')).toBeNull()
   })
 
   it('removes potentially captured context from legacy session tabs', () => {

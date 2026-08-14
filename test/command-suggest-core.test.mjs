@@ -14,14 +14,11 @@ import {
 // lives in command-suggest.js.
 
 const script = (cmd, label) => ({ cmd, label, source: 'npm' })
-const recent = (cmd, score) => ({ cmd, score })
 
 describe('buildCandidates', () => {
-  it('merges scripts + history, friendly-labels known scripts, keeps the command as the recent label', () => {
+  it('uses only declared scripts and friendly-labels known entries', () => {
     const cands = buildCandidates({
-      project: [script('npm run dev', 'dev'), script('npm run deploy', 'deploy')],
-      thisProject: [recent('git push', 10)],
-      global: []
+      project: [script('npm run dev', 'dev'), script('npm run deploy', 'deploy')]
     })
     const byCmd = Object.fromEntries(cands.map((c) => [c.cmd, c]))
     expect(byCmd['npm run dev']).toMatchObject({
@@ -30,64 +27,52 @@ describe('buildCandidates', () => {
     })
     // Unknown script name falls back to the bare name as its label.
     expect(byCmd['npm run deploy']).toMatchObject({ kind: 'script', label: 'deploy' })
-    // A recent command uses the command itself as its label.
-    expect(byCmd['git push']).toMatchObject({ kind: 'recent', label: 'git push', score: 10 })
+    expect(byCmd['git push']).toBeUndefined()
   })
 
   it('excludes already-favorited commands (suggest complements the ♥ list)', () => {
     const cands = buildCandidates({
       project: [script('npm run dev', 'dev')],
-      thisProject: [recent('git push', 5)],
-      favorites: [{ cmd: 'git push' }, { cmd: 'npm run dev' }]
+      favorites: [{ cmd: 'npm run dev' }]
     })
     expect(cands).toHaveLength(0)
-  })
-
-  it('a script that is also frequently run keeps its script label but gains the run score', () => {
-    const [only] = buildCandidates({
-      project: [script('npm test', 'test')],
-      thisProject: [recent('npm test', 42)]
-    })
-    expect(only).toMatchObject({ kind: 'script', label: 'Run the tests', score: 42 })
   })
 })
 
 describe('planSuggestions — deterministic baseline', () => {
-  it('interleaves priority entrypoints with most-run commands and caps at 5', () => {
+  it('prioritizes familiar project entrypoints and caps at 5', () => {
     const cands = buildCandidates({
-      project: [script('npm run dev', 'dev'), script('npm run build', 'build')],
-      thisProject: [
-        recent('git push', 30),
-        recent('git status', 20),
-        recent('docker compose up', 5)
+      project: [
+        script('npm run deploy', 'deploy'),
+        script('npm run build', 'build'),
+        script('npm run dev', 'dev')
       ]
     })
     const { baseline } = planSuggestions(cands)
     expect(baseline.length).toBeLessThanOrEqual(MAX_SUGGESTIONS)
-    // Leads with a priority script, then the top recent — a useful spread, not 5 scripts.
     expect(baseline[0].cmd).toBe('npm run dev')
-    expect(baseline[1].cmd).toBe('git push')
+    expect(baseline[1].cmd).toBe('npm run build')
   })
 })
 
 describe('buildUserText', () => {
   it('lists candidates verbatim with a kind tag and names the project', () => {
-    const cands = buildCandidates({
-      project: [script('npm run dev', 'dev')],
-      thisProject: [recent('git push', 1)]
-    })
+    const cands = buildCandidates({ project: [script('npm run dev', 'dev')] })
     const { candidateOrder } = planSuggestions(cands)
     const text = buildUserText('my-app', candidateOrder)
     expect(text).toContain('project: my-app')
     expect(text).toContain('- npm run dev  [script]')
-    expect(text).toContain('- git push  [you run this]')
+    expect(text).not.toContain('git push')
   })
 })
 
 describe('finalizeSuggestions — grounding', () => {
   const cands = buildCandidates({
-    project: [script('npm run dev', 'dev'), script('npm run build', 'build')],
-    thisProject: [recent('git push', 10)]
+    project: [
+      script('npm run dev', 'dev'),
+      script('npm run build', 'build'),
+      script('npm test', 'test')
+    ]
   })
   const { baseline } = planSuggestions(cands)
 
@@ -124,7 +109,7 @@ describe('finalizeSuggestions — grounding', () => {
     const { list } = finalizeSuggestions(raw, cands, baseline)
     expect(list.length).toBeGreaterThan(1)
     expect(list[0].cmd).toBe('npm run dev') // model pick leads
-    expect(list.map((c) => c.cmd)).toContain('git push') // baseline fills in
+    expect(list.map((c) => c.cmd)).toContain('npm run build') // baseline fills in
   })
 
   it('tolerates a code-fenced reply and de-dupes repeated picks', () => {

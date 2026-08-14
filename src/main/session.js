@@ -3,6 +3,7 @@ import path from 'path'
 import crypto from 'crypto'
 import fsSync from 'fs'
 import { writeJsonAtomic, writeJsonSync, readJson, enqueue, trackPending } from './store-io.js'
+import { sanitizeSessionBlob } from './terminal-session-policy.js'
 
 // Persisted per-workspace session state (open editor tabs, terminal layout, UI
 // sizes) plus the last-opened root for auto-reopen. Each workspace lives in its
@@ -25,6 +26,48 @@ function metaPath() {
 }
 function legacyPath() {
   return path.join(app.getPath('userData'), 'session.json')
+}
+
+// Security migration for stores a user may never reopen. Earlier releases saved
+// automatic labels and arbitrary command lines inside session files; scrub every
+// workspace (plus legacy backups) at startup instead of waiting for per-root restore.
+export function purgeLegacyTerminalSessions() {
+  ensureDir()
+  let names = []
+  try {
+    names = fsSync.readdirSync(sessionDir())
+  } catch {
+    // Missing/unreadable store.
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    const file = path.join(sessionDir(), name)
+    try {
+      const data = JSON.parse(fsSync.readFileSync(file, 'utf8'))
+      const blob = sanitizeSessionBlob(data?.blob)
+      if (JSON.stringify(blob) !== JSON.stringify(data?.blob))
+        writeJsonSync(file, { ...data, blob })
+    } catch {
+      // A malformed file remains isolated to its workspace; continue with the rest.
+    }
+  }
+  for (const file of [legacyPath(), legacyPath() + '.bak']) {
+    try {
+      const data = JSON.parse(fsSync.readFileSync(file, 'utf8'))
+      let changed = false
+      const roots = { ...(data?.roots || {}) }
+      for (const [root, oldBlob] of Object.entries(roots)) {
+        const blob = sanitizeSessionBlob(oldBlob)
+        if (JSON.stringify(blob) !== JSON.stringify(oldBlob)) {
+          roots[root] = blob
+          changed = true
+        }
+      }
+      if (changed) writeJsonSync(file, { ...data, roots })
+    } catch {
+      // Missing or malformed legacy store.
+    }
+  }
 }
 
 // Make sure the per-workspace directory exists (created once, synchronously, so
@@ -56,7 +99,7 @@ function migrateLegacyStore() {
     const roots = data.roots && typeof data.roots === 'object' ? data.roots : {}
     for (const root of Object.keys(roots)) {
       const tmp = sessionFile(root) + '.migrate.tmp'
-      const payload = { version: SCHEMA_VERSION, root, blob: roots[root] || {} }
+      const payload = { version: SCHEMA_VERSION, root, blob: sanitizeSessionBlob(roots[root]) }
       fsSync.writeFileSync(tmp, JSON.stringify(payload, null, 2))
       fsSync.renameSync(tmp, sessionFile(root))
     }
@@ -104,7 +147,7 @@ export async function setLastRoot(root) {
 export function saveSessionSync(root, blob) {
   if (!root) return
   ensureDir()
-  const data = { version: SCHEMA_VERSION, root, blob: blob || {} }
+  const data = { version: SCHEMA_VERSION, root, blob: sanitizeSessionBlob(blob) }
   const meta = { version: SCHEMA_VERSION, lastRoot: root }
   trackPending(sessionFile(root), data)
   trackPending(metaPath(), meta)
@@ -126,7 +169,7 @@ export async function setSession(root, blob) {
   ensureDir()
   // Queued so concurrent writes (this root from another window) serialize.
   return enqueue(async () => {
-    const data = { version: SCHEMA_VERSION, root, blob: blob || {} }
+    const data = { version: SCHEMA_VERSION, root, blob: sanitizeSessionBlob(blob) }
     trackPending(sessionFile(root), data)
     await writeJsonAtomic(sessionFile(root), data)
     // Track the last-opened root alongside the per-workspace write.

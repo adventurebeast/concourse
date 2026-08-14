@@ -13,25 +13,72 @@
     <div id="app">
       <!-- Full-width top title bar -->
       <header id="titlebar">
-        <div class="titlebar-left">
-        </div>
+        <div class="titlebar-left"></div>
         <div class="titlebar-center" id="titlebar-title">Concourse</div>
         <div class="titlebar-right">
-          <button id="new-window" class="title-btn" data-icon="newWindow" title="New Window (⇧⌘N)"></button>
-          <button id="toggle-sidebar" class="title-btn active" data-icon="panelLeft" title="Toggle Sidebar"></button>
-          <button id="toggle-panel" class="title-btn active" data-icon="panelBottom" title="Toggle Terminal Panel"></button>
-          <button id="toggle-terminals" class="title-btn" data-icon="terminalSquare" title="Terminals Only (hide editor)"></button>
-          <button id="toggle-theme" class="title-btn" data-icon="moon" title="Toggle Light / Dark Theme"></button>
-          <button id="open-settings" class="title-btn" data-icon="cog" title="Settings (⌘,)"></button>
+          <button
+            id="new-window"
+            class="title-btn"
+            data-icon="newWindow"
+            title="New Window (⇧⌘N)"
+          ></button>
+          <button
+            id="toggle-sidebar"
+            class="title-btn active"
+            data-icon="panelLeft"
+            title="Toggle Sidebar"
+          ></button>
+          <button
+            id="toggle-panel"
+            class="title-btn active"
+            data-icon="panelBottom"
+            title="Toggle Terminal Panel"
+          ></button>
+          <button
+            id="toggle-terminals"
+            class="title-btn"
+            data-icon="terminalSquare"
+            title="Terminals Only (hide editor)"
+          ></button>
+          <button
+            id="toggle-theme"
+            class="title-btn"
+            data-icon="moon"
+            title="Toggle Light / Dark Theme"
+          ></button>
+          <button
+            id="open-settings"
+            class="title-btn"
+            data-icon="cog"
+            title="Settings (⌘,)"
+          ></button>
         </div>
       </header>
 
       <!-- Body row: activity bar + sidebar + main -->
       <div id="body">
         <nav id="activity-bar">
-          <button class="activity-btn active" data-view="explorer" data-icon="files" data-size="18" title="Explorer"></button>
-          <button class="activity-btn" data-view="search" data-icon="search" data-size="18" title="Search"></button>
-          <button class="activity-btn" data-view="scm" data-icon="gitBranch" data-size="18" title="Source Control"></button>
+          <button
+            class="activity-btn active"
+            data-view="explorer"
+            data-icon="files"
+            data-size="18"
+            title="Explorer"
+          ></button>
+          <button
+            class="activity-btn"
+            data-view="search"
+            data-icon="search"
+            data-size="18"
+            title="Search"
+          ></button>
+          <button
+            class="activity-btn"
+            data-view="scm"
+            data-icon="gitBranch"
+            data-size="18"
+            title="Source Control"
+          ></button>
         </nav>
 
         <aside id="sidebar">
@@ -39,12 +86,42 @@
             <div class="pane-header">
               <span class="pane-title">EXPLORER</span>
               <div class="pane-actions">
-                <button id="ft-new-file" class="icon-btn" data-icon="filePlus" title="New File"></button>
-                <button id="ft-new-folder" class="icon-btn" data-icon="folderPlus" title="New Folder"></button>
-                <button id="ft-refresh" class="icon-btn" data-icon="refresh" title="Refresh"></button>
-                <button id="ft-collapse" class="icon-btn" data-icon="collapse" title="Collapse All"></button>
-                <button id="ft-reveal" class="icon-btn" data-icon="folderReveal" title="Reveal in Finder"></button>
-                <button id="open-folder" class="icon-btn" data-icon="folderOpen" title="Open Folder…"></button>
+                <button
+                  id="ft-new-file"
+                  class="icon-btn"
+                  data-icon="filePlus"
+                  title="New File"
+                ></button>
+                <button
+                  id="ft-new-folder"
+                  class="icon-btn"
+                  data-icon="folderPlus"
+                  title="New Folder"
+                ></button>
+                <button
+                  id="ft-refresh"
+                  class="icon-btn"
+                  data-icon="refresh"
+                  title="Refresh"
+                ></button>
+                <button
+                  id="ft-collapse"
+                  class="icon-btn"
+                  data-icon="collapse"
+                  title="Collapse All"
+                ></button>
+                <button
+                  id="ft-reveal"
+                  class="icon-btn"
+                  data-icon="folderReveal"
+                  title="Reveal in Finder"
+                ></button>
+                <button
+                  id="open-folder"
+                  class="icon-btn"
+                  data-icon="folderOpen"
+                  title="Open Folder…"
+                ></button>
               </div>
             </div>
             <div id="workspace-name" class="workspace-root" hidden></div>
@@ -55,16 +132,31 @@
             <div class="pane-header">
               <span class="pane-title">SEARCH</span>
               <div class="pane-actions">
-                <button id="search-clear" class="icon-btn" data-icon="close" title="Clear Search"></button>
+                <button
+                  id="search-clear"
+                  class="icon-btn"
+                  data-icon="close"
+                  title="Clear Search"
+                ></button>
               </div>
             </div>
             <div class="search-controls">
               <div class="search-field">
-                <textarea id="search-input" class="search-input" rows="1" placeholder="Search" spellcheck="false"></textarea>
+                <textarea
+                  id="search-input"
+                  class="search-input"
+                  rows="1"
+                  placeholder="Search"
+                  spellcheck="false"
+                ></textarea>
                 <div class="search-toggles">
                   <button id="search-case" class="search-toggle" title="Match Case">Aa</button>
-                  <button id="search-word" class="search-toggle" title="Match Whole Word"><u>ab</u></button>
-                  <button id="search-regex" class="search-toggle" title="Use Regular Expression">.*</button>
+                  <button id="search-word" class="search-toggle" title="Match Whole Word">
+                    <u>ab</u>
+                  </button>
+                  <button id="search-regex" class="search-toggle" title="Use Regular Expression">
+                    .*
+                  </button>
                 </div>
               </div>
             </div>
@@ -77,7 +169,12 @@
               <span class="pane-title">SOURCE CONTROL</span>
               <div class="pane-actions">
                 <button id="scm-commit" class="icon-btn" data-icon="check" title="Commit"></button>
-                <button id="scm-refresh" class="icon-btn" data-icon="refresh" title="Refresh"></button>
+                <button
+                  id="scm-refresh"
+                  class="icon-btn"
+                  data-icon="refresh"
+                  title="Refresh"
+                ></button>
               </div>
             </div>
             <div id="scm-body" class="panel-body"></div>
@@ -94,21 +191,27 @@
               <div class="panel-controls"></div>
             </div>
             <div id="term-panes"></div>
-            <div id="cmd-strip" class="cmd-strip"></div>
           </section>
 
           <div id="drag-y" class="dragbar-h"></div>
 
           <section id="editor-region">
             <div id="editor-tabs" class="tab-bar">
-              <button id="editor-minimize" class="icon-btn editor-minimize" data-icon="chevronDown" title="Minimize (hide the editor, keep tabs)"></button>
+              <button
+                id="editor-minimize"
+                class="icon-btn editor-minimize"
+                data-icon="chevronDown"
+                title="Minimize (hide the editor, keep tabs)"
+              ></button>
             </div>
             <div id="editor-stack">
               <div id="editor"></div>
               <div id="editor-welcome">
                 <span class="editor-welcome-logo" data-icon="runway" data-size="120"></span>
                 <div class="welcome-title">Concourse</div>
-                <div class="welcome-sub">Open a folder, then drive your agents from the terminal.</div>
+                <div class="welcome-sub">
+                  Open a folder, then drive your agents from the terminal.
+                </div>
               </div>
             </div>
           </section>
@@ -123,14 +226,23 @@
 ╔═╗╔═╗╔╗╔╔═╗╔═╗╦ ╦╦═╗╔═╗╔═╗
 ║  ║ ║║║║║  ║ ║║ ║╠╦╝╚═╗║╣
 ╚═╝╚═╝╝╚╝╚═╝╚═╝╚═╝╩╚═╚═╝╚═╝
-</pre>
+</pre
+              >
               <div class="welcome-tagline">Run your CLI coding agents side by side.</div>
             </div>
 
             <div class="welcome-how">
-              <div class="welcome-how-row"><span class="welcome-how-num">1</span><span>Open a folder</span></div>
-              <div class="welcome-how-row"><span class="welcome-how-num">2</span><span>Launch an agent — Claude, Codex, any CLI</span></div>
-              <div class="welcome-how-row"><span class="welcome-how-num">3</span><span>Watch Pulse tell you who needs you</span></div>
+              <div class="welcome-how-row">
+                <span class="welcome-how-num">1</span><span>Open a folder</span>
+              </div>
+              <div class="welcome-how-row">
+                <span class="welcome-how-num">2</span
+                ><span>Launch an agent — Claude, Codex, any CLI</span>
+              </div>
+              <div class="welcome-how-row">
+                <span class="welcome-how-num">3</span
+                ><span>Watch Pulse tell you who needs you</span>
+              </div>
             </div>
 
             <div class="welcome-section">
@@ -156,12 +268,19 @@
       <!-- Full-width bottom status bar -->
       <footer id="status-bar">
         <div class="status-left">
-          <span id="status-branch" class="status-item status-action" title="Open Source Control"></span>
-          <span id="status-git" class="status-item status-action" title="Open Source Control"></span>
+          <span
+            id="status-branch"
+            class="status-item status-action"
+            title="Open Source Control"
+          ></span>
+          <span
+            id="status-git"
+            class="status-item status-action"
+            title="Open Source Control"
+          ></span>
           <span id="status-workspace" class="status-item"></span>
         </div>
         <div class="status-right">
-          <span id="status-pulse" class="status-item" title="Pulse summariser"></span>
           <span id="status-fleet" class="status-item" title="Terminal activity"></span>
           <span id="status-clock" class="status-item"></span>
           <span id="status-version" class="status-item status-version" title="Build version"></span>

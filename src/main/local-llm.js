@@ -91,7 +91,9 @@ async function resolveOllamaBinary() {
 // Packaged: extraResources puts the binary dir at <Resources>/llama. Dev: build/bin in
 // the repo (populated by `npm run fetch:llama`).
 function bundledServerBinary() {
-  const dir = app.isPackaged ? join(process.resourcesPath, 'llama') : join(app.getAppPath(), 'build', 'bin')
+  const dir = app.isPackaged
+    ? join(process.resourcesPath, 'llama')
+    : join(app.getAppPath(), 'build', 'bin')
   const exe = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server'
   const p = join(dir, exe)
   return existsSync(p) ? p : null
@@ -110,11 +112,21 @@ export function bundledModelPath() {
 export function getLocalRuntime() {
   const explicit = settingOrEnv('pulse.baseUrl', 'CONCOURSE_PULSE_BASE_URL')
   if (explicit) {
-    return { kind: 'external', baseUrl: explicit.replace(/\/+$/, ''), model: resolveLocalModel(), manageable: false }
+    return {
+      kind: 'external',
+      baseUrl: explicit.replace(/\/+$/, ''),
+      model: resolveLocalModel(),
+      manageable: false
+    }
   }
   // Prefer a real Ollama install (richer model store) over our bundled mini-runtime.
   if (ollamaBinarySync()) {
-    return { kind: 'ollama', baseUrl: OLLAMA_BASE_URL, model: resolveLocalModel(), manageable: true }
+    return {
+      kind: 'ollama',
+      baseUrl: OLLAMA_BASE_URL,
+      model: resolveLocalModel(),
+      manageable: true
+    }
   }
   const binary = bundledServerBinary()
   if (binary) {
@@ -201,9 +213,9 @@ export async function ensureLocalRuntimeStarted({ force = false } = {}) {
       console.log('[pulse] started Ollama (ollama serve), pid', child?.pid)
     } else if (rt.kind === 'bundled') {
       if (!existsSync(rt.modelPath)) return // weights not downloaded yet
-      // Cap the runtime's footprint so Pulse stays a light background task even on a
-      // modest machine. Pulse sends a ~250-token tail and wants a one-line label, so a
-      // small context and short generation are plenty — and matching llama.cpp's threads
+      // Cap the runtime's footprint so optional command curation stays light even on a
+      // modest machine. Its prompt and short JSON response need only a small context —
+      // and matching llama.cpp's threads
       // to HALF the cores (min 2) leaves the rest for the user's actual agents instead of
       // letting a tiny model peg every core. Without these, llama-server defaults to a
       // large context and ALL cores, which is exactly what makes a fleet run hot.
@@ -212,17 +224,27 @@ export async function ensureLocalRuntimeStarted({ force = false } = {}) {
         spawn(
           rt.binary,
           [
-            '-m', rt.modelPath,
-            '--host', '127.0.0.1',
-            '--port', String(BUNDLED_PORT),
-            '-c', '2048', // context window (KV cache) — matches LOCAL_NUM_CTX in ipc-pulse
-            '-n', '128', //  max tokens to generate per request
-            '-t', String(threads) // CPU threads — leave headroom for the user's agents
+            '-m',
+            rt.modelPath,
+            '--host',
+            '127.0.0.1',
+            '--port',
+            String(BUNDLED_PORT),
+            '-c',
+            '2048', // context window (KV cache) — matches LOCAL_NUM_CTX in ipc-pulse
+            '-n',
+            '128', //  max tokens to generate per request
+            '-t',
+            String(threads) // CPU threads — leave headroom for the user's agents
           ],
           { env: { ...process.env }, stdio: 'ignore', detached: false }
         )
       )
-      console.log('[pulse] started bundled llama-server, pid', child?.pid, `(ctx 2048, ${threads} threads)`)
+      console.log(
+        '[pulse] started bundled llama-server, pid',
+        child?.pid,
+        `(ctx 2048, ${threads} threads)`
+      )
     }
   } catch (err) {
     child = null

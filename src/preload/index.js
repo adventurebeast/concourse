@@ -130,11 +130,8 @@ contextBridge.exposeInMainWorld('api', {
     kill: (id) => ipcRenderer.send('term:kill', { id }),
     onData: (cb) => ipcRenderer.on('term:data', (_e, payload) => cb(payload)),
     onExit: (cb) => ipcRenderer.on('term:exit', (_e, payload) => cb(payload)),
-    // Fleet-resurrection inputs, echoed per pane by the main capture hook (see
-    // ipc-pty.js): each real shell command run in the pane, and the shell's cwd
-    // at each prompt. Persisted in the session blob so a restart can offer to
-    // reopen each pane where it was and relaunch its agent.
-    onCommand: (cb) => ipcRenderer.on('term:command', (_e, payload) => cb(payload)),
+    // Cwd is explicit shell-integration metadata used only for session placement.
+    // Terminal input and executed command text are never captured or exposed.
     onCwd: (cb) => ipcRenderer.on('term:cwd', (_e, payload) => cb(payload))
   },
 
@@ -147,14 +144,6 @@ contextBridge.exposeInMainWorld('api', {
   // System clipboard — handler in src/main/ipc-shell.js (Copy Path items).
   clipboard: {
     writeText: (text) => ipcRenderer.invoke('clipboard:writeText', text)
-  },
-
-  // Pulse — Layer B model summariser, handlers in src/main/ipc-pulse.js.
-  // The API key lives only in the main process; the renderer sends a text tail and
-  // gets back a { state, summary } verdict (or null when disabled).
-  pulse: {
-    status: () => ipcRenderer.invoke('pulse:status'),
-    summarize: (payload) => ipcRenderer.invoke('pulse:summarize', payload)
   },
 
   // Local model provisioning — the one-click "run the Local LLM" flow, handlers in

@@ -3,7 +3,7 @@
 // (fetching the stores, calling the Pulse model, caching) lives in command-suggest.js.
 //
 // The whole design is GROUNDED: the model only ever picks and labels commands drawn
-// from real signal (this project's declared scripts + commands you've actually run),
+// only from this project's declared scripts/recipes/targets,
 // never invents one. parseModelPicks() enforces that by dropping anything the model
 // returns that isn't in the candidate set — which is what makes even the tiny default
 // local model (qwen2.5:0.5b) safe to use here. A deterministic baseline backs it up.
@@ -67,13 +67,13 @@ export const SUGGEST_SCHEMA = {
 export const SYSTEM = [
   'A developer just opened a project in a terminal. From the CANDIDATE COMMANDS below,',
   'choose the few most useful to have one keystroke away — the project’s real entry',
-  'points (a way to run it, build it, test it) plus the commands they run most.',
+  'points (a way to run it, build it, and test it).',
   '',
   'Hard rules:',
   '- Choose ONLY commands that appear VERBATIM in the candidate list. Never invent a',
   '  command, subcommand, flag, or path, and never edit one — copy it exactly.',
-  `- Pick at most ${MAX_SUGGESTIONS}. Prefer a spread (run / build / test / their frequent`,
-  '  commands) over several near-duplicates.',
+  `- Pick at most ${MAX_SUGGESTIONS}. Prefer a spread (run / build / test) over`,
+  '  several near-duplicates.',
   '- For each, write a short plain-English label of what it does: <=6 words, no trailing',
   '  period. E.g. {"cmd": "npm run dev", "label": "Start the app in development"}.',
   '',
@@ -92,13 +92,9 @@ function friendlyLabel(name) {
   return FRIENDLY[name] || norm(name)
 }
 
-// Merge declared project commands + this project's recent history + a little global
-// history into one de-duped candidate set, excluding anything already favorited (the
-// user pinned those; suggest COMPLEMENTS the ♥ list). Declared scripts win the label;
-// history contributes the frecency score used to rank. Inputs are the raw arrays from
-// the stores: project [{cmd,label,source}], thisProject/global [{cmd,score}], favorites
-// [{cmd}].
-export function buildCandidates({ project = [], thisProject = [], global = [], favorites = [] }) {
+// Build a de-duped set only from declarative project metadata, excluding anything the
+// user explicitly favorited. Runtime terminal text and command history are not inputs.
+export function buildCandidates({ project = [], favorites = [] }) {
   const faved = new Set(favorites.map((f) => f.cmd))
   const byCmd = new Map()
 
@@ -106,53 +102,19 @@ export function buildCandidates({ project = [], thisProject = [], global = [], f
     const cmd = norm(p.cmd)
     if (!cmd || faved.has(cmd) || byCmd.has(cmd)) continue
     const name = baseName(p.label)
-    byCmd.set(cmd, { cmd, kind: 'script', name, label: friendlyLabel(name), score: 0 })
-  }
-  // History (this project first, then global) fills in / boosts the score. A command
-  // that is BOTH a declared script and frequently run keeps its script label but gains
-  // the run score, so it ranks above never-run scripts.
-  for (const h of [...thisProject, ...global]) {
-    const cmd = norm(h.cmd)
-    if (!cmd || faved.has(cmd)) continue
-    const existing = byCmd.get(cmd)
-    if (existing) {
-      existing.score = Math.max(existing.score, h.score || 0)
-    } else {
-      byCmd.set(cmd, { cmd, kind: 'recent', name: '', label: cmd, score: h.score || 0 })
-    }
+    byCmd.set(cmd, { cmd, kind: 'script', name, label: friendlyLabel(name) })
   }
   return [...byCmd.values()]
 }
 
 // Deterministic ordering — the baseline result AND the backfill for the model's picks.
-// Interleaves the project's priority entrypoints with the most-run commands so the top
-// of the list is a useful spread, then fills with the rest.
+// Put the project's familiar entrypoints first, then preserve declaration order.
 export function baselineOrder(candidates) {
   const scripts = PRIORITY.map((p) =>
     candidates.find((c) => c.kind === 'script' && c.name === p)
   ).filter(Boolean)
-  const recents = candidates.filter((c) => c.kind === 'recent').sort((a, b) => b.score - a.score)
   const otherScripts = candidates.filter((c) => c.kind === 'script' && !PRIORITY.includes(c.name))
-  const out = []
-  const push = (c) => {
-    if (c && !out.some((o) => o.cmd === c.cmd)) out.push(c)
-  }
-  let i = 0
-  let j = 0
-  while (out.length < MAX_SUGGESTIONS && (i < scripts.length || j < recents.length)) {
-    if (i < scripts.length) push(scripts[i++])
-    if (out.length >= MAX_SUGGESTIONS) break
-    if (j < recents.length) push(recents[j++])
-  }
-  for (const c of otherScripts) {
-    if (out.length >= MAX_SUGGESTIONS) break
-    push(c)
-  }
-  for (const c of recents.slice(j)) {
-    if (out.length >= MAX_SUGGESTIONS) break
-    push(c)
-  }
-  return out
+  return [...scripts, ...otherScripts].slice(0, MAX_SUGGESTIONS)
 }
 
 const toOut = (c) => ({ cmd: c.cmd, label: c.label })
@@ -174,10 +136,7 @@ export function planSuggestions(candidates) {
 
 export function buildUserText(projectName, candidateOrder) {
   const name = projectName || 'this folder'
-  const lines = candidateOrder.map((c) => {
-    const tag = c.kind === 'script' ? 'script' : 'you run this'
-    return `- ${c.cmd}  [${tag}]`
-  })
+  const lines = candidateOrder.map((c) => `- ${c.cmd}  [script]`)
   return `project: ${name}\n\nCANDIDATE COMMANDS:\n${lines.join('\n')}`
 }
 

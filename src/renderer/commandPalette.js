@@ -1,101 +1,15 @@
 import './commandPalette.css'
 import { icon } from './icons.js'
 
-// Command palette (⌘K). At rest it is deliberately tiny: show only the commands
-// the user chose as Favorites. The larger catalog (model suggestions, declared
-// project scripts and command history) is retrieval material, not a dashboard, so
-// it appears only after the user starts searching. With no favorites yet, a small
-// starter set teaches the interaction without dumping the whole catalog onscreen.
-// Search results stay de-duped top-down: Favorites → Suggested → Project → this
-// project's history → global history.
+// Command palette (⌘K). At rest it shows only explicit Favorites. Searching adds
+// model suggestions grounded in declarative project scripts; terminal input and
+// command history are never data sources.
 // Anything you type that isn't in the list becomes a row of its own, so a novel
 // command is one Save-click (or ⌥↵) away from being a pinned favorite.
-// (COMMANDS below is now only the seed for the always-visible starter chip strip.)
 // Picking a command TYPES it onto the active prompt but does NOT run it — the user
 // reads it and presses Enter themselves, so the terminal stays a dumb display and
 // we never fight the shell's byte stream. ⌘↵ (or ⌘-click) is the deliberate
 // exception: type AND run in one stroke.
-const COMMANDS = [
-  {
-    group: 'Agents',
-    items: [
-      { cmd: 'claude', label: 'Run Claude Code', icon: 'wand' },
-      { cmd: 'claude -c', label: 'Continue your last Claude session', icon: 'wand' },
-      { cmd: 'codex --no-alt-screen', label: 'Run Codex', icon: 'code' },
-      {
-        cmd: 'ssh ',
-        label: 'SSH into a machine',
-        hint: 'type user@host after it',
-        icon: 'globe'
-      }
-    ]
-  },
-  {
-    group: 'Files & folders',
-    items: [
-      { cmd: 'ls', label: 'See what files are here', icon: 'files' },
-      { cmd: 'ls -la', label: 'See everything, including hidden files', icon: 'files' },
-      { cmd: 'pwd', label: 'Show which folder I am in', icon: 'folderOpen' },
-      {
-        cmd: 'cd ',
-        label: 'Go into a folder',
-        hint: 'type the folder name after it',
-        icon: 'folderOpen'
-      },
-      { cmd: 'cd ..', label: 'Go up one folder', icon: 'folderOpen' },
-      {
-        cmd: 'mkdir ',
-        label: 'Make a new folder',
-        hint: 'type the folder name after it',
-        icon: 'folderPlus'
-      }
-    ]
-  },
-  {
-    group: 'Project',
-    items: [
-      { cmd: 'npm install', label: 'Install the project’s dependencies', icon: 'box' },
-      { cmd: 'npm run dev', label: 'Start the app in development', icon: 'terminal' },
-      { cmd: 'npm test', label: 'Run the tests', icon: 'check' }
-    ]
-  },
-  {
-    group: 'Git',
-    items: [
-      { cmd: 'git status', label: 'See what has changed', icon: 'gitBranch' },
-      { cmd: 'git add -A', label: 'Stage all my changes', icon: 'plus' },
-      {
-        cmd: 'git commit -m ""',
-        label: 'Save my changes with a message',
-        hint: 'type the message inside the quotes',
-        icon: 'check'
-      },
-      { cmd: 'git log --oneline', label: 'See recent history', icon: 'gitBranch' }
-    ]
-  },
-  {
-    group: 'Housekeeping',
-    items: [{ cmd: 'clear', label: 'Tidy up the screen', icon: 'collapse' }]
-  }
-]
-
-// Flat list for the chip strip below the terminal (each entry remembers its group).
-const FLAT = COMMANDS.flatMap((g) => g.items.map((it) => ({ ...it, group: g.group })))
-
-// A short, friendly starter set shown in the always-visible strip under the
-// terminal (dismissible via its ✕ chip). Chips lead with a concise plain-English
-// label; the real command is the tooltip. The full set lives behind ⌘K ("More…").
-const STARTERS = [
-  { cmd: 'claude', short: 'Run Claude' },
-  { cmd: 'ls', short: 'See files' },
-  { cmd: 'git status', short: 'Check status' },
-  { cmd: 'npm run dev', short: 'Start the app' },
-  { cmd: 'clear', short: 'Tidy screen' }
-]
-
-// Once dismissed, the starter strip stays gone (per machine, like coach marks).
-const STRIP_DISMISS_KEY = 'concourse.strip.dismissed'
-
 export function createCommandPalette({
   typeInto,
   listCommands,
@@ -111,7 +25,7 @@ export function createCommandPalette({
     <div class="cmd-card" role="dialog" aria-modal="true" aria-label="Command palette">
       <div class="cmd-head">
         <span class="cmd-head-icon">${icon('wand', 16)}</span>
-        <input class="cmd-search" type="text" placeholder="Search commands, scripts & history…" spellcheck="false" />
+        <input class="cmd-search" type="text" placeholder="Search favorites & project commands…" spellcheck="false" />
       </div>
       <div class="cmd-list" role="listbox"></div>
       <div class="cmd-foot">
@@ -202,26 +116,14 @@ export function createCommandPalette({
     )
 
     // No query means "give me the commands I deliberately kept", not "show me
-    // everything Concourse knows". This is the fast repeat-command path: ⌘K then
-    // Enter acts on the first favorite without the project catalog pushing it into
-    // a wall of unrelated rows. A brand-new user with no favorites gets only the
-    // compact starter set; typing still searches every source below.
+    // everything Concourse knows". This is the fast repeat-command path.
     if (!q) {
-      if (!dynamic.favorites.length) {
-        appendGroup(
-          'Start here',
-          STARTERS.map((starter) => FLAT.find((it) => it.cmd === starter.cmd))
-            .filter(Boolean)
-            .map((it) => ({ ...it })),
-          favById
-        )
-      }
       setActive(0)
       return
     }
 
     // 2) Suggested — up to 5 quick commands the Pulse model curates from THIS
-    // project's declared scripts + your real history (see command-suggest.js).
+    // project's declared scripts (see command-suggest.js).
     // Grounded, so it only ever names commands that actually exist. Sits right
     // under your ♥ favorites and de-dupes out of every group below.
     appendGroup(
@@ -245,28 +147,7 @@ export function createCommandPalette({
     )
     for (const p of dynamic.project) shown.add(p.cmd)
 
-    // 4) This Project — commands you've actually entered here, frecency-ranked,
-    // de-duped against favorites, Suggested and the Project group.
-    appendGroup(
-      'This Project',
-      dynamic.thisProject
-        .filter((h) => !favById.has(h.cmd) && !shown.has(h.cmd) && match(h.cmd, h.cmd))
-        .map((h) => ({ cmd: h.cmd, label: h.cmd, icon: 'terminal' })),
-      favById
-    )
-
-    // 5) Global — commands entered across all projects, de-duped against every
-    // group above so each command shows exactly once.
-    for (const h of dynamic.thisProject) shown.add(h.cmd)
-    appendGroup(
-      'Global',
-      dynamic.global
-        .filter((h) => !favById.has(h.cmd) && !shown.has(h.cmd) && match(h.cmd, h.cmd))
-        .map((h) => ({ cmd: h.cmd, label: h.cmd, icon: 'globe' })),
-      favById
-    )
-
-    // 6) Whatever you typed, as a row of its own — the "just let me save my
+    // Whatever you typed, as a row of its own — the "just let me save my
     // command" path. Shown whenever the query isn't already a listed command:
     // ↵ types it, ⌘↵ runs it, and the row's explicit Save button (or ⌥↵) pins
     // it as a favorite. `save: true` swaps this row's faint ♡ for a labelled
@@ -293,7 +174,7 @@ export function createCommandPalette({
     if (!rows.length) {
       const empty = document.createElement('div')
       empty.className = 'cmd-empty'
-      empty.textContent = 'No commands yet — run a few and they’ll show up here'
+      empty.textContent = 'No matching favorites or project commands'
       list.appendChild(empty)
     }
     setActive(0)
@@ -449,60 +330,7 @@ export function createCommandPalette({
     if (e.target === overlay) close()
   })
 
-  // ---- Always-visible chip strip ---------------------------------------------
-  // The same curated commands, surfaced as clickable chips under the terminal so a
-  // newcomer sees suggestions immediately without opening anything. Clicking a chip
-  // types it onto the prompt (no run); the trailing "More…" chip opens the palette.
-  // Once you know your way around, the ✕ chip hides the strip for good (persisted);
-  // everything on it stays reachable through ⌘K.
-  function mountStrip(el) {
-    if (!el) return
-    let dismissed = false
-    try {
-      dismissed = localStorage.getItem(STRIP_DISMISS_KEY) === '1'
-    } catch {
-      /* localStorage unavailable — show the strip */
-    }
-    if (dismissed) {
-      el.hidden = true
-      return
-    }
-    el.innerHTML = ''
-    for (const starter of STARTERS) {
-      const it = FLAT.find((f) => f.cmd === starter.cmd)
-      if (!it) continue
-      const chip = document.createElement('button')
-      chip.className = 'cmd-chip'
-      chip.type = 'button'
-      chip.title = `${it.label} — runs: ${it.cmd.trim()}`
-      chip.innerHTML = `<span class="cmd-chip-icon">${icon(it.icon || 'terminal', 13)}</span><span>${escapeHtml(starter.short)}</span>`
-      chip.addEventListener('click', () => choose(it))
-      el.appendChild(chip)
-    }
-    const more = document.createElement('button')
-    more.className = 'cmd-chip cmd-chip-more'
-    more.type = 'button'
-    more.title = 'Browse all commands (⌘K)'
-    more.innerHTML = `<span class="cmd-chip-icon">${icon('wand', 13)}</span><span>More…</span>`
-    more.addEventListener('click', open)
-    el.appendChild(more)
-    const dismiss = document.createElement('button')
-    dismiss.className = 'cmd-chip cmd-chip-dismiss'
-    dismiss.type = 'button'
-    dismiss.title = 'Hide these starter chips (everything stays in ⌘K)'
-    dismiss.textContent = '✕'
-    dismiss.addEventListener('click', () => {
-      try {
-        localStorage.setItem(STRIP_DISMISS_KEY, '1')
-      } catch {
-        /* can't persist — still hide for this session */
-      }
-      el.hidden = true
-    })
-    el.appendChild(dismiss)
-  }
-
-  return { open, close, toggle, refresh, mountStrip, isOpen: () => !overlay.hidden }
+  return { open, close, toggle, refresh, isOpen: () => !overlay.hidden }
 }
 
 function escapeHtml(s) {

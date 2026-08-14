@@ -216,19 +216,16 @@ document.addEventListener('visibilitychange', () => {
 })
 
 // Command palette (⌘K): TYPES a command onto the active prompt (the user presses
-// Enter; ⌘↵ runs it immediately). Empty shows only ♥ favorites; typing searches the
-// model-curated suggestions, project commands and frecency-ranked shell history from
-// the main process.
+// Enter; ⌘↵ runs it immediately). It uses explicit favorites and declarative project
+// commands; terminal input/history is never a palette or header data source.
 const palette = createCommandPalette({
   typeInto: (cmd, opts) => terminals.typeIntoActive(cmd, opts),
-  // The palette's dynamic sources (♥ favorites · Suggested · project commands ·
-  // frecency history) and the ♥ toggle, all backed by the main process (api.commands).
+  // The palette's explicit/declarative sources and ♥ toggle, backed by main.
   listCommands: () => api.commands.list(),
   suggest: () => api.commands.suggest(),
   favorite: (cmd, label, opts) => api.commands.favorite(cmd, label, opts),
   unfavorite: (id) => api.commands.unfavorite(id)
 })
-palette.mountStrip(document.getElementById('cmd-strip'))
 // Favorites can change in another window (or via the heart here) — re-render live.
 api.commands.onChanged(() => palette.refresh())
 
@@ -429,26 +426,6 @@ function applyTabStatus(next, { persist = true } = {}) {
 }
 applyTabStatus(tabStatus, { persist: false })
 
-// ---------- Rail card preview lines (master-stack / master-deck, persisted) ----------
-// How many lines of summary each Pulse rail card shows beneath its title. Exposed as a
-// CSS var (--card-sum-lines on <html>) the .card-sum clamp reads, so the switch is pure
-// CSS. Like tabStatus: localStorage is boot-authoritative (no flash) and the value is
-// echoed into the central store so the Settings window stays in sync.
-const CARD_LINES_KEY = 'concourse-card-lines'
-let cardLines = clampCardLines(localStorage.getItem(CARD_LINES_KEY))
-function clampCardLines(v) {
-  const n = Math.round(parseFloat(v))
-  return Number.isFinite(n) ? Math.max(1, Math.min(6, n)) : 3
-}
-function applyCardLines(next, { persist = true } = {}) {
-  cardLines = clampCardLines(next)
-  document.documentElement.style.setProperty('--card-sum-lines', String(cardLines))
-  localStorage.setItem(CARD_LINES_KEY, String(cardLines))
-  if (persist)
-    Promise.resolve(api.settings?.set?.('appearance.cardSummaryLines', cardLines)).catch(() => {})
-}
-applyCardLines(cardLines, { persist: false })
-
 // ---------- Terminal header palette (identity colours, persisted) ----------
 // Which palette the terminal identity headers use (appearance.headerTheme) and the
 // raw input for the 'custom' palette (appearance.customHeaderColors). Changed only
@@ -505,11 +482,6 @@ function applyAppearanceSettings(v, { skipTheme = false } = {}) {
     applyTheme(v['appearance.theme'])
   if (v['appearance.tabStatus'] && v['appearance.tabStatus'] !== tabStatus)
     applyTabStatus(v['appearance.tabStatus'])
-  if (
-    v['appearance.cardSummaryLines'] != null &&
-    clampCardLines(v['appearance.cardSummaryLines']) !== cardLines
-  )
-    applyCardLines(v['appearance.cardSummaryLines'])
   // Default terminal layout is a "next time you open a workspace" preference, not a
   // live switch — cache it so terminals.js reads it (flash-free) at the next boot /
   // workspace open. The current workspace keeps its layout; the layout buttons remain

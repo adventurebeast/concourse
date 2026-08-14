@@ -55,14 +55,14 @@ All four are pure geometry. None are driven by attention, urgency, or meaning.
 - `attention`: the program rang the bell (OSC bell) → it wants you. Strongest existing
   "needs you" signal; surfaced only as a small colored dot.
 - a stable identity **color** per terminal (8-color cycle)
-- an auto-title: live OSC title › heuristic (last command + git branch) › base name
-- git branch per session (cached); 10k lines of scrollback per pane
+- a stable base/manual/allowlisted-agent title; terminal text is not title metadata
+- cwd per session for restoration; 10k lines of xterm scrollback per pane
 
 ### New signals we may build (flagged per concept)
 - **Cadence / silence watchdog** — derived free from `onData` timestamps.
 - **State classification** — `WORKING / BLOCKED-WAITING / DONE / ERROR / IDLE`.
-- **Buffer summary** — cheap LLM/heuristic summary of recent buffer (needed because
-  Claude Code's native title is a static "claude").
+- **Explicit task metadata** — a future opt-in agent protocol could supply a structured,
+  non-terminal task name; raw terminal buffers remain excluded.
 - **"What changed since I last looked"** diff/digest per pane.
 
 ---

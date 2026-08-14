@@ -20,15 +20,15 @@ Run Claude Code, Codex, and every other terminal-native agent side by side — w
 
 Concourse is the simplest way to run a whole fleet of AI coding agents at once. Keep your terminals organized, switch between them in a keystroke, and keep track of what they're all doing — without drowning in scrollback.
 
-Run as many agents as you like, lay them out so you can see them all, and let **Pulse** tell you in plain language what each one is doing — so you know at a glance which one needs you and which are fine on their own.
+Run as many agents as you like, lay them out so you can see them all, and let **Pulse** show which panes are working, idle, or awaiting you.
 
 It's a full IDE — explorer, editor, git, search — but **terminal-first, not editor-first**. The AI agents do the coding now, so the terminals where they work are the main view; the code editor is there for when you want to read or tweak what they wrote, not the center of gravity.
 
 It's agent-agnostic by design. Anything you can run in a shell — `claude`, `codex`, an SSH session, a long build — is a first-class pane.
 
-And it's built to be **ultrafast, lightweight, and easy on your system**: a vanilla-JS renderer with no UI framework, only a handful of runtime dependencies, and a footprint-capped local Pulse model — so the workbench stays snappy and leaves your machine's resources for the agents you're actually running.
+And it's built to be **ultrafast, lightweight, and easy on your system**: a vanilla-JS renderer with no UI framework and only a handful of runtime dependencies, so the workbench stays snappy and leaves your machine's resources for the agents you're actually running.
 
-> **Two ways to work, one app.** Concourse ships with **Beginner** and **Expert** modes. Beginners get a calm, friendly surface with plain-language labels and a clean prompt. Experts get conventional shell naming and their own untouched environment. Switch anytime.
+> **Terminal privacy boundary.** Concourse forwards keystrokes to the PTY but never uses terminal input, output, shell history, OSC titles, or generated summaries as tab metadata. Headers come only from stable pane names, explicit renames, and allowlisted agent launchers.
 
 ## Install (developer beta)
 
@@ -99,22 +99,17 @@ Cycle layouts with `⌘⇧L`. Jump to any pane with `⌘1`–`⌘9`, cycle with 
 
 </div>
 
-### Pulse — know what every agent is doing
+### Pulse — know which agent needs you
 
-Watching ten scrollbacks is impossible. Pulse does it for you, in two layers:
+Watching ten scrollbacks is impossible. Pulse uses only local, deterministic signals:
 
-- **Layer A (free, instant):** a deterministic activity model running in the renderer. Status dots tell you at a glance — **working**, **quiet**, **blocked** (awaiting input, pulsing orange), **done** (green), **error** (red), **idle**. Zero cost, no network.
-- **Layer B (optional, model-powered):** when a pane goes quiet, Concourse summarizes its last screen into a one-line, human-readable label — *"adding token refresh to the login flow"* or *"indexing the repository, about 40% done"*. Configure it in **Settings** (`⌘,`) — no env vars required — or through the environment for headless use:
-  - **Local (zero-config, default)** — Pulse runs entirely on your machine: free, offline, no key. If you have **Ollama** installed it's used directly; otherwise the app falls back to a small **bundled llama.cpp server** and fetches a tiny model (`qwen2.5:0.5b`, ~400 MB) on first use. You don't run `ollama serve` or paste a URL — Concourse starts the server itself, so it works even for a double-clicked app that never sees your shell's exported env. The footprint is deliberately capped (2K context, short keep-alive) so Pulse sips resources instead of cooking the machine.
-  - **Local on a custom endpoint** — point Pulse at any OpenAI-compatible server (a different port, LM Studio, llama.cpp, a remote box) in Settings or with `CONCOURSE_PULSE_BASE_URL`. This wins over auto-detect.
-  - **Anthropic** — add an `ANTHROPIC_API_KEY` (in Settings or the env); default model `claude-haiku-4-5`. Used only when no local server is reachable.
-  - **None available?** Layer A still runs. Pulse never blocks, never crashes the app, and the API key never touches the renderer.
+- **Working:** visible terminal activity continues after the user's prompt echo.
+- **Awaiting you:** a settled screen ends in a high-confidence input prompt, or an alternate-screen TUI has gone quiet.
+- **Idle:** the pane has settled without an explicit request for input.
 
-Override the model in Settings or with `CONCOURSE_PULSE_MODEL`; turn Pulse off entirely in Settings.
+This preserves the useful attention signal without turning terminal content into labels or sending it to a model. Tabs use stable names (`Tab 1`, `Claude`, `Codex`, etc.); double-click a tab when you want an explicit custom name.
 
-### Beginner and Expert modes
-
-The same app meets you where you are. Beginner mode injects a calm prompt (`folder ❯`), uses friendly tab names, keeps the surface uncluttered, and turns `⌘T` into an agent launcher (Claude Code / Codex / plain shell). Expert mode leaves your shell, prompt, and environment exactly as you've configured them, uses conventional naming, and opens a bare shell on `⌘T`. The mode is a foundation that more of the UI will branch on over time.
+An optional model can curate the command palette from commands declared in `package.json`, Justfiles, and Makefiles. Those candidates are allowlisted before and after the model call; terminal text and command history are never inputs.
 
 ### The IDE around it
 
@@ -124,10 +119,10 @@ Concourse is a full workbench, not just a terminal grid:
 - **Source Control** — VS Code-style git: branch and ahead/behind in the status bar, staged / changed groups, stage · unstage · discard, a commit box (`⌘Enter`), and click-to-open inline diffs.
 - **Editor** — Monaco with multi-file tabs, dirty indicators, `⌘S` to save, broad syntax highlighting, and read-only git diff tabs.
 - **Search** — fast workspace-wide search with case / whole-word / regex toggles; click a result to jump to the exact line.
-- **Command palette (`⌘K`)** — a type-to-run launcher: your ♥ favorites, the open project's npm / just / make scripts, and your most-used shell commands (frecency-ranked). It types the command onto the active prompt for you to run — and in Beginner mode adds a plain-language cheatsheet.
-- **Settings (`⌘,`)** — choose your Pulse provider and model and manage the local model, all in-app without touching env vars.
+- **Command palette (`⌘K`)** — a type-to-run launcher for explicit favorites and the open project's npm / just / make commands. It types the command onto the active prompt for you to run.
+- **Settings (`⌘,`)** — configure terminals, layouts, appearance, and optional AI command curation.
 - **Welcome & Recents** — reopen recent projects in a click; the last workspace and its layout restore automatically on launch.
-- **Session restore** — tab labels, layout, open editor tabs, and panel sizes come back per workspace. (Live process state intentionally does not — agents are relaunched fresh.)
+- **Session restore** — explicit tab labels, layout, cwd, open editor tabs, and panel sizes come back per workspace. (Live process state intentionally does not — agents are relaunched fresh.)
 
 ## Commands & shortcuts
 
@@ -142,14 +137,14 @@ Everything is a keystroke away — drive the whole fleet without reaching for th
 | `⌘1`–`⌘9` | Jump straight to pane 1–9 |
 | `⌘⇧←` / `⌘⇧→` | Previous / next pane (also `⌘[` / `⌘]`) |
 | `⌘;` / `⌘'` | Move the active pane left / right in the rail |
-| `⌘T` | New terminal (agent launcher in Beginner mode) |
+| `⌘T` | New terminal |
 | `⌘W` | Close the active pane |
 
 **Workbench**
 
 | Shortcut | Action |
 | --- | --- |
-| `⌘K` | Command palette — favorites, project scripts, frequent commands |
+| `⌘K` | Command palette — favorites and project scripts |
 | `⌘B` | Toggle the sidebar |
 | `⌘J` | Toggle the bottom panel |
 | `⌘⇧F` | Jump to Search |
@@ -160,7 +155,7 @@ Everything is a keystroke away — drive the whole fleet without reaching for th
 | `⌘Enter` | Commit (Source Control) |
 | `⌘F` | Find (editor) |
 
-The **command palette** (`⌘K`) goes further than hotkeys: start typing and it surfaces your ♥ favorites, the open project's npm / just / make scripts, and your most-used shell commands ranked by how often you actually run them. Pick one and it types the command onto the active prompt — you press Enter — so the terminal stays a plain display and Concourse never fights the shell. In Beginner mode it also offers a plain-language cheatsheet of everyday commands.
+The **command palette** (`⌘K`) surfaces your explicit favorites and commands declared by the open project's npm / just / make configuration. Pick one and it types the command onto the active prompt — you press Enter — so the terminal remains a plain display. Novel commands appear only while you type them and are retained only if you explicitly save them as a favorite.
 
 ## Architecture
 
@@ -177,8 +172,8 @@ src/
     ipc-git.js          simple-git status / diff / stage / commit
     ipc-search.js       workspace-wide search (worker-backed)
     ipc-pty.js          node-pty terminals
-    ipc-pulse.js        per-pane state + model-powered summaries
-    ipc-commands.js     command-palette sources (favorites / scripts / history)
+    ipc-pulse.js        optional provider for grounded command suggestions
+    ipc-commands.js     command-palette sources (favorites / declared scripts)
     ipc-settings.js     Settings store + window
     ipc-session.js      per-workspace session persistence
     local-llm.js        local model runtime (Ollama / bundled llama.cpp)
@@ -194,7 +189,6 @@ src/
     commandPalette.js   ⌘K command launcher
     settings.js         Settings window UI
     localLlmSetup.js    first-run local-model setup
-    beginnerHud.js      Beginner-mode coach / legend
     welcome.js          welcome / recents screen
     *.css               one stylesheet per module
 ```
@@ -203,8 +197,7 @@ Built on Electron + Monaco + xterm.js + node-pty — the same core tech as VS Co
 
 ## Roadmap
 
-- **Curated agent presets** — Beginner mode's `⌘T` already launches Claude Code / Codex / a shell; bring that picker to Expert mode with saved presets and per-project defaults.
-- **Deeper mode differences** — more of the UI gated on Beginner vs Expert.
+- **Curated agent presets** — saved presets and per-project defaults without exposing terminal input.
 - **Richer git** — branch switching, push / pull, stash.
 - **Fleet arrangements** — purpose-built layouts for 10+ agents and a queue for pending work.
 

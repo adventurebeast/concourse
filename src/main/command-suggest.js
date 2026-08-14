@@ -1,6 +1,5 @@
 import path from 'path'
 import { getProjectCommands } from './command-sources.js'
-import { historyForRoot, globalHistory } from './command-history.js'
 import { favoritesForRoot } from './command-store.js'
 import { getPulseProvider } from './ipc-pulse.js'
 import {
@@ -13,22 +12,17 @@ import {
 } from './command-suggest-core.js'
 
 // The palette's "Suggested" group: up to 5 quick commands for the open project,
-// curated by the Pulse model from real signal (declared scripts + your history) and
+// curated by the Pulse model from declarative project scripts and
 // GROUNDED so the model can never surface an invented command (see command-suggest-
 // core.js for the pure logic + why this is safe even on the tiny local model). With
 // Pulse off/unreachable we return the deterministic baseline. This replaced the old
 // static cheatsheet (ls/cd/git status…), which ignored the project completely.
 
-// Pull the real command signal for `root` from the stores, minus anything already
+// Pull declarative command signal for `root`, minus anything already
 // favorited (the user pinned those; suggest COMPLEMENTS the ♥ list), into candidates.
 async function gatherCandidates(root) {
-  const [project, thisProject, global, favorites] = await Promise.all([
-    getProjectCommands(root),
-    historyForRoot(root),
-    globalHistory(),
-    favoritesForRoot(root)
-  ])
-  return buildCandidates({ project, thisProject, global, favorites })
+  const [project, favorites] = await Promise.all([getProjectCommands(root), favoritesForRoot(root)])
+  return buildCandidates({ project, favorites })
 }
 
 async function curate(root, candidates) {
@@ -44,10 +38,8 @@ async function curate(root, candidates) {
 
   let raw = null
   try {
-    // Leave numCtx at Pulse's default (2048) — the prompt fits easily, and matching the
-    // per-pane summary's context size avoids forcing Ollama to resize its KV cache (a
-    // reload) when it alternates between summaries and this occasional call. Only the
-    // output cap is bumped so the 5-item JSON never truncates.
+    // The declared-command prompt fits easily in the provider's small default context.
+    // Bump only the output cap so the five-item JSON never truncates.
     raw = await provider.chat({
       system: SYSTEM,
       user: buildUserText(root ? path.basename(root) : '', candidateOrder),
@@ -101,8 +93,7 @@ export async function suggestCommands(root) {
   return p
 }
 
-// Drop a root's cached suggestions so the next request recomputes — call when its
-// command history changes (a new command was run) so suggestions stay current.
+// Drop a root's cached suggestions so the next request recomputes.
 export function invalidateSuggestions(root) {
   if (root) cache.delete(root)
   else cache.clear()

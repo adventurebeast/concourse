@@ -1,5 +1,3 @@
-import { showToastOnce } from './toast.js'
-
 // Bottom status bar: a single glanceable strip that ties together the three
 // things you otherwise have to go hunting for — the git state of the workspace
 // (left), the live pulse of the whole terminal fleet (right), and the time.
@@ -11,7 +9,6 @@ export function createStatusBar({ onOpenScm } = {}) {
   const branchEl = document.getElementById('status-branch')
   const gitEl = document.getElementById('status-git')
   const fleetEl = document.getElementById('status-fleet')
-  const pulseEl = document.getElementById('status-pulse')
   const clockEl = document.getElementById('status-clock')
   const versionEl = document.getElementById('status-version')
 
@@ -109,7 +106,7 @@ export function createStatusBar({ onOpenScm } = {}) {
 
   // ---- Pulse legend (click the fleet count) -------------------------------
   // The fleet count is the one always-visible Pulse surface; clicking it explains
-  // what the dots, colours, and one-line labels mean — a canonical, pull-not-push
+  // what the dots, colours, and stable labels mean — a canonical, pull-not-push
   // reference the just-in-time coach marks point back to. Click-only; never auto-pops.
   let legendEl = null
   function closeLegend() {
@@ -137,7 +134,7 @@ export function createStatusBar({ onOpenScm } = {}) {
       '<div class="leg-row"><i class="fleet-dot awaiting"></i><span>Awaiting you — at a prompt, or parked at its turn</span></div>' +
       '<div class="leg-row"><i class="fleet-dot idle"></i><span>Idle — quiet, nothing pending</span></div>' +
       '<div class="leg-row"><span class="leg-swatch"></span><span>Each colour marks one agent — across every layout</span></div>' +
-      '<div class="leg-row"><span class="leg-chip">abc</span><span>Labels summarise what a pane is doing (needs a model backend)</span></div>'
+      '<div class="leg-row"><span class="leg-chip">abc</span><span>Stable labels identify panes without reading terminal text</span></div>'
     document.body.appendChild(legendEl)
     const r = fleetEl.getBoundingClientRect()
     const bar = document.getElementById('status-bar').getBoundingClientRect()
@@ -157,70 +154,6 @@ export function createStatusBar({ onOpenScm } = {}) {
   fleetEl.style.cursor = 'pointer'
   fleetEl.addEventListener('click', toggleLegend)
 
-  // ---- pulse (Layer B summariser) -----------------------------------------
-  // A quiet chip showing which model backend is turning quiet panes into
-  // one-line labels — provider + model when live, a dim hint when it's off.
-  // There's no push event for provider state, so we poll pulse:status (which
-  // re-resolves the backend on a short TTL, so a server started/stopped after
-  // launch shows up here within a poll or two — the visible proof of auto-detect).
-  // Fire the "unreachable" toast only on the live→down edge, once per outage, so
-  // the 10s poll can't spam it. Reset when Pulse recovers or is turned off.
-  let pulseDownNotified = false
-
-  function setPulse(s) {
-    if (!pulseEl) return
-    pulseEl.innerHTML = ''
-    const dot = document.createElement('i')
-    // No provider resolved → Layer B is off. Say so quietly, so a user who
-    // expected their local model can tell it isn't connected (vs. just silence).
-    if (!s || !s.enabled) {
-      pulseDownNotified = false
-      dot.className = 'pulse-dot off'
-      pulseEl.appendChild(dot)
-      pulseEl.appendChild(document.createTextNode('Pulse off'))
-      pulseEl.title =
-        'Pulse summaries off — no model backend. Run a local server (e.g. `ollama serve`) ' +
-        'or set ANTHROPIC_API_KEY to get one-line pane labels.'
-      return
-    }
-    const provider = s.provider || 'model'
-    const live = !!s.reachable
-    // A configured provider that just went unreachable: notify once + offer Settings.
-    if (!live && !pulseDownNotified) {
-      pulseDownNotified = true
-      // showToastOnce de-dupes identical messages across windows, so N windows
-      // hitting the same outage show one toast, not N copies.
-      showToastOnce(`Pulse can't reach ${provider} — using basic pane detection until it's back.`, {
-        kind: 'warn',
-        action: { label: 'Settings', onClick: () => window.api?.window?.openSettings?.() }
-      })
-    } else if (live) {
-      pulseDownNotified = false
-    }
-    dot.className = 'pulse-dot ' + (live ? 'on' : 'warn')
-    pulseEl.appendChild(dot)
-    // provider · model when reachable; provider · "offline" when configured but down.
-    const tail = s.model ? ' · ' + (live ? s.model : 'offline') : ''
-    pulseEl.appendChild(document.createTextNode(provider + tail))
-    pulseEl.title = live
-      ? `Pulse summaries · ${provider} · model ${s.model || '—'} · connected`
-      : `Pulse summaries · ${provider} · model ${s.model || '—'} · not reachable (is the server running?)`
-  }
-
-  async function refreshPulse() {
-    if (!window.api?.pulse?.status) return
-    // If the chip has been torn out of the DOM, there's nothing to paint — bail
-    // so the poll doesn't keep firing IPC against a dead view.
-    if (pulseEl && !pulseEl.isConnected) return
-    try {
-      setPulse(await window.api.pulse.status())
-    } catch {
-      // Leave the last-known chip rather than flickering to empty on a hiccup.
-    }
-  }
-  refreshPulse()
-  const pulseTimer = setInterval(refreshPulse, 10000)
-
   // ---- clock --------------------------------------------------------------
   function tick() {
     // Skip if the clock element is gone (view torn down) — avoid touching a
@@ -232,11 +165,8 @@ export function createStatusBar({ onOpenScm } = {}) {
   tick()
   const clockTimer = setInterval(tick, 15000)
 
-  // Teardown: cancel the poll/clock intervals so a disposed status bar doesn't
-  // keep firing. No caller needs this today — it just honours the contract and
-  // makes the timers cancellable.
+  // Teardown: cancel the clock interval so a disposed status bar leaves no timer.
   function dispose() {
-    clearInterval(pulseTimer)
     clearInterval(clockTimer)
   }
 

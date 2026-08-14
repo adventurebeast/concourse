@@ -1,73 +1,14 @@
 import path from 'path'
 import fs from 'fs/promises'
 
-// The data behind the command palette's "This project" group, plus the shared
-// noise filter and frecency weighting used to rank the per-project "Frequent"
-// list (see command-capture.js / command-history.js).
+// Declarative project commands for the command palette.
 //   • project command files (package.json scripts, justfile, Makefile) → named,
 //     per-project commands surfaced without retyping.
-//   • isNoise / recencyBoost → the de-noising and zoxide-style recency weighting
-//     applied to captured per-project command counts.
 // Everything here is best-effort and read-only: a missing/garbled file yields an
 // empty list, never an error that could break the palette.
 
 // Cap project commands so a repo with hundreds of npm scripts can't flood the list.
 const PROJECT_LIMIT = 60
-
-// Bare navigation / screen-tidying commands that are noise in a "frequent
-// commands" list — you don't need a launcher for `ls`. Only EXACT matches are
-// dropped, so `cd /some/project` (a real, reusable command) is kept.
-const NOISE = new Set([
-  'ls',
-  'ls -a',
-  'ls -l',
-  'ls -la',
-  'ls -al',
-  'll',
-  'la',
-  'cd',
-  'cd ..',
-  'cd -',
-  'cd ~',
-  'pwd',
-  'clear',
-  'exit',
-  'fg',
-  'bg',
-  'jobs',
-  'history',
-  'reset'
-])
-
-// Concourse itself types `cd '<dir>' && clear` into a fresh pane when a folder
-// opens (cdInto() in terminals.js). The shell hook captures it like any command,
-// but the user never wrote it and it's long, pane-setup noise — never a "frequent
-// command" worth relaunching. Match the whole line so a real `cd x && npm test`
-// is untouched; allow `;` as well as `&&` and trailing whitespace.
-const AUTO_CD_CLEAR = /^cd\b.*(&&|;)\s*clear\s*$/
-
-// Anything shorter than 2 chars (single-letter aliases, `z`, etc.) is dropped by
-// the length guard, so the set only needs multi-char noise.
-export function isNoise(cmd) {
-  if (cmd.length < 2) return true
-  return NOISE.has(cmd) || AUTO_CD_CLEAR.test(cmd)
-}
-
-// zoxide-style frecency: a command's weight is its raw count scaled by how
-// recently it was last used, so something run 50× last month ranks below
-// something run 10× today. A zero/missing timestamp gets a neutral boost, so
-// ranking degrades to pure frequency.
-export function recencyBoost(ts, now) {
-  if (!ts) return 1
-  const age = now - ts
-  const HOUR = 3600e3
-  const DAY = 24 * HOUR
-  const WEEK = 7 * DAY
-  if (age < HOUR) return 4
-  if (age < DAY) return 2
-  if (age < WEEK) return 1
-  return 0.4
-}
 
 // --- project command files -------------------------------------------------
 

@@ -5,8 +5,7 @@ import path from 'path'
 import crypto from 'crypto'
 import pty from 'node-pty'
 import { confine } from './paths.js'
-import { extractCommands } from './command-capture.js'
-import { recordCommand } from './command-history.js'
+import { extractCwds } from './terminal-metadata.js'
 import { getRaw } from './settings.js'
 
 // Private, per-app directory for the generated shell rc/init files. We write them
@@ -136,46 +135,26 @@ function shq(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'"
 }
 
-// Shell-integration capture: emit each command the user runs as an invisible OSC
-// marker (ESC ] 5151 ; base64(cmd) BEL) on the terminal's output stream, which
-// the main process reads back to build the palette's per-project "This Project"
-// and cross-project "Global" lists (see command-capture.js / command-history.js).
-// Because the hook fires only for real
-// shell commands, anything typed into a foreground program — Claude, vim, a REPL —
-// is that program's stdin, never a shell command, so it is never captured. The
-// command is base64'd so its body can't corrupt or split the marker.
-//
-// zsh: a preexec hook gets the command line as $1, before it runs. A precmd
-// twin reports the cwd at each prompt (OSC 5152) so a restored session can
-// reopen each pane where it was (fleet resurrection).
-const ZSH_CAPTURE =
-  "_concourse_capture() { printf '\\033]5151;%s\\007' \"$(printf '%s' \"$1\" | base64 | tr -d '\\n')\" }\n" +
+// Shell integration reports only cwd at each prompt (OSC 5152) so restored panes
+// reopen in place. It deliberately has no preexec/history hook and never observes
+// or serializes command text, arguments, passwords, or foreground-program input.
+const ZSH_INTEGRATION =
   "_concourse_cwd() { printf '\\033]5152;%s\\007' \"$(printf '%s' \"$PWD\" | base64 | tr -d '\\n')\" }\n" +
-  'autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook preexec _concourse_capture 2>/dev/null || preexec_functions=(_concourse_capture $preexec_functions)\n' +
   'autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _concourse_cwd 2>/dev/null || precmd_functions=(_concourse_cwd $precmd_functions)\n'
-// PowerShell (both Windows PowerShell and pwsh 7): like bash there's no preexec,
-// so wrap the prompt function — it runs right before each new prompt — and read
-// the just-finished command off Get-History. The previous prompt function is
-// preserved and called through, so a custom prompt (starship, oh-my-posh, a
+// PowerShell wraps the prompt function only to report cwd. The previous prompt
+// function is preserved and called through, so a custom prompt (starship, oh-my-posh, a
 // $PROFILE prompt) survives; the calm friendly prompt only ever replaces
 // PowerShell's stock "PS C:\path>" (recognised by its $nestedPromptLevel body).
-// try/catch around capture: a marker failure must never break the prompt. The
+// try/catch around metadata: a marker failure must never break the prompt. The
 // file gets a UTF-8 BOM so Windows PowerShell 5.1 reads the ❯ correctly.
 function psInit(friendly) {
   return (
     '﻿' + // UTF-8 BOM — see comment above
     '$global:__ConcoursePrev = $function:prompt\n' +
-    '$global:__ConcourseLast = -1\n' +
     `$global:__ConcourseFriendly = ${friendly ? '$true' : '$false'} -and ` +
     "($global:__ConcoursePrev.ToString() -match 'nestedPromptLevel')\n" +
     'function global:prompt {\n' +
     '  try {\n' +
-    '    $h = Get-History -Count 1\n' +
-    '    if ($h -and $h.Id -ne $global:__ConcourseLast) {\n' +
-    '      $global:__ConcourseLast = $h.Id\n' +
-    '      $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($h.CommandLine))\n' +
-    '      [Console]::Write("$([char]27)]5151;$b64$([char]7)")\n' +
-    '    }\n' +
     '    $cwd64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path))\n' +
     '    [Console]::Write("$([char]27)]5152;$cwd64$([char]7)")\n' +
     '  } catch {}\n' +
@@ -186,21 +165,15 @@ function psInit(friendly) {
   )
 }
 
-// bash has no preexec, so read the just-run command off history at each prompt;
-// a guard against the unchanged last entry avoids double-counting a bare Enter.
-// The same prompt hook also reports the cwd (OSC 5152) for fleet resurrection.
-const BASH_CAPTURE =
-  '_concourse_capture() {\n' +
-  '  local c\n' +
-  "  c=$(HISTTIMEFORMAT= history 1 2>/dev/null | sed 's/^ *[0-9][0-9]* *//')\n" +
-  '  if [ -n "$c" ] && [ "$c" != "$_concourse_last" ]; then _concourse_last="$c"; ' +
-  "printf '\\033]5151;%s\\007' \"$(printf '%s' \"$c\" | base64 | tr -d '\\n')\"; fi\n" +
+// Bash prompt hook reports cwd only; it never reads shell history.
+const BASH_INTEGRATION =
+  '_concourse_cwd() {\n' +
   "  printf '\\033]5152;%s\\007' \"$(printf '%s' \"$PWD\" | base64 | tr -d '\\n')\"\n" +
   '}\n' +
-  'PROMPT_COMMAND="_concourse_capture${PROMPT_COMMAND:+;$PROMPT_COMMAND}"\n'
+  'PROMPT_COMMAND="_concourse_cwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"\n'
 
-// Seed the shell's own init files with two things: the command-capture hook
-// (always) and — when `friendly` is true (the opt-in terminal.friendlyPrompt
+// Seed the shell's own init files with cwd metadata and — when `friendly` is true
+// (the opt-in terminal.friendlyPrompt
 // setting) — the calm `folder ❯` prompt.
 //
 // We used to inject ` PS1=… PROMPT=… && clear\r` as shell input once the PTY
@@ -208,11 +181,10 @@ const BASH_CAPTURE =
 // restore at once the shells stutter, the idle heuristic fires mid-startup, and
 // the bytes interleave — the setup line tears apart (`%1~`→`clear1~`, `clear`
 // never runs). Seeding an init file sets things up before the first prompt is
-// ever drawn, so there is nothing to race — and it's the only reliable spot to
-// install the capture hook without typing into the live shell.
+// ever drawn, so there is nothing to race.
 //
 // `friendly` is false when the user runs their own prompt (or asked for the raw
-// prompt): we then forward/source their real rc untouched and only add capture.
+// prompt): we then forward/source their real rc untouched and only add cwd metadata.
 //
 // Returns spawn overrides ({ args?, env? }) to merge in, or null to fall back to
 // a plain login shell if anything goes wrong.
@@ -244,13 +216,13 @@ async function shellInitSetup(shellPath, friendly) {
         ]
       }
     }
-    // cmd.exe has no prompt-hook mechanism — plain shell, no capture (same trade
+    // cmd.exe has no prompt-hook mechanism — plain shell, no cwd metadata (same trade
     // as fish/nushell below).
     if (/cmd(\.exe)?$/i.test(shellPath)) return null
 
     if (/zsh/.test(shellPath)) {
       // zsh reads its rc files from $ZDOTDIR (default $HOME). Point it at a
-      // private per-shell dir, forward each real rc file, add the capture hook
+      // private per-shell dir, forward each real rc file, add the cwd hook
       // and (optionally) set PROMPT after the user's .zshrc, then restore ZDOTDIR
       // so .zlogin and any child shells use the real one. randomUUID keeps the
       // path unpredictable.
@@ -265,7 +237,7 @@ async function shellInitSetup(shellPath, friendly) {
         path.join(zdir, '.zshrc'),
         fwd('.zshrc') +
           (friendly ? "PROMPT='%1~ ❯ '\n" : '') +
-          ZSH_CAPTURE +
+          ZSH_INTEGRATION +
           `export ZDOTDIR=${shq(realZ)}\n`,
         { mode: 0o600 }
       )
@@ -275,12 +247,12 @@ async function shellInitSetup(shellPath, friendly) {
     // Beyond here we generate a BASH rcfile. A custom/unknown shell (fish, nushell,
     // …) has its own rc and prompt syntax that a bash --rcfile would corrupt, so
     // bail to a plain login shell (caller keeps `-l`): no friendly prompt and no
-    // capture hook for those, which is the expected trade for "bring your own shell".
+    // cwd hook for those, which is the expected trade for "bring your own shell".
     if (!/bash/.test(shellPath)) return null
 
     // bash: a login shell ignores --rcfile, so spawn interactive non-login and
     // replicate login by sourcing /etc/profile + the user's profile + .bashrc,
-    // then add capture and (optionally) set PS1 last. With --rcfile, bash sources
+    // then add cwd metadata and (optionally) set PS1 last. With --rcfile, bash sources
     // ONLY this file.
     const rc = path.join(dir, `bash-${crypto.randomUUID()}.bashrc`)
     await fs.promises.writeFile(
@@ -291,7 +263,7 @@ async function shellInitSetup(shellPath, friendly) {
         `elif [ -f ${shq(path.join(home, '.profile'))} ]; then source ${shq(path.join(home, '.profile'))}; fi\n` +
         `[ -f ${shq(path.join(home, '.bashrc'))} ] && source ${shq(path.join(home, '.bashrc'))}\n` +
         (friendly ? "PS1='\\W ❯ '\n" : '') +
-        BASH_CAPTURE,
+        BASH_INTEGRATION,
       { mode: 0o600 }
     )
     return { args: ['--rcfile', rc, '-i'] }
@@ -367,8 +339,8 @@ export function registerPty(ctx) {
       if (key === 'INIT_CWD' || key.startsWith('npm_')) delete env[key]
     }
 
-    // Seed the shell's init files (see shellInitSetup): always installs the
-    // command-capture hook that feeds the per-project palette history. The prompt
+    // Seed the shell's init files (see shellInitSetup): installs cwd-only metadata.
+    // The prompt
     // is left EXACTLY as this machine has it by default — a terminal that looks
     // familiar out of the gate. The calm `folder ❯` prompt is opt-in
     // (terminal.friendlyPrompt) and even then only ever replaces a STOCK prompt
@@ -415,26 +387,15 @@ export function registerPty(ctx) {
 
     // Route output back to the window that created this shell. Guard against a
     // destroyed WebContents (the window closed while the PTY was still draining).
-    // En route, pull out any command-capture markers the shell hook emitted and
-    // record them against this window's project for the palette's Frequent list.
-    // The markers are invisible OSC sequences xterm.js ignores, so the data is
-    // forwarded unchanged; capture is best-effort and never blocks output.
+    // En route, pull out cwd metadata. The sequence is invisible to xterm and is
+    // forwarded unchanged; parsing is best-effort and never blocks output.
     let capBuf = ''
     let lastCwd = ''
     term.onData((data) => {
       if (!wc.isDestroyed()) wc.send('term:data', { id, data })
       try {
-        const { cmds, cwds, rest } = extractCommands(capBuf + data)
+        const { cwds, rest } = extractCwds(capBuf + data)
         capBuf = rest
-        if (cmds.length) {
-          const root = ctx.getRoot(wc)
-          for (const cmd of cmds) {
-            recordCommand(root, cmd)
-            // Per-pane echo: the renderer remembers each pane's last real shell
-            // command so a restored session can offer to bring its agent back.
-            if (!wc.isDestroyed()) wc.send('term:command', { id, cmd })
-          }
-        }
         // Latest cwd wins; forward only changes so a busy pane doesn't spam IPC.
         const cwd = cwds.length ? cwds[cwds.length - 1] : ''
         if (cwd && cwd !== lastCwd) {

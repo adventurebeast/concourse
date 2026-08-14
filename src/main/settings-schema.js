@@ -83,7 +83,8 @@ export const SETTINGS_GROUPS = [
       {
         key: 'appearance.defaultLayout',
         label: 'Default Layout',
-        description: 'Which terminal layout a newly opened workspace starts in. Existing workspaces keep their last-used layout.',
+        description:
+          'Which terminal layout a newly opened workspace starts in. Existing workspaces keep their last-used layout.',
         type: 'enum',
         default: 'tabs',
         options: [
@@ -106,21 +107,10 @@ export const SETTINGS_GROUPS = [
         ]
       },
       {
-        key: 'appearance.cardSummaryLines',
-        label: 'Rail Card Preview Lines',
-        description:
-          'How many lines of the summary preview each master-stack / master-deck rail card shows beneath its title before clipping.',
-        type: 'number',
-        default: 3,
-        min: 1,
-        max: 6,
-        step: 1,
-        unit: 'lines'
-      },
-      {
         key: 'appearance.headerTheme',
         label: 'Terminal Header Palette',
-        description: 'Colour palette for terminal identity headers. "Custom…" uses the colours below.',
+        description:
+          'Colour palette for terminal identity headers. "Custom…" uses the colours below.',
         type: 'enum',
         default: 'default',
         // Mirror of PALETTE_OPTIONS in src/renderer/term-palettes.js — this file
@@ -199,7 +189,7 @@ export const SETTINGS_GROUPS = [
         key: 'terminal.shell',
         label: 'Shell',
         description: IS_WIN
-          ? 'Which shell new terminals launch. Automatic uses Windows PowerShell (always present). PowerShell 7 (pwsh) is used when installed; Command Prompt runs without the per-project command history hook.'
+          ? 'Which shell new terminals launch. Automatic uses Windows PowerShell (always present). PowerShell 7 (pwsh) is used when installed; Command Prompt runs without cwd restoration metadata.'
           : 'Which shell new terminals launch. Automatic uses your login shell (recommended) — it works even when Concourse is opened from Finder/Dock, where the system hides $SHELL. Pick a named shell, or Custom… to run any other shell by path.',
         type: 'enum',
         default: 'auto',
@@ -222,7 +212,7 @@ export const SETTINGS_GROUPS = [
         key: 'terminal.shellPath',
         label: 'Custom Shell Path',
         description:
-          'Used only when Shell is “Custom…”. Full path to the shell binary. Concourse leaves a custom shell’s startup files untouched, so its prompt and PATH are whatever you’ve configured (the per-project command history hook is skipped). Invalid paths fall back to the default shell.',
+          'Used only when Shell is “Custom…”. Full path to the shell binary. Concourse leaves a custom shell’s startup files untouched, so its prompt and PATH are whatever you’ve configured (cwd restoration metadata may be unavailable). Invalid paths fall back to the default shell.',
         type: 'text',
         default: '',
         placeholder: IS_WIN ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/opt/homebrew/bin/fish'
@@ -286,12 +276,13 @@ export const SETTINGS_GROUPS = [
   },
   {
     id: 'ai',
-    label: 'AI · Pulse',
+    label: 'AI · Command Suggestions',
     settings: [
       {
         key: 'pulse.provider',
         label: 'Provider',
-        description: 'Who labels each pane (working / awaiting / done). Auto-detect prefers a local server, then Claude.',
+        description:
+          'Optional model for curating declared project commands. Terminal text is never sent.',
         type: 'enum',
         default: 'auto',
         options: [
@@ -304,7 +295,8 @@ export const SETTINGS_GROUPS = [
       {
         key: 'pulse.localAutostart',
         label: 'Auto-start Local Model',
-        description: 'Start a local model in the background automatically (Ollama or the built-in runtime).',
+        description:
+          'Start a local model in the background automatically (Ollama or the built-in runtime).',
         type: 'boolean',
         default: true
       },
@@ -319,7 +311,8 @@ export const SETTINGS_GROUPS = [
       {
         key: 'pulse.baseUrl',
         label: 'Local Base URL',
-        description: 'OpenAI-compatible endpoint for the Local provider (Ollama, LM Studio, llama.cpp …).',
+        description:
+          'OpenAI-compatible endpoint for the Local provider (Ollama, LM Studio, llama.cpp …).',
         type: 'text',
         default: '',
         placeholder: 'http://localhost:11434/v1'

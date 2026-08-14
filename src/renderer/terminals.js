@@ -12,8 +12,8 @@ import { colorsFor } from './term-palettes.js'
 import {
   automaticTerminalLabel,
   persistedCustomLabel,
-  safeAgentResumeCommand,
-  terminalCardSummary
+  safeAgentLabel,
+  safeAgentResumeCommand
 } from './terminal-context-policy.js'
 
 // The one-time coach mark that explains Pulse the first time a tab starts
@@ -26,8 +26,18 @@ const api = window.api
 
 // xterm color themes, switched together with the app light/dark theme.
 const TERM_THEMES = {
-  light: { background: '#ffffff', foreground: '#383838', cursor: '#383838', selectionBackground: '#cfe3ff' },
-  dark: { background: '#181818', foreground: '#cccccc', cursor: '#cccccc', selectionBackground: '#264f78' }
+  light: {
+    background: '#ffffff',
+    foreground: '#383838',
+    cursor: '#383838',
+    selectionBackground: '#cfe3ff'
+  },
+  dark: {
+    background: '#181818',
+    foreground: '#cccccc',
+    cursor: '#cccccc',
+    selectionBackground: '#264f78'
+  }
 }
 
 // Per-terminal identity colours come from the active palette (see term-palettes.js
@@ -96,7 +106,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function applyRailSize() {
     // Pin the saved size for the current axis (flex-basis is width in stack, height in
     // deck); with none saved, clear the inline flex so the CSS default wins.
-    const size = (layout === 'stack' || layout === 'deck') ? savedRailSize(layout) : null
+    const size = layout === 'stack' || layout === 'deck' ? savedRailSize(layout) : null
     railEl.style.flex = size ? `0 0 ${size}px` : ''
   }
   const railSplitter = document.createElement('div')
@@ -144,8 +154,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // state — a y/N, a password, a permission, or just parked at its input box. This is
   // the high-value signal — ~90% of fleet-driving is waiting to catch an agent back at
   // rest, so the working→awaiting EDGE is the moment worth a notification (see setState).
-  // Otherwise the pane is calm `idle`, and Layer B (and the slow alt-screen tell below)
-  // may still refine it. False positives are the cardinal sin: every pattern is anchored
+  // Otherwise the pane is calm `idle`; the slow alt-screen tell below may still promote
+  // it. False positives are the cardinal sin: every pattern is anchored
   // to the END of the tail (where a parked cursor sits), so mid-output mentions of "y/n"
   // or "password" in flowing text don't trip it.
   const QUIET_MS = 8000 // conservative window for the implicit (alt-screen) awaiting tell
@@ -162,22 +172,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function looksAwaitingPrompt(s) {
     return matchesAwaitPrompt(tailOf(s, 6))
   }
-  // Layer B only runs when a provider is configured in main AND reachable (an
-  // Anthropic key, or a live local OpenAI-compatible endpoint); without it the
-  // deterministic Layer A still works. Re-polled on an interval so a local model
-  // server that Concourse auto-starts (or that you bring up later) turns Layer B on
-  // without a restart — the probe is a single cheap localhost request.
-  let pulseEnabled = false
-  const refreshPulseStatus = () =>
-    api.pulse
-      ?.status?.()
-      .then((st) => {
-        pulseEnabled = !!(st && st.enabled && st.reachable)
-      })
-      .catch(() => {})
-  refreshPulseStatus()
-  const pulseStatusTimer = setInterval(refreshPulseStatus, 15000)
-
   // ---- inject extra panel controls: one button per layout, always visible ----
   // The button for the current layout is highlighted (.active).
   const LAYOUTS = [
@@ -258,8 +252,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       if (s) ordered.push(s)
     }
     const intact =
-      ordered.length === sessions.size &&
-      [...sessions.values()].every((s) => ordered.includes(s))
+      ordered.length === sessions.size && [...sessions.values()].every((s) => ordered.includes(s))
     if (!intact) {
       console.warn('reorderFromDom: tab/session mismatch — leaving sessions Map intact')
       applyLayout()
@@ -324,7 +317,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
         // A real file from Finder/desktop (screenshot thumbnail, Preview, Photos)
         // resolves to its absolute path directly.
         const p = api.pathForFile?.(f)
-        if (p) { paths.push(p); continue }
+        if (p) {
+          paths.push(p)
+          continue
+        }
         // No path means an in-memory image dragged from a web page/app. Persist
         // its bytes to a temp file so the agent has a real file to read, then use
         // that path. (Non-image pathless drags are skipped — nothing to point at.)
@@ -333,7 +329,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
             const bytes = new Uint8Array(await f.arrayBuffer())
             const saved = await api.fs.saveDrop?.(f.name, f.type, bytes)
             if (saved) paths.push(saved)
-          } catch { /* unreadable drop — skip this file */ }
+          } catch {
+            /* unreadable drop — skip this file */
+          }
         }
       }
       if (!paths.length) return
@@ -382,49 +380,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     setTimeout(() => document.addEventListener('mousedown', dismiss, { once: true }), 0)
   }
 
-  // The new-tab affordance ('+' button and Cmd+T): just open a new tab — no menu.
-  // The very first pane still greets you with the empty-pane agent launcher
-  // (gated on sessions.size === 0 in create()); a plain new pane is all the '+' owes.
+  // The new-tab affordance ('+' button and Cmd+T): just open a new tab — no menu
+  // and no beginner overlay.
   function newTab() {
     return create({})
-  }
-
-  // ---- empty-pane agent launcher ----
-  // A fresh, unused shell is a dead end for a newcomer: a mute prompt with no hint
-  // that the whole point is to run an agent here. This overlay turns that first
-  // pane into the moment they learn the core move — by doing it. (It's also the
-  // power-user fast path: one click to Claude.) Shown only on the FIRST pane
-  // (sessions.size 0 → 1), never on restored panes. Dismissed the instant the user
-  // acts (a button, or typing into the pane); crucially NOT on PTY output, so the
-  // cd-into-folder chrome can't make it vanish before the user has chosen.
-  function mountPaneLauncher(s) {
-    const el = document.createElement('div')
-    el.className = 'pane-launcher'
-    const agentBtn = (glyph, label, command, primary) =>
-      `<button class="pl-btn${primary ? ' primary' : ''}" data-command="${command}">` +
-      `<span class="pl-btn-icon">${icon(glyph, 15)}</span>${label}</button>`
-    el.innerHTML =
-      `<div class="pane-launcher-card">` +
-      `<div class="pl-title">Launch an agent here</div>` +
-      `<div class="pl-sub">Concourse runs your CLI coding agents side by side. Start one in this pane:</div>` +
-      `<div class="pl-actions">` +
-      agentBtn('wand', 'Run Claude Code', 'claude', true) +
-      // Codex normally uses the terminal's alternate screen, which has no scrollback.
-      // Concourse is conversation-first, so keep Codex in the normal buffer where the
-      // user can scroll up while the agent is still running.
-      agentBtn('code', 'Run Codex', 'codex --no-alt-screen', false) +
-      `</div>` +
-      `<button class="pl-link" data-shell="1">Just open a shell</button>` +
-      `</div>`
-    el.querySelectorAll('.pl-btn').forEach((btn) => {
-      btn.addEventListener('click', () => launchAgentInPane(s, btn.dataset.command))
-    })
-    el.querySelector('.pl-link').addEventListener('click', () => {
-      dismissPaneLauncher(s)
-      s.term.focus()
-    })
-    s.body.appendChild(el)
-    s.launcher = el
   }
   function dismissPaneLauncher(s) {
     if (!s.launcher) return
@@ -433,13 +392,16 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     s.resumeCmd = null
   }
 
-  // The restored-pane twin of mountPaneLauncher: this pane was running an agent
+  // A restored pane that was running an agent can offer an explicit resume action.
   // when the app closed — offer to bring it back with one click. Shows the exact
   // command it will run (no surprises); typing into the pane dismisses it via the
   // same s.launcher path as the first-run launcher.
   function mountResumeCard(s, original, resumeCmd) {
     const esc = (t) =>
-      String(t).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])
+      String(t).replace(
+        /[&<>"]/g,
+        (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]
+      )
     const el = document.createElement('div')
     el.className = 'pane-launcher'
     el.innerHTML =
@@ -469,7 +431,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     return n
   }
   function resumeAllPending() {
-    for (const s of sessions.values()) if (s.launcher && s.resumeCmd) launchAgentInPane(s, s.resumeCmd)
+    for (const s of sessions.values())
+      if (s.launcher && s.resumeCmd) launchAgentInPane(s, s.resumeCmd)
   }
   // Run an agent in an existing (empty) pane — the launcher's reuse path. Mirrors the
   // create({command}) preset seam: mark used, start the pulse immediately for instant
@@ -479,6 +442,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     dismissPaneLauncher(s)
     s.used = true
     s.resumeCommand = safeAgentResumeCommand(command)
+    const safeLabel = safeAgentLabel(command)
+    if (!s.custom && safeLabel) {
+      s.baseName = safeLabel
+      applyTitle(s)
+    }
     setState(s, 'working') // pulse the tab the instant they click — immediate feedback
     coachOnce('pulse', PULSE_COACH)
     api.term.input(s.id, command + '\r')
@@ -508,9 +476,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     const box = document.createElement('div')
     box.className = 'term-confirm'
     const name = s.tabLabel.textContent
-    // The tab label is agent-influenced (an OSC title / heuristic), so it must never be
-    // interpolated into innerHTML — a label like `<img onerror=...>` would execute. Build
-    // the title with textContent so the name renders as literal text.
+    // Labels include explicit user renames, so keep them out of innerHTML and render
+    // them literally with textContent.
     const title = document.createElement('div')
     title.className = 'tc-title'
     title.textContent = `Close “${name}”?`
@@ -609,7 +576,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   const LAYOUT_ORDER = ['tabs', 'grid', 'stack', 'deck', 'flow']
   function cycleLayout(dir = 1) {
     const i = LAYOUT_ORDER.indexOf(layout)
-    const next = LAYOUT_ORDER[((i + dir) % LAYOUT_ORDER.length + LAYOUT_ORDER.length) % LAYOUT_ORDER.length]
+    const next =
+      LAYOUT_ORDER[(((i + dir) % LAYOUT_ORDER.length) + LAYOUT_ORDER.length) % LAYOUT_ORDER.length]
     setLayout(next)
   }
   // Close the active terminal through the same confirm dialog as the X button.
@@ -657,9 +625,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // Master-stack (vertical rail, right) and master-deck (horizontal rail, bottom) are
   // the same layout on different axes: the active session maximizes into the primary
   // area (flex:1) and EVERY session — active included — has a Pulse card in the
-  // scrollable rail: identity edge + the working figure + name + up to two lines of
-  // Pulse summary. Cards replaced the old live preview tiles: at rail size a clipped
-  // terminal is noise, while name/state/summary is the actual "who needs me" answer
+  // scrollable rail: identity edge + the working figure + stable name. Cards replaced
+  // the old live preview tiles: at rail size a clipped terminal is noise, while name/state
+  // is the actual "who needs me" answer
   // (and the parked panes aren't rendered at all, so a big fleet got cheaper). The
   // rail order is stable session order, so promoting never reshuffles; the active
   // session's card just wears .active. Click a card to promote it (selectCell).
@@ -733,18 +701,19 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // The pane just became the (newly interactive) centre; focus on the next
     // tick once the reflow has settled so the very first click lands the cursor.
     const s = sessions.get(id)
-    if (s) setTimeout(() => {
-      // It may have been closed within this tick (a fast Cmd+W / agent exit racing the
-      // reflow); focus() on a disposed xterm throws — re-check it's still live.
-      const live = sessions.get(id)
-      if (live) live.term.focus()
-    }, 0)
+    if (s)
+      setTimeout(() => {
+        // It may have been closed within this tick (a fast Cmd+W / agent exit racing the
+        // reflow); focus() on a disposed xterm throws — re-check it's still live.
+        const live = sessions.get(id)
+        if (live) live.term.focus()
+      }, 0)
   }
   // Step the album flow by ±1 (wraps around) and focus the new centre.
   function stepFlow(dir) {
     const n = sessions.size
     if (!n) return
-    flowIndex = ((flowIndex + dir) % n + n) % n
+    flowIndex = (((flowIndex + dir) % n) + n) % n
     applyFlow()
     fitAll()
     const center = [...sessions.values()][flowIndex]
@@ -760,7 +729,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (layout === 'flow') return stepFlow(dir)
     let idx = order.findIndex((s) => s.id === activeId)
     if (idx < 0) idx = 0
-    const next = order[((idx + dir) % order.length + order.length) % order.length]
+    const next = order[(((idx + dir) % order.length) + order.length) % order.length]
     if (next) selectCell(next.id)
   }
 
@@ -814,7 +783,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       const looking = document.hasFocus() && activeId === s.id
       if (!looking) {
         s.unseen = true
-        onAwait?.({ id: s.id, name: visibleLabel(s) || s.baseName, summary: s.summaryText || '' })
+        onAwait?.({ id: s.id, name: visibleLabel(s) || s.baseName, summary: '' })
       }
     } else if (next === 'working') {
       s.unseen = false
@@ -892,12 +861,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // `cwd` and `resumeCommand` arrive on restored panes (from the session blob):
   // the shell reopens in its old directory and, when resumeCommand is a known
   // agent, the pane offers to resume it (mountResumeCard).
-  function create({ name, command, customLabel, bare, restored, cwd, resumeCommand } = {}) {
+  function create({ name, command, customLabel, restored, cwd, resumeCommand } = {}) {
     const id = 'term-' + ++counter
-    // Is this the first pane in an otherwise-empty workbench? Gates the one-time
-    // beginner launcher overlay so it only greets a genuinely fresh start, not every
-    // '+'-spawned shell.
-    const firstPane = sessions.size === 0
     // The plainest possible default ("Tab 1"). A preset name (e.g. an agent) wins.
     // An explicit manual label is used verbatim on session restore. Automatic
     // context is deliberately never persisted (see getState and the v3 migration).
@@ -957,8 +922,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     panesEl.appendChild(cell)
 
     // Rail card: this terminal's entry in the master-stack/deck rail — identity
-    // edge + the same animated working figure the tabs carry + name + up to two
-    // lines of Pulse summary (updateCardMeta). Every session has one; only the
+    // edge + the same animated working figure the tabs carry + stable name. Every
+    // session has one; only the
     // rail displays them (CSS). Click promotes the pane to the primary slot.
     const card = document.createElement('button')
     card.className = 'term-card'
@@ -971,10 +936,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     const cardLabel = document.createElement('span')
     cardLabel.className = 'card-label'
     cardLabel.textContent = displayName
-    const cardSum = document.createElement('span')
-    cardSum.className = 'card-sum'
-    cardSum.hidden = true
-    cardText.append(cardLabel, cardSum)
+    cardText.append(cardLabel)
     card.append(cardDot, cardText)
     card.addEventListener('click', () => selectCell(id))
     panesEl.appendChild(card)
@@ -998,16 +960,32 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // so an ordinary click still places the cursor / selects text without opening a
     // browser. window.open routes through the main process's setWindowOpenHandler,
     // which opens the URL externally and denies any in-app window.
-    term.loadAddon(new WebLinksAddon((event, uri) => {
-      if (event.metaKey || event.ctrlKey) window.open(uri)
-    }))
+    term.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        if (event.metaKey || event.ctrlKey) window.open(uri)
+      })
+    )
     term.open(cellBody)
     fit.fit()
 
     const s = {
-      id, term, fit, cell, body: cellBody, tabEl, tabDot, tabLabel, cellLabel, cellDot, color, colorIndex,
-      card, cardDot, cardLabel, cardSum,
-      status: 'running', custom: !!customLabel,
+      id,
+      term,
+      fit,
+      cell,
+      body: cellBody,
+      tabEl,
+      tabDot,
+      tabLabel,
+      cellLabel,
+      cellDot,
+      color,
+      colorIndex,
+      card,
+      cardDot,
+      cardLabel,
+      status: 'running',
+      custom: !!customLabel,
       // Three states: `working` (output flowing — pulsing), `awaiting` (at rest, your
       // move) or `idle` (gone quiet, nothing pending). An agent preset (command)
       // auto-fires on open, so it starts working. A plain shell just sits at its prompt,
@@ -1025,17 +1003,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       //              set — fixing "the prompt sits below the fold until I hit Enter".
       pinning: false, // guard: true only while WE scroll programmatically, so the onScroll
       //               below never mistakes our own re-pin (or a reflow) for a user scroll-up.
-      summaryText: null, // last Layer-B label (the model's one-line summary)
       lastScreenSig: null, // signature of the last VISIBLE screen — drives the settle debounce
       //                      so output that doesn't change what's on screen (a blinking cursor,
       //                      OSC-title pings, a no-op redraw) can't pin the pane in `working`
-      lastSummaryHash: null, // hash of the last tail summarised at rest — skip no-op repeats
-      lastLiveHash: null, // hash of the last tail the working heartbeat summarised — kept
-      //                     separate from lastSummaryHash so a live re-label never suppresses
-      //                     the at-rest verdict (and its awaiting-edge promotion) that follows
-      summarizing: false, // a Layer-B request is in flight for this pane
-      lastSummaryAt: 0, // timestamp of the last Layer-B call — drives the settle cooldown
-      summaryDeferTimer: null, // coalesces a burst of settles into one trailing summary call
       used: false, // true once the user types or a command runs — then we won't auto-cd it
       lastInputAt: 0, // timestamp of the last genuine keystroke; PTY output arriving right
       //                 after it is the prompt ECHOING what you typed, not work (see onData)
@@ -1046,9 +1016,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       //                 arbitrary shell input or arguments (see terminal-context-policy.js).
       cwd: cwd || null, // shell's cwd at the last prompt (OSC 5152) — persisted with the blob
       resumeCmd: null, // set while a restored pane's resume card is up (see mountResumeCard)
-      baseName: displayName, // fallback label shown when nothing better is known
-      oscTitle: null, // last OSC 0/2 title the program emitted (Layer 0) — always leads the label
-      titleTimer: null // debounce handle for onTitleChange
+      baseName: displayName // fallback label shown when nothing better is known
+      // Header identity is explicit metadata only. No terminal stream-derived title state.
     }
     sessions.set(id, s)
     // Watch this pane's body so it refits itself on any size change (see the
@@ -1058,7 +1027,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     labelResizeObserver.observe(tabLabel) // re-measure the hover-marquee on width changes
     labelResizeObserver.observe(cellLabel)
     updateIndicators(s) // paint the initial working/idle tab tint
-    updateCardMeta(s)
     // A preset pane starts `working` by literal (not via setState), so give it what the
     // rest→work edge gives every other working pane: an actual first frame (else it shows the
     // full resting block until the ticker's first tick) and an armed settle (else a preset
@@ -1069,17 +1037,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       armSettle(s)
     }
 
-    // Empty-pane launcher: greet a fresh first pane with "Launch an agent here"
-    // instead of a mute prompt. Never on restored panes (returning users), never on
-    // a preset (it's already running an agent), never when the user explicitly
-    // asked for a plain shell.
-    if (firstPane && !command && !bare && !restored) {
-      mountPaneLauncher(s)
-    }
-
     // Fleet resurrection: a restored pane that was running a known agent offers
-    // to bring it back with one click. Mounted like the launcher above — typing
-    // into the pane dismisses it.
+    // to bring it back with one click. Typing into the pane dismisses it.
     if (restored && resumeCommand) {
       const safeResume = safeAgentResumeCommand(resumeCommand)
       if (safeResume) mountResumeCard(s, safeResume, safeResume)
@@ -1116,8 +1075,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       // (s.follow) so the very next write snapped the viewport back to the bottom,
       // making it impossible to hold a scrolled-up position to read history. (It
       // also marked never-touched shells "used" — so a shell whose prompt probes
-      // the terminal at startup would pulse unbidden — and wiped the command-title
-      // buffer mid-line.)
+      // the terminal at startup would pulse unbidden.)
       //
       // Program answers are always ESC-introduced control strings; real typed text
       // never is. A bracketed paste is ESC-led but IS user input, so admit the
@@ -1153,30 +1111,25 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // Match iTerm/Terminal.app — in the normal buffer the wheel ALWAYS scrolls OUR
     // scrollback; only the alternate buffer hands it to the program. When nothing is
     // tracking the mouse we fall through to xterm's own native wheel handling.
-    cellBody.addEventListener('wheel', (e) => {
-      if (term.buffer.active.type === 'alternate') return
-      const tracking = term.modes && term.modes.mouseTrackingMode
-      if (!tracking || tracking === 'none') return
-      e.preventDefault()
-      e.stopPropagation()
-      const perRow = (term.element && term.rows) ? term.element.clientHeight / term.rows : 16
-      let lines
-      if (e.deltaMode === 1) lines = e.deltaY // already in lines
-      else if (e.deltaMode === 2) lines = e.deltaY * term.rows // pages
-      else lines = e.deltaY / (perRow || 16) // pixels → rows
-      term.scrollLines(Math.round(lines) || (e.deltaY > 0 ? 1 : -1))
-    }, { capture: true })
-    // Auto-title: catch the OSC 0/2 title ANY program emits (a shell with a
-    // titled prompt, vim, ssh, or an agent that reports its task) and route it
-    // into the tab + cell labels. Debounced to coalesce rapid updates; never
-    // overrides a manual rename. Harness-agnostic — no assumption about what's
-    // running in the pane.
-    term.onTitleChange((title) => {
-      if (s.custom) return
-      clearTimeout(s.titleTimer)
-      s.titleTimer = setTimeout(() => setAutoTitle(s, title), 150)
-    })
-
+    cellBody.addEventListener(
+      'wheel',
+      (e) => {
+        if (term.buffer.active.type === 'alternate') return
+        const tracking = term.modes && term.modes.mouseTrackingMode
+        if (!tracking || tracking === 'none') return
+        e.preventDefault()
+        e.stopPropagation()
+        const perRow = term.element && term.rows ? term.element.clientHeight / term.rows : 16
+        let lines
+        if (e.deltaMode === 1)
+          lines = e.deltaY // already in lines
+        else if (e.deltaMode === 2)
+          lines = e.deltaY * term.rows // pages
+        else lines = e.deltaY / (perRow || 16) // pixels → rows
+        term.scrollLines(Math.round(lines) || (e.deltaY > 0 ? 1 : -1))
+      },
+      { capture: true }
+    )
     // Drop files from Finder onto this pane to insert their paths as text.
     wireCellDrop(cell, s)
     // Click selects. In flow mode, clicking a side preview brings it to centre;
@@ -1216,8 +1169,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // In album flow a brand-new terminal becomes the centre; elsewhere just focus.
     if (layout === 'flow') centerOn(id)
     else activate(id)
-    refreshBranch() // warm the git-branch cache for Pulse model context
-
     // Just-in-time layout teaching: the moment you have TWO agents and are still
     // in the single-pane tabs view, point at Grid so you can watch both at once.
     // Fires once ever (coachOnce persists across launches) — never nags, and never
@@ -1247,7 +1198,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       cwd: s.cwd || null,
       resumeCommand: s.resumeCommand || null
     }))
-    const active = Math.max(0, list.findIndex((s) => s.id === activeId))
+    const active = Math.max(
+      0,
+      list.findIndex((s) => s.id === activeId)
+    )
     return { layout, active, tabs }
   }
 
@@ -1276,7 +1230,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     document.getElementById('term-tab-menu')?.remove()
     // The pane is going away; clear any awaiting notification/title flag it posted.
     onAwaitClear?.(id)
-    clearTimeout(s.titleTimer)
     clearTimeout(s.idleTimer)
     clearTimeout(s.quietTimer)
     resizeObserver.unobserve(s.body)
@@ -1374,7 +1327,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function renameStart(s, labelEl) {
     const input = document.createElement('input')
     input.className = 'rename-input'
-    // Prefill with the lead label only (.lbl-main), not the dim "— summary" tail.
+    // Prefill with the label's primary track.
     input.value = labelEl.querySelector('.lbl-main')?.textContent ?? labelEl.textContent
     labelEl.replaceWith(input)
     input.focus()
@@ -1407,27 +1360,17 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     input.addEventListener('blur', commit)
   }
 
-  // ---- auto-title resolver ----------------------------------------------------
-  // Priority: a manual rename (s.custom) wins; else the live OSC title a program
-  // emits (Layer 0) wins; else Pulse's output-derived summary; else the base name.
-  // Terminal input is never a title source: input may be a password or other secret.
+  // ---- title resolver ---------------------------------------------------------
+  // Only explicit metadata may name a pane: a manual rename, a trusted allowlisted
+  // agent launcher, or the stable base name. Terminal input, output, OSC titles and
+  // model summaries are deliberately outside this boundary.
   // The REAL, width-aware truncation is CSS's job: every label (.cell-label, .term-tab-label,
   // .card-label) is `overflow:hidden; text-overflow:ellipsis`, each bounded to its own width —
   // so a full-width cell header shows far more than a 180px tab, and each ellipsises exactly at
-  // its own pixel edge. MAX_TITLE is only a sanity bound so a pathological program/model title
-  // never becomes a giant DOM text node / tooltip; it should stay well above any width we render.
+  // its own pixel edge. MAX_TITLE is only a sanity bound for an unusually long manual label;
+  // it should stay well above any width we render.
   const MAX_TITLE = 200
-  // The auto label carries TWO writers on ONE line, deliberately split into two spans so
-  // they never fight over a single text node (the old single-string race flickered between
-  // a program's live title and our model summary):
-  //   • primary (.lbl-main) — a program's OWN title ALWAYS leads and is shown verbatim:
-  //     Claude Code's (or any agent's) live OSC header, vim, ssh, a shell's titled prompt.
-  //     We never replace it. Only a pane that sets NO title at all leads with our summary.
-  //   • secondary (.lbl-sub) — our Pulse summary APPENDED as a dim "— summary" tail on the
-  //     SAME line, so we ADD context to the program's title instead of overriding it. It
-  //     just clips at rest; hover marquees it (below).
-  // Shown identically in every view — tabs, stack (MS), flow (AF) — the roomier views just
-  // reveal more before the clip. A manual rename (s.custom) still trumps both.
+  // Labels use a child track so the existing overflow marquee remains width-aware.
   const clamp = (v) => (v && v.length > MAX_TITLE ? v.slice(0, MAX_TITLE - 1) + '…' : v || '')
   function visibleLabel(s) {
     return automaticTerminalLabel(s)
@@ -1445,7 +1388,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     }
     const main = document.createElement('span')
     main.className = 'lbl-main'
-    main.textContent = primary // textContent keeps agent-influenced text literal (no HTML)
+    main.textContent = primary // textContent keeps explicit labels literal (no HTML)
     if (secondary) {
       const sub = document.createElement('span')
       sub.className = 'lbl-sub'
@@ -1465,81 +1408,26 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (over > 4) {
       clipEl.classList.add('is-overflow')
       clipEl.style.setProperty('--marquee-shift', `-${over}px`)
-      clipEl.style.setProperty('--marquee-dur', `${Math.min(14, Math.max(3, over / 28)).toFixed(1)}s`)
+      clipEl.style.setProperty(
+        '--marquee-dur',
+        `${Math.min(14, Math.max(3, over / 28)).toFixed(1)}s`
+      )
     } else {
       clipEl.classList.remove('is-overflow')
     }
   }
-  // The rail card's summary line: the Pulse one-liner, falling back to the last
-  // output-derived Pulse summary. Raw shell commands and terminal input never appear here.
-  // Updated even for custom-renamed panes (the rename freezes the NAME, not what
-  // the pane is doing); hidden entirely when nothing adds to the name.
-  function updateCardMeta(s) {
-    const name = s.custom ? s.cardLabel.textContent : clamp(visibleLabel(s))
-    const sum = terminalCardSummary(s, name)
-    s.cardSum.textContent = sum
-    s.cardSum.hidden = !sum
-  }
   function applyTitle(s) {
-    updateCardMeta(s)
     if (s.custom) return // a manual rename always wins
     const primary = clamp(visibleLabel(s))
-    // Append the summary only when the program supplied its OWN title (so we ADD to it).
-    // With no OSC title the summary IS the lead, and a tail would just repeat it.
-    const secondary = s.oscTitle && s.summaryText && s.summaryText !== s.oscTitle ? clamp(s.summaryText) : null
-    setTwoPart(s.tabLabel, primary, secondary)
-    setTwoPart(s.cellLabel, primary, secondary)
+    setTwoPart(s.tabLabel, primary, null)
+    setTwoPart(s.cellLabel, primary, null)
     s.cardLabel.textContent = primary // rail card name: single line, no marquee
-    const tip = secondary ? `${primary} — ${secondary}` : primary
-    s.tabEl.title = tip
-    s.cell.title = tip
+    s.tabEl.title = primary
+    s.cell.title = primary
     requestAnimationFrame(() => {
       measureMarquee(s.tabLabel)
       measureMarquee(s.cellLabel)
     })
-  }
-  // Strip a leading decorative status glyph that some agents prefix to their OSC title.
-  // We already render our OWN Pulse indicator (the braille spinner / amber dot) to the left
-  // of the label, so the agent's glyph reads as a SECOND, untrusted indicator wedged between
-  // ours and the text — exactly the "indicators all over the place" problem. The strip covers
-  // the families agents actually use as title leads:
-  //   • bullets / middle-dots / leaders   ·  •  ‣  ․  ‧  ⁃  ∙  ⋅  ・  ･   (U+00B7, U+2022…, etc.)
-  //   • geometric shapes                  ●  ○  ◦  ▪  ▸  …               (U+25A0–U+25FF)
-  //   • dingbats / sparkles               ✳  ✻  ✶  ➤  …                 (U+2300–U+27BF)
-  //   • misc symbols & arrows             ⬆  ⯈  …                       (U+2B00–U+2BFF)
-  //   • any emoji + its variation selector / ZWJ joiners
-  // Only a LEADING run (plus trailing space) is removed; an interior dot or a normal title is
-  // untouched. Keep this in sync with the spinner glyphs so we never strip our own output.
-  const LEAD_GLYPH =
-    /^(?:[·•‣․‧⁃∙⋅■-◿⌀-➿⬀-⯿・･️‍]|\p{Extended_Pictographic})+\s*/u
-  function setAutoTitle(s, raw) {
-    const t = (raw || '')
-      .replace(/[\x00-\x1f\x7f]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .replace(LEAD_GLYPH, '')
-      .trim()
-    // Any title a program sets leads the label verbatim; our summary appends to it.
-    s.oscTitle = !t || t === s.baseName ? null : t
-    applyTitle(s)
-  }
-
-  // Cache branch as Pulse model context. Unlike the removed command-line heuristic,
-  // this is workspace metadata and never observes terminal input.
-  let cachedBranch = null
-  let branchPending = false
-  function refreshBranch() {
-    if (branchPending) return
-    branchPending = true
-    api.git
-      .status()
-      .then((st) => {
-        cachedBranch = st && st.isRepo && st.branch ? st.branch : null
-      })
-      .catch(() => {})
-      .finally(() => {
-        branchPending = false
-      })
   }
   // ---- fit ----
   // A pane's ROLE in the current layout decides whether it drives its PTY size.
@@ -1560,7 +1448,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (layout === 'stack' || layout === 'deck') return s.id === activeId ? 'primary' : 'hidden'
     if (layout === 'flow') {
       if (s.cell.classList.contains('flow-center')) return 'primary'
-      if (s.cell.classList.contains('flow-prev') || s.cell.classList.contains('flow-next')) return 'preview'
+      if (s.cell.classList.contains('flow-prev') || s.cell.classList.contains('flow-next'))
+        return 'preview'
       return 'hidden'
     }
     return 'hidden'
@@ -1601,7 +1490,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // fit and the re-pin — otherwise a quiescent pane that then settles to an already-
     // observed size (no ResizeObserver callback, no output to pin) opens stranded above
     // the bottom: the original "stuck until a keypress" symptom.
-    if (!s.body.isConnected || s.body.clientWidth === 0 || s.body.clientHeight === 0) return 'deferred'
+    if (!s.body.isConnected || s.body.clientWidth === 0 || s.body.clientHeight === 0)
+      return 'deferred'
     try {
       // A resize reflows the buffer and can leave the viewport a row or two above the
       // bottom — so the newest line (an agent's input box / prompt) renders just below
@@ -1720,15 +1610,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     for (const entry of entries) measureMarquee(entry.target)
   })
   // ---- pty output -> terminal: drives the two-state (working/idle) indicator ----
-  // Fleet-resurrection bookkeeping: main echoes each pane's captured shell
-  // commands and prompt cwd off the shell-integration hook (see ipc-pty.js).
-  // Only a normalized allowlisted agent identity is retained for resurrection;
-  // arbitrary command text and arguments are discarded immediately.
-  api.term.onCommand?.(({ id, cmd }) => {
-    const s = sessions.get(id)
-    if (!s || !cmd) return
-    s.resumeCommand = safeAgentResumeCommand(cmd)
-  })
+  // Fleet-resurrection bookkeeping uses cwd metadata only. Command/input capture is disabled.
   api.term.onCwd?.(({ id, cwd }) => {
     const s = sessions.get(id)
     if (s && cwd) s.cwd = cwd
@@ -1785,12 +1667,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       // window and pulses then. Only the idle→working ENTRY is gated (we're not yet working,
       // so there are no settle timers to preserve by falling through).
       if (Date.now() - s.lastInputAt < ECHO_GRACE_MS) return
-      // Keep the last summary visible through the new working stint. It's a "what is this
-      // pane on" hint, and a few seconds stale beats blinking the "— summary" tail off on
-      // EVERY output burst (an agent works in sub-heartbeat bursts, so clearing here made
-      // the label fumble in and out of view). The heartbeat replaces it within
-      // WORKING_PULSE_MS; reset its hash so it re-labels this stint from scratch.
-      s.lastLiveHash = null
       setState(s, 'working') // repaints; also clears any awaiting come-look
       // The first time you ever see a tab start pulsing, explain it — Pulse
       // finally names itself at the exact moment it has meaning. Once ever.
@@ -1821,13 +1697,16 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
         if (s.term.buffer.active.type === 'alternate') {
           s.quietTimer = setTimeout(() => {
             s.quietTimer = null
-            if (s.status !== 'exited' && s.state === 'idle' && s.term.buffer.active.type === 'alternate') {
+            if (
+              s.status !== 'exited' &&
+              s.state === 'idle' &&
+              s.term.buffer.active.type === 'alternate'
+            ) {
               setState(s, 'awaiting') // a TUI silent past QUIET_MS is almost certainly at rest
             }
           }, QUIET_MS - IDLE_AFTER_MS)
         }
       }
-      summarize(s) // Layer B: refine the label, and may promote idle→awaiting
     }, IDLE_AFTER_MS)
   }
   api.term.onExit(({ id }) => {
@@ -1841,18 +1720,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     s.idleTimer = null
     clearTimeout(s.quietTimer)
     s.quietTimer = null
-    clearTimeout(s.summaryDeferTimer) // no trailing summary for a dead pane
-    s.summaryDeferTimer = null
     updateIndicators(s)
     s.tabEl.classList.add('exited')
-    // Clear any stale OSC title (programs may leave one set on exit); the resolver
-    // then falls back to the last heuristic label or the base name.
-    clearTimeout(s.titleTimer)
-    s.oscTitle = null
-    applyTitle(s)
   })
 
-  // ---- pulse Layer B: model summary of quiet panes ----
+  // ---- local deterministic prompt detection ---------------------------------
   // Pure-decoration glyphs that survive xterm's translateToString (which already drops
   // ANSI) but carry NO meaning for Pulse: spinner animation frames (Braille U+2800–28FF),
   // TUI box borders (U+2500–257F), and progress-bar block/shade elements (U+2580–259F).
@@ -1864,11 +1736,13 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // and are preserved, so the few-shot prompt and the await detector keep working.
   const PULSE_NOISE_RE = /[\u2500-\u259f\u2800-\u28ff]/g
   function cleanTailLine(str) {
-    return str.replace(PULSE_NOISE_RE, ' ').replace(/\s{2,}/g, ' ').trim()
+    return str
+      .replace(PULSE_NOISE_RE, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
   }
-  // Read the last lines the pane shows (clean text straight from the xterm buffer,
-  // no ANSI), hashed so we never re-ask about an unchanged screen. The model call
-  // itself lives in main (the key never touches the renderer); we just send the tail.
+  // Read the last lines the pane shows locally for deterministic await-prompt matching.
+  // The text is never persisted, sent to a model, or used as a header.
   function tailOf(s, maxLines) {
     const buf = s.term.buffer.active
     // Default tail: 24 lines is plenty for a settled shell verdict and keeps the model
@@ -1888,11 +1762,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       if (clean) lines.push(clean)
     }
     return lines.reverse().join('\n').trim()
-  }
-  function hashStr(str) {
-    let h = 0
-    for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0
-    return h
   }
   // A cheap signature of what's CURRENTLY ON SCREEN: every visible viewport row, hashed.
   // Used to decide whether an output burst is real work or just noise. An agent parked at
@@ -1918,107 +1787,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     }
     return h
   }
-  // Sends the pane's visible tail to the model and writes back a one-line label. Called
-  // two ways: (1) when a pane comes to rest (the working→idle edge) — the resting verdict,
-  // which may also promote idle→awaiting; and (2) on the working heartbeat with
-  // { live: true } — a present-tense label for a pane that's STILL working, so a long turn's
-  // header tracks what it's doing instead of freezing on the program's own (often static)
-  // title. The live path only paints a label; it never touches the working/idle state.
-  async function summarize(s, { live = false } = {}) {
-    if (!pulseEnabled || !api.pulse?.summarize) return
-    if (s.summarizing) return // one request per pane at a time
-    if (live && s.state !== 'working') return // heartbeat only labels panes still working
-    // Per-pane settle cooldown. The settle path fires on EVERY >800ms quiet gap, and a busy
-    // agent pauses constantly (between tool calls, while thinking), so without this a single
-    // working pane drives ~15 model calls a minute — frequent enough to keep a local GPU/CPU
-    // from ever idling (the heat users hit; the model being "free" in dollars misled us into
-    // calling it freely). The label doesn't need refreshing that often. Throttle settle
-    // re-labels to one per MIN_SUMMARY_GAP_MS and coalesce a burst into ONE trailing call, so
-    // the final at-rest verdict (and its awaiting promotion) still lands — just deferred a few
-    // seconds. The 30s heartbeat is already slow, so it's exempt (it only stamps the clock).
-    if (!live) {
-      const since = performance.now() - s.lastSummaryAt
-      if (since < MIN_SUMMARY_GAP_MS) {
-        clearTimeout(s.summaryDeferTimer)
-        s.summaryDeferTimer = setTimeout(() => {
-          s.summaryDeferTimer = null
-          // Only worth a call if the pane is still at rest; resumed work re-labels via heartbeat.
-          if (s.status !== 'exited' && s.state !== 'working') summarize(s)
-        }, MIN_SUMMARY_GAP_MS - since)
-        return
-      }
-    }
-    const tail = tailOf(s)
-    if (!tail) return
-    const h = hashStr(tail)
-    // The heartbeat dedups on its OWN hash so a no-op live re-label never marks the screen
-    // as "summarised" and suppresses the at-rest verdict (with its awaiting promotion).
-    if (h === (live ? s.lastLiveHash : s.lastSummaryHash)) return
-    s.lastSummaryAt = performance.now() // stamp every real call so a settle waits behind a heartbeat too
-    s.summarizing = true
-    let res = null
-    try {
-      res = await api.pulse.summarize({
-        id: s.id,
-        tail,
-        baseName: s.baseName,
-        branch: cachedBranch || null
-      })
-    } catch {
-      res = null
-    } finally {
-      s.summarizing = false
-    }
-    if (!res) return // failed/empty: leave the hash unset so we retry next rest
-    if (s.status === 'exited') return // process ended while we waited — the exit handler owns it
-    if (live) s.lastLiveHash = h
-    // A heartbeat whose call returned while the pane is STILL working: paint the live label
-    // and stop — never set lastSummaryHash, never change state (the at-rest verdict, with
-    // its awaiting edge, stays the settle path's job).
-    if (live && s.state === 'working') {
-      const label = res.summary
-      s.summaryText = label && label.trim() ? label.trim() : null
-      applyTitle(s)
-      return
-    }
-    // At-rest verdict — reached by the settle path, OR by a heartbeat whose call landed right
-    // as the pane came to rest (s.state !== 'working' now), which makes it a valid settle read.
-    // If the pane has since resumed working, don't paint a resting label over live output.
-    if (s.state === 'working') return
-    s.lastSummaryHash = h
-    const label = res.summary
-    s.summaryText = label && label.trim() ? label.trim() : null
-    // Layer B can recognise a rest the deterministic regex missed — most importantly an
-    // agent parked at its OWN input box (end-of-turn await). Promote idle→awaiting so the
-    // come-look edge fires; we set summaryText first so the notification carries the
-    // summary label. Never demote a deterministic `awaiting` on a model's say-so.
-    if (res.state === 'awaiting' && s.state !== 'awaiting') setState(s, 'awaiting')
-    applyTitle(s)
-  }
-
-  // Minimum gap between settle-path model calls for one pane. The settle debounce
-  // (IDLE_AFTER_MS) only smooths sub-second output bursts; this throttles the much coarser
-  // "agent paused to run a tool" gaps that otherwise fire a fresh call every few seconds.
-  // Comfortably under the heartbeat so a still-working pane's label stays live, but high
-  // enough to collapse the settle storm that was driving the heat.
-  const MIN_SUMMARY_GAP_MS = 12000
-
-  // Pulse working heartbeat. A pane that keeps emitting output never hits the settle path,
-  // so without this its header would sit frozen — for an agent, on the program's static OSC
-  // title ("claude") — for the whole turn. On a slow tick, re-summarise every pane that's
-  // still working so the label tracks what it's doing live. Kept light: an unchanged screen
-  // is skipped by the per-pane hash (lastLiveHash), the settle cooldown thins the call
-  // stream, and main caps global concurrency (MAX_CONCURRENT) and supersedes stale queued
-  // calls. Tune the period for liveness vs. call volume. (The fast settle path still owns
-  // the at-rest / awaiting edge.)
-  const WORKING_PULSE_MS = 30000
-  const heartbeatTimer = setInterval(() => {
-    if (!pulseEnabled) return
-    for (const s of sessions.values()) {
-      if (s.status !== 'exited' && s.state === 'working') summarize(s, { live: true })
-    }
-  }, WORKING_PULSE_MS)
-
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)')
   // Paint one grid into a pane's three dot figures (tab / cell-header / rail card) at once —
   // the single place that writes the figure, so resting (updateIndicators), the rest→work
@@ -2033,7 +1801,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // single-dot floor so an effect's all-off ticks (heartbeat is blank most of its cycle) never
   // blink the indicator to "nothing" while the pane is genuinely working.
   function paintWorking(s) {
-    if (reduceMotion.matches) { paintFigure(s, STATIC_GRID); return }
+    if (reduceMotion.matches) {
+      paintFigure(s, STATIC_GRID)
+      return
+    }
     let grid = s.thinker.draw(s.workT)
     if (!grid.some((v) => v)) grid = MIN_WORKING_GRID
     paintFigure(s, grid)
@@ -2130,7 +1901,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       termSettings.fontSize = opts.fontSize
       fontChanged = true
     }
-    if (typeof opts.fontFamily === 'string' && opts.fontFamily.trim() && opts.fontFamily !== termSettings.fontFamily) {
+    if (
+      typeof opts.fontFamily === 'string' &&
+      opts.fontFamily.trim() &&
+      opts.fontFamily !== termSettings.fontFamily
+    ) {
       termSettings.fontFamily = opts.fontFamily
       fontChanged = true
     }
@@ -2175,25 +1950,21 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     return true
   }
 
-  // Tear down every per-pane timer this module owns (the idle-debounce and title
-  // debounce handles) so a backgrounded/recreated view leaves nothing running.
+  // Tear down every per-pane timer this module owns (the idle debounces) so a
+  // backgrounded/recreated view leaves nothing running.
   // clearTimeout on an already-fired/null handle is a no-op, so this is safe to call
   // regardless of state.
   function dispose() {
     for (const s of sessions.values()) {
       clearTimeout(s.idleTimer)
-      clearTimeout(s.titleTimer)
       clearTimeout(s.quietTimer)
-      clearTimeout(s.summaryDeferTimer)
-      s.idleTimer = s.titleTimer = s.quietTimer = s.summaryDeferTimer = null
+      s.idleTimer = s.quietTimer = null
     }
     // Module-owned intervals and window-level listeners. Without clearing these a
     // re-instantiation (a future multi-window / workspace refactor) would stack a second
     // pulse poll, heartbeat, flow-arrow handler and stray-drop swallower — double-stepping
     // the flow and re-running drop swallowing N times. dispose() promises "nothing
     // running", so honor it for these too, not just the per-pane timers.
-    clearInterval(pulseStatusTimer)
-    clearInterval(heartbeatTimer)
     clearInterval(animTimer)
     panesResizeObserver.disconnect()
     window.removeEventListener('keydown', onFlowArrowKey)
@@ -2208,5 +1979,27 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (sessions.has(id)) activate(id)
   }
 
-  return { create, newTab, fitActive, fitAll, setLayout, setTheme, setHeaderTheme, applySettings, cdInto, typeIntoActive, stepActive, moveActive, activateIndex, cycleLayout, closeActive, getState, restore, revealPane, pendingResumeCount, resumeAllPending, dispose }
+  return {
+    create,
+    newTab,
+    fitActive,
+    fitAll,
+    setLayout,
+    setTheme,
+    setHeaderTheme,
+    applySettings,
+    cdInto,
+    typeIntoActive,
+    stepActive,
+    moveActive,
+    activateIndex,
+    cycleLayout,
+    closeActive,
+    getState,
+    restore,
+    revealPane,
+    pendingResumeCount,
+    resumeAllPending,
+    dispose
+  }
 }

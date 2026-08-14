@@ -6,19 +6,27 @@ import { registerFs } from './ipc-fs.js'
 import { registerGit } from './ipc-git.js'
 import { registerSearch } from './ipc-search.js'
 import { registerSession } from './ipc-session.js'
+import { purgeLegacyTerminalSessions } from './session.js'
 import { registerPty } from './ipc-pty.js'
-import { registerPulse } from './ipc-pulse.js'
 import { registerModel } from './ipc-model.js'
 import { stopLocalServer } from './local-llm.js'
 import { registerShell } from './ipc-shell.js'
 import { registerSettings, updateSetting } from './ipc-settings.js'
 import { registerCommands } from './ipc-commands.js'
+import { purgeCommandHistory } from './command-history.js'
 import { initSettings, getRaw } from './settings.js'
 import { createWatchers } from './watcher.js'
 import { installAppMenu } from './menu.js'
 import { getRecents } from './recents.js'
 import { checkForUpdate } from './update-check.js'
-import { flushSync, readJson, writeJsonAtomic, enqueue, trackPending, sweepStaleTmp } from './store-io.js'
+import {
+  flushSync,
+  readJson,
+  writeJsonAtomic,
+  enqueue,
+  trackPending,
+  sweepStaleTmp
+} from './store-io.js'
 import log from 'electron-log/main'
 
 // Dev and the packaged app must NEVER share a profile. Both resolve userData to
@@ -134,7 +142,9 @@ function boundsVisible(b) {
   if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return false
   return screen.getAllDisplays().some((d) => {
     const w = d.workArea
-    return b.x < w.x + w.width && b.x + b.width > w.x && b.y < w.y + w.height && b.y + b.height > w.y
+    return (
+      b.x < w.x + w.width && b.x + b.width > w.x && b.y < w.y + w.height && b.y + b.height > w.y
+    )
   })
 }
 let boundsSaveTimer = null
@@ -352,6 +362,8 @@ app.whenReady().then(async () => {
   const userData = app.getPath('userData')
   sweepStaleTmp(userData)
   sweepStaleTmp(join(userData, 'sessions'))
+  purgeLegacyTerminalSessions()
+  await purgeCommandHistory()
 
   registerWorkspace(ctx, watchers)
   registerFs(ctx)
@@ -359,7 +371,6 @@ app.whenReady().then(async () => {
   registerSearch(ctx)
   registerSession()
   killPtysForWindow = registerPty(ctx)
-  registerPulse()
   registerModel()
   registerShell()
   registerSettings()
