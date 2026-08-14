@@ -28,7 +28,7 @@ It's agent-agnostic by design. Anything you can run in a shell — `claude`, `co
 
 And it's built to be **ultrafast, lightweight, and easy on your system**: a vanilla-JS renderer with no UI framework and only a handful of runtime dependencies, so the workbench stays snappy and leaves your machine's resources for the agents you're actually running.
 
-> **Terminal privacy boundary.** Concourse forwards keystrokes to the PTY but never uses terminal input, output, shell history, OSC titles, or generated summaries as tab metadata. Headers come only from stable pane names, explicit renames, and allowlisted agent launchers.
+> **Terminal privacy boundary.** Concourse forwards keystrokes directly to the PTY but never inspects, retains, or derives metadata from those bytes. Terminal input, output, shell history, OSC titles, restored labels, commands, and generated summaries cannot name a tab. Headers are immutable ordinal identities such as `Terminal 1`.
 
 ## Install (developer beta)
 
@@ -82,7 +82,7 @@ Every agent runs in a real PTY-backed terminal. The difference is how you arrang
 | **Stack** | `⌘O` | One agent large, the rest compact in a rail |
 | **Flow** | `⌘P` | Album-style — center pane live, neighbors previewed |
 
-Cycle layouts with `⌘⇧L`. Jump to any pane with `⌘1`–`⌘9`, cycle with `⌘⇧←/→`, open a new one with `⌘T`. Drag tabs to reorder; double-click to rename them (`frontend`, `backend`, `tests`). Each pane carries its own identity color across every view. Toggle the sidebar with `⌘B`, the bottom panel with `⌘J`, and call up the command palette with `⌘K`.
+Cycle layouts with `⌘⇧L`. Jump to any pane with `⌘1`–`⌘9`, cycle with `⌘⇧←/→`, open a new one with `⌘T`, and drag tabs to reorder. Each pane has an immutable ordinal name and carries its own identity color across every view. Toggle the sidebar with `⌘B`, the bottom panel with `⌘J`, and call up the command palette with `⌘K`.
 
 <div align="center">
 

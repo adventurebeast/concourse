@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { sanitizeSessionBlob } from '../src/main/terminal-session-policy.js'
 
 describe('persisted terminal session privacy policy', () => {
-  it('keeps only explicit labels, cwd, and normalized agent identity', () => {
+  it('keeps only cwd and normalized agent identity', () => {
     const clean = sanitizeSessionBlob({
       version: 3,
       terminals: {
@@ -25,7 +25,7 @@ describe('persisted terminal session privacy policy', () => {
       version: 3,
       terminals: {
         layout: 'grid',
-        tabs: [{ customLabel: 'API server', cwd: '/workspace', resumeCommand: 'claude --continue' }]
+        tabs: [{ cwd: '/workspace', resumeCommand: 'claude --continue' }]
       }
     })
   })

@@ -46,7 +46,7 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
   color: var(--text-faint);
 }
 
-/* ---------- Tab labels / rename ---------- */
+/* ---------- Immutable tab labels ---------- */
 .term-tab-label {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -97,18 +97,6 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
     animation: none;
   }
 }
-.rename-input {
-  background: var(--bg-input);
-  color: var(--text);
-  border: 1px solid var(--accent);
-  border-radius: 3px;
-  font: inherit;
-  font-size: 12px;
-  padding: 0 4px;
-  width: 100px;
-  outline: none;
-}
-
 /* ---------- Panes container: tabs vs grid ---------- */
 #term-panes.tabs .term-cell {
   position: absolute;

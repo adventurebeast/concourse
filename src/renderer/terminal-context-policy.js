@@ -5,16 +5,6 @@
 // used as label material or persisted for later restoration. Keep the allowed sources
 // small and explicit here so UI changes do not accidentally reintroduce input capture.
 
-export function automaticTerminalLabel({ baseName } = {}) {
-  return baseName || ''
-}
-
-export function persistedCustomLabel(custom, renderedLabel) {
-  if (!custom || typeof renderedLabel !== 'string') return null
-  const label = renderedLabel.trim()
-  return label || null
-}
-
 // Fleet resurrection needs only the identity of a supported agent, never the full
 // command line. Normalize to commands we own so flags, prompts, tokens, and other
 // user-supplied arguments cannot enter the session store or restoration UI.
@@ -27,14 +17,6 @@ export function safeAgentResumeCommand(command) {
   if (/^amp(?:\s|$)/.test(value)) return 'amp'
   if (/^goose(?:\s|$)/.test(value)) return 'goose'
   return null
-}
-
-export function safeAgentLabel(command) {
-  const safe = safeAgentResumeCommand(command)
-  if (!safe) return null
-  if (safe.startsWith('claude')) return 'Claude'
-  if (safe.startsWith('codex')) return 'Codex'
-  return safe.charAt(0).toUpperCase() + safe.slice(1)
 }
 
 // v0-v2 stored the currently rendered automatic label and an arbitrary last shell

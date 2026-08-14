@@ -20,9 +20,6 @@ export function sanitizeSessionBlob(blob) {
       tabs: tabs.map((tab) => {
         if (!tab || typeof tab !== 'object') return {}
         const safe = {}
-        if (typeof tab.customLabel === 'string' && tab.customLabel.trim()) {
-          safe.customLabel = tab.customLabel.trim().slice(0, 200)
-        }
         if (typeof tab.cwd === 'string' && tab.cwd) safe.cwd = tab.cwd
         if (SAFE_RESUME_COMMANDS.has(tab.resumeCommand)) safe.resumeCommand = tab.resumeCommand
         return safe

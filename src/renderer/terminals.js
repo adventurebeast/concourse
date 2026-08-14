@@ -9,12 +9,7 @@ import { matchesAwaitPrompt } from './pulse-detect.js'
 import { RESTING_GRID, STATIC_GRID, MIN_WORKING_GRID, createThinker } from './braille-thinker.js' // working-figure engine
 import { makeFigure, paint } from './dot-figure.js' // SVG dot-matrix renderer for the figure
 import { colorsFor } from './term-palettes.js'
-import {
-  automaticTerminalLabel,
-  persistedCustomLabel,
-  safeAgentLabel,
-  safeAgentResumeCommand
-} from './terminal-context-policy.js'
+import { safeAgentResumeCommand } from './terminal-context-policy.js'
 
 // The one-time coach mark that explains Pulse the first time a tab starts
 // working. Fired from every path that starts an agent (launcher reuse, '+' preset,
@@ -159,13 +154,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // to the END of the tail (where a parked cursor sits), so mid-output mentions of "y/n"
   // or "password" in flowing text don't trip it.
   const QUIET_MS = 8000 // conservative window for the implicit (alt-screen) awaiting tell
-  // Local prompt echo of a keystroke lands within a few ms of the key. Output arriving
-  // within this window of the user's last keystroke is treated as that echo — typing your
-  // own command line isn't the agent "thinking", so it must not start the spinner. Measured
-  // from EACH keystroke (which resets it), so continuous typing never trips working, however
-  // slow; a real command/agent keeps emitting past the window and pulses normally. Only gates
-  // the idle→working ENTRY — once working, keystrokes don't disturb the settle timers.
-  const ECHO_GRACE_MS = 250
   // Does the settled pane show an explicit input affordance in its visible tail? Reads
   // the last few rendered rows (the cursor parks at the prompt) and runs the anchored
   // patterns in pulse-detect.js. Pure/synchronous — the deterministic floor, no model.
@@ -344,22 +332,16 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     })
   }
 
-  // ---- per-terminal right-click menu (rename / close) ----
+  // ---- per-terminal right-click menu (close only) ----
+  // Terminal labels are immutable ordinals. Keeping rename fields out of the
+  // terminal surface makes it impossible for focus/keyboard routing mistakes to
+  // copy terminal input into header metadata.
   function openTabMenu(x, y, s) {
     const existing = document.getElementById('term-tab-menu')
     if (existing) existing.remove()
     const menu = document.createElement('div')
     menu.className = 'term-menu'
     menu.id = 'term-tab-menu'
-
-    const rename = document.createElement('div')
-    rename.className = 'term-menu-item'
-    rename.textContent = 'Rename…'
-    rename.addEventListener('click', () => {
-      menu.remove()
-      activate(s.id)
-      renameStart(s, s.tabLabel)
-    })
 
     const close = document.createElement('div')
     close.className = 'term-menu-item danger'
@@ -369,7 +351,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       confirmClose(s)
     })
 
-    menu.append(rename, close)
+    menu.append(close)
     document.body.appendChild(menu)
     // clamp to viewport
     menu.style.left = Math.min(x, window.innerWidth - menu.offsetWidth - 8) + 'px'
@@ -442,11 +424,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     dismissPaneLauncher(s)
     s.used = true
     s.resumeCommand = safeAgentResumeCommand(command)
-    const safeLabel = safeAgentLabel(command)
-    if (!s.custom && safeLabel) {
-      s.baseName = safeLabel
-      applyTitle(s)
-    }
     setState(s, 'working') // pulse the tab the instant they click — immediate feedback
     coachOnce('pulse', PULSE_COACH)
     api.term.input(s.id, command + '\r')
@@ -476,8 +453,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     const box = document.createElement('div')
     box.className = 'term-confirm'
     const name = s.tabLabel.textContent
-    // Labels include explicit user renames, so keep them out of innerHTML and render
-    // them literally with textContent.
+    // Render the immutable ordinal literally with textContent.
     const title = document.createElement('div')
     title.className = 'tc-title'
     title.textContent = `Close “${name}”?`
@@ -783,7 +759,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       const looking = document.hasFocus() && activeId === s.id
       if (!looking) {
         s.unseen = true
-        onAwait?.({ id: s.id, name: visibleLabel(s) || s.baseName, summary: '' })
+        onAwait?.({ id: s.id, name: s.baseName, summary: '' })
       }
     } else if (next === 'working') {
       s.unseen = false
@@ -861,13 +837,12 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // `cwd` and `resumeCommand` arrive on restored panes (from the session blob):
   // the shell reopens in its old directory and, when resumeCommand is a known
   // agent, the pane offers to resume it (mountResumeCard).
-  function create({ name, command, customLabel, restored, cwd, resumeCommand } = {}) {
+  function create({ command, restored, cwd, resumeCommand } = {}) {
     const id = 'term-' + ++counter
-    // The plainest possible default ("Tab 1"). A preset name (e.g. an agent) wins.
-    // An explicit manual label is used verbatim on session restore. Automatic
-    // context is deliberately never persisted (see getState and the v3 migration).
-    const defaultName = `Tab ${counter}`
-    const displayName = customLabel || (name ? `${name} ${counter}` : defaultName)
+    // Security boundary: this is the terminal's only display identity. It is
+    // derived from an internal counter, written once, and never sourced from
+    // terminal input/output, OSC titles, commands, agents, or restored labels.
+    const displayName = `Terminal ${counter}`
     // Stable per-pane colour slot: store the raw ordinal so recolorAll() can re-pick
     // this pane's hue from any palette/theme (modulo its length) and keep it on its
     // OWN slot across palette swaps, light/dark toggles and drag-reorders.
@@ -947,10 +922,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       theme: TERM_THEMES[themeName],
       cursorBlink: termSettings.cursorBlink,
       scrollback: termSettings.scrollback,
-      // Default-true, but pinned explicitly because the onData handler now LEANS on
-      // it: it re-pins to the bottom only on genuine user input (never on a running
-      // program's query answers), which is how ESC-led keys re-engage sticky-bottom
-      // without us mistaking the terminal's auto-answers for typing. See onData.
+      // Default-true, pinned explicitly so xterm owns scroll-follow behavior for
+      // genuine user input without Concourse retaining input bytes or timings.
       scrollOnUserInput: true,
       allowProposedApi: true
     })
@@ -985,7 +958,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       cardDot,
       cardLabel,
       status: 'running',
-      custom: !!customLabel,
       // Three states: `working` (output flowing — pulsing), `awaiting` (at rest, your
       // move) or `idle` (gone quiet, nothing pending). An agent preset (command)
       // auto-fires on open, so it starts working. A plain shell just sits at its prompt,
@@ -998,17 +970,13 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       quietTimer: null, // slower settle timer for the conservative alt-screen awaiting tell
       follow: true, // sticky-bottom intent: keep the newest line (prompt / agent input box)
       //              visible. True until the user scrolls up to read history (see onScroll),
-      //              re-armed when they actually type/paste (see onData — NOT on the running
-      //              program's query answers). Every write/fit re-asserts the bottom while it's
-      //              set — fixing "the prompt sits below the fold until I hit Enter".
+      //              Every write/fit re-asserts the bottom while it is set.
       pinning: false, // guard: true only while WE scroll programmatically, so the onScroll
       //               below never mistakes our own re-pin (or a reflow) for a user scroll-up.
       lastScreenSig: null, // signature of the last VISIBLE screen — drives the settle debounce
       //                      so output that doesn't change what's on screen (a blinking cursor,
       //                      OSC-title pings, a no-op redraw) can't pin the pane in `working`
-      used: false, // true once the user types or a command runs — then we won't auto-cd it
-      lastInputAt: 0, // timestamp of the last genuine keystroke; PTY output arriving right
-      //                 after it is the prompt ECHOING what you typed, not work (see onData)
+      used: false, // true once an explicit app action runs — then we won't auto-cd it
       isShell: !command, // plain shell vs an agent preset — gates untouched-shell state detection
       resumeCommand:
         safeAgentResumeCommand(command) || safeAgentResumeCommand(resumeCommand) || null,
@@ -1016,8 +984,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       //                 arbitrary shell input or arguments (see terminal-context-policy.js).
       cwd: cwd || null, // shell's cwd at the last prompt (OSC 5152) — persisted with the blob
       resumeCmd: null, // set while a restored pane's resume card is up (see mountResumeCard)
-      baseName: displayName // fallback label shown when nothing better is known
-      // Header identity is explicit metadata only. No terminal stream-derived title state.
+      baseName: displayName // immutable ordinal identity used by notifications
     }
     sessions.set(id, s)
     // Watch this pane's body so it refits itself on any size change (see the
@@ -1062,34 +1029,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       return true
     })
     term.onData((data) => {
-      // xterm's onData carries TWO different things on one channel: (1) genuine
-      // user input — keys typed, text pasted (a bracketed paste arrives wrapped as
-      // \x1b[200~…\x1b[201~); and (2) the terminal's own automatic ANSWERS to
-      // queries the running program emits — cursor-position reports (\x1b[…R),
-      // device attributes (\x1b[?…c), OSC colour answers, mode reports, etc. Both
-      // must reach the PTY, but only (1) is the user driving the pane.
-      //
-      // Conflating them was the "can't scroll up while an agent streams" bug:
-      // agents probe the terminal continuously as they output, and every probe
-      // ANSWER was being treated as "the user typed" — re-arming sticky-bottom
-      // (s.follow) so the very next write snapped the viewport back to the bottom,
-      // making it impossible to hold a scrolled-up position to read history. (It
-      // also marked never-touched shells "used" — so a shell whose prompt probes
-      // the terminal at startup would pulse unbidden.)
-      //
-      // Program answers are always ESC-introduced control strings; real typed text
-      // never is. A bracketed paste is ESC-led but IS user input, so admit the
-      // \x1b[200~ paste marker. ESC-led special keys (arrows, Esc, F-keys) fall
-      // through as "not input" here, but xterm's native scrollOnUserInput (set in
-      // the Terminal options) still re-pins them — it fires only for genuine input,
-      // never for these answers, and routes through onScroll below to set s.follow.
-      const userInput = data.charCodeAt(0) !== 0x1b || data.startsWith('\x1b[200~')
-      api.term.input(id, data) // forward EVERYTHING to the PTY — answers included
-      if (!userInput) return
-      s.used = true
-      s.lastInputAt = Date.now() // mark "just typed" so the echo of these keys doesn't pulse
-      s.follow = true // typing/paste means "show me what I'm doing" — re-engage sticky-bottom
-      if (s.launcher) dismissPaneLauncher(s) // typing into the pane = "I'll drive it myself"
+      // This callback is a one-way transport boundary. A terminal cannot work
+      // without forwarding its byte stream to the PTY, but Concourse does not
+      // inspect, classify, copy, retain, or derive metadata from those bytes.
+      api.term.input(id, data)
     })
     term.onResize(({ cols, rows }) => api.term.resize(id, cols, rows))
     // Track the user's scroll intent so sticky-bottom never fights them. Every scroll —
@@ -1153,7 +1096,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     })
     // Drag to reorder tabs; the grid/stack order follows the tab order.
     wireTabDrag(tabEl, s)
-    // Right-click still offers rename / close.
+    // Right-click offers close only. Terminal labels are intentionally immutable.
     tabEl.addEventListener('contextmenu', (e) => {
       e.preventDefault()
       openTabMenu(e.clientX, e.clientY, s)
@@ -1162,9 +1105,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       e.preventDefault()
       openTabMenu(e.clientX, e.clientY, s)
     })
-    tabLabel.addEventListener('dblclick', () => renameStart(s, tabLabel))
-    cellLabel.addEventListener('dblclick', () => renameStart(s, cellLabel))
-
     applyLayout()
     // In album flow a brand-new terminal becomes the centre; elsewhere just focus.
     if (layout === 'flow') centerOn(id)
@@ -1189,12 +1129,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   }
 
   // ---- session restore (Tier A: fresh shells, same layout) ----
-  // Snapshot only explicit user labels, layout, cwd, and normalized agent-resume
-  // commands. Automatic headers and terminal input are intentionally not captured.
+  // Snapshot layout, cwd, and normalized agent-resume commands only. Labels and
+  // terminal input are never captured or persisted.
   function getState() {
     const list = [...sessions.values()]
     const tabs = list.map((s) => ({
-      customLabel: persistedCustomLabel(s.custom, s.tabLabel.textContent),
       cwd: s.cwd || null,
       resumeCommand: s.resumeCommand || null
     }))
@@ -1211,7 +1150,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     for (const t of state.tabs) {
       if (!t) continue
       create({
-        customLabel: t.customLabel,
         restored: true,
         cwd: t.cwd,
         resumeCommand: t.resumeCommand
@@ -1323,81 +1261,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     s.term.focus()
   }
 
-  // ---- rename ----
-  function renameStart(s, labelEl) {
-    const input = document.createElement('input')
-    input.className = 'rename-input'
-    // Prefill with the label's primary track.
-    input.value = labelEl.querySelector('.lbl-main')?.textContent ?? labelEl.textContent
-    labelEl.replaceWith(input)
-    input.focus()
-    input.select()
-    const commit = () => {
-      const v = input.value.trim()
-      input.replaceWith(labelEl === s.tabLabel ? s.tabLabel : s.cellLabel)
-      if (!v) {
-        // An empty rename clears the custom flag, re-arming auto-titling.
-        s.custom = false
-        applyTitle(s)
-        return
-      }
-      s.custom = true
-      s.tabLabel.textContent = v
-      s.cellLabel.textContent = v
-      s.cardLabel.textContent = v
-      // The label was detached (replaced by the input) during the edit and its content
-      // just changed; re-measure so a stale hover-marquee shift from before the rename
-      // doesn't persist on the restored label.
-      requestAnimationFrame(() => {
-        measureMarquee(s.tabLabel)
-        measureMarquee(s.cellLabel)
-      })
-    }
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') commit()
-      if (e.key === 'Escape') input.replaceWith(labelEl)
-    })
-    input.addEventListener('blur', commit)
-  }
-
-  // ---- title resolver ---------------------------------------------------------
-  // Only explicit metadata may name a pane: a manual rename, a trusted allowlisted
-  // agent launcher, or the stable base name. Terminal input, output, OSC titles and
-  // model summaries are deliberately outside this boundary.
-  // The REAL, width-aware truncation is CSS's job: every label (.cell-label, .term-tab-label,
-  // .card-label) is `overflow:hidden; text-overflow:ellipsis`, each bounded to its own width —
-  // so a full-width cell header shows far more than a 180px tab, and each ellipsises exactly at
-  // its own pixel edge. MAX_TITLE is only a sanity bound for an unusually long manual label;
-  // it should stay well above any width we render.
-  const MAX_TITLE = 200
-  // Labels use a child track so the existing overflow marquee remains width-aware.
-  const clamp = (v) => (v && v.length > MAX_TITLE ? v.slice(0, MAX_TITLE - 1) + '…' : v || '')
-  function visibleLabel(s) {
-    return automaticTerminalLabel(s)
-  }
-  // Write [primary] + optional dim [— secondary] into a clip element, reusing a single
-  // .lbl-inner track (the marquee transforms this child; the clip element stays put).
-  function setTwoPart(clipEl, primary, secondary) {
-    if (!clipEl || !clipEl.isConnected) return
-    let inner = clipEl.firstElementChild
-    if (!inner || !inner.classList.contains('lbl-inner')) {
-      clipEl.replaceChildren()
-      inner = document.createElement('span')
-      inner.className = 'lbl-inner'
-      clipEl.appendChild(inner)
-    }
-    const main = document.createElement('span')
-    main.className = 'lbl-main'
-    main.textContent = primary // textContent keeps explicit labels literal (no HTML)
-    if (secondary) {
-      const sub = document.createElement('span')
-      sub.className = 'lbl-sub'
-      sub.textContent = ' — ' + secondary
-      inner.replaceChildren(main, sub)
-    } else {
-      inner.replaceChildren(main)
-    }
-  }
+  // Terminal labels are written only during create(). The remaining helper is
+  // presentation-only and never changes label content.
   // Mark a clip as overflowing (so :hover can marquee it) and hand the keyframes the exact
   // pixel distance + a distance-scaled duration. Read-only layout query; safe in rAF/RO.
   function measureMarquee(clipEl) {
@@ -1415,19 +1280,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     } else {
       clipEl.classList.remove('is-overflow')
     }
-  }
-  function applyTitle(s) {
-    if (s.custom) return // a manual rename always wins
-    const primary = clamp(visibleLabel(s))
-    setTwoPart(s.tabLabel, primary, null)
-    setTwoPart(s.cellLabel, primary, null)
-    s.cardLabel.textContent = primary // rail card name: single line, no marquee
-    s.tabEl.title = primary
-    s.cell.title = primary
-    requestAnimationFrame(() => {
-      measureMarquee(s.tabLabel)
-      measureMarquee(s.cellLabel)
-    })
   }
   // ---- fit ----
   // A pane's ROLE in the current layout decides whether it drives its PTY size.
@@ -1604,7 +1456,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // Re-check label overflow whenever a label's own width changes — a layout switch
   // (tabs→stack→flow), a window resize, or more tabs squeezing the bar. This keeps the
   // hover-marquee's "is it overflowing / by how much" state correct without re-running
-  // applyTitle. Reading scrollWidth/clientWidth inside an RO callback is the standard
+  // label creation. Reading scrollWidth/clientWidth inside an RO callback is the standard
   // (no-thrash) place to do it.
   const labelResizeObserver = new ResizeObserver((entries) => {
     for (const entry of entries) measureMarquee(entry.target)
@@ -1660,13 +1512,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       return
     }
     if (s.state !== 'working') {
-      // Don't let the prompt's echo of your own keystrokes start the spinner: output within
-      // ECHO_GRACE_MS of the last key you pressed is almost certainly that echo, not work.
-      // This is the fix for "the spinner flickers as I type and vanishes when I stop" — typing
-      // a command line isn't the agent thinking. A real command/agent keeps emitting past the
-      // window and pulses then. Only the idle→working ENTRY is gated (we're not yet working,
-      // so there are no settle timers to preserve by falling through).
-      if (Date.now() - s.lastInputAt < ECHO_GRACE_MS) return
       setState(s, 'working') // repaints; also clears any awaiting come-look
       // The first time you ever see a tab start pulsing, explain it — Pulse
       // finally names itself at the exact moment it has meaning. Once ever.
