@@ -6,7 +6,7 @@
 // codesign verification, and Gatekeeper assessment all succeed.
 //
 // Usage:
-//   npm run release            # create (or update) the release for package.json's version
+//   npm run release            # install locally, then publish if distribution credentials exist
 //   npm run release -- --draft # create as a draft so you can review/edit before publishing
 //   npm run release -- --notes path/to/body.md   # use a hand-written body verbatim
 //   npm run release -- --dry-run # print the tag/title/notes and exit; touch nothing
@@ -39,10 +39,17 @@ const REQUIRED_RELEASE_SECRETS = [
   'APPLE_API_KEY_ID',
   'APPLE_API_ISSUER'
 ]
+const localInstaller = path.join(root, 'scripts', 'install-local.mjs')
 
 function die(msg) {
   console.error(`\n✗ ${msg}\n`)
   process.exit(1)
+}
+
+function skipPublicRelease(reason) {
+  console.warn(`\n⚠ Local v${version} install succeeded; public ${tag} release skipped.`)
+  console.warn(`  ${reason}\n`)
+  process.exit(0)
 }
 
 // `git`/`gh` wrappers: trimmed stdout on success, or null on failure (so callers
@@ -60,19 +67,30 @@ function run(cmd, a, { capture = true } = {}) {
   }
 }
 
+// A real release always refreshes /Applications first. This happens before GitHub
+// auth/secret checks by design: a missing public-distribution credential must never
+// leave the developer running an old local build again.
+if (!dryRun) {
+  try {
+    execFileSync(process.execPath, [localInstaller], { cwd: root, stdio: 'inherit' })
+  } catch {
+    die('local build/install failed; refusing to continue to the public release step')
+  }
+}
+
 // A dry run only previews the tag/notes, so it tolerates missing auth/secrets.
 if (!dryRun && run('gh', ['auth', 'status']) === null) {
-  die('gh is not authenticated. Run:  gh auth login')
+  skipPublicRelease('GitHub CLI is not authenticated. Run `gh auth login` when you want to publish.')
 }
 if (!dryRun) {
   const configured = run('gh', ['secret', 'list', '--json', 'name', '-q', '.[].name'])
   const names = new Set((configured || '').split('\n').filter(Boolean))
   const missing = REQUIRED_RELEASE_SECRETS.filter((name) => !names.has(name))
   if (missing.length) {
-    die(
-      `Refusing to create ${tag}: protected macOS distribution credentials are missing:\n` +
+    skipPublicRelease(
+      `Protected macOS distribution credentials are missing:\n` +
         missing.map((name) => `  - ${name}`).join('\n') +
-        '\nConfigure them as GitHub Actions secrets; never paste their values into release commands or notes.'
+        '\n  Configure them as GitHub Actions secrets; never paste their values into release commands or notes.'
     )
   }
 }

@@ -57,6 +57,15 @@ npm start        # preview the built app
 npm run dist     # package a macOS .app (electron-builder)
 ```
 
+Install the current source as your local production app:
+
+```bash
+npm run install:local  # rebuild, verify, and replace /Applications/Concourse.app
+npm run release        # do the same local install, then publish only when signing credentials exist
+```
+
+The local installer stages and verifies the complete app before replacing the existing bundle. It moves the previous app to Trash, clears quarantine from the new local build, and launches it unless Concourse is already running. A running instance is never terminated because it may contain active terminals; quit and reopen it to load the new build. Local ad-hoc signing is for this Mac only—public downloads are produced separately by the signed and notarized CI workflow.
+
 > **macOS native builds:** node-pty compiles C++. If `npm install` fails with `'functional' file not found`, your Command Line Tools are incomplete — point the toolchain at full Xcode:
 > ```bash
 > sudo xcode-select -s /Applications/Xcode.app/Contents/Developer

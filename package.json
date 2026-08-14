@@ -27,6 +27,7 @@
     "dist:win": "npm run preflight && npm run fetch:llama && npm run clean && electron-vite build && electron-builder --win",
     "pack:win": "npm run preflight && npm run fetch:llama && npm run clean && electron-vite build && electron-builder --win --dir",
     "release": "node scripts/release.mjs",
+    "install:local": "node scripts/install-local.mjs",
     "smoke": "node scripts/smoke.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
