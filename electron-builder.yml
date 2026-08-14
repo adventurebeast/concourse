@@ -29,10 +29,14 @@ mac:
     - target: dmg
       arch:
         - arm64
-  # Developer beta: no Apple signing/notarization. electron-builder ad-hoc-signs
-  # the arm64 binary so it runs locally; downloaded copies still hit Gatekeeper,
-  # so the README documents the one-time `xattr -dr com.apple.quarantine` step.
-  identity: null
+  # Public macOS artifacts are produced only by build-mac.yml, where CSC_LINK
+  # supplies a Developer ID Application certificate and the APPLE_API_* secrets
+  # authenticate notarization. Never set identity:null or identity:"-" here:
+  # unsigned/ad-hoc apps fail Gatekeeper after download.
+  hardenedRuntime: true
+  notarize: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
 win:
   # x64 NSIS installer. Built on a windows-latest runner (see build-win.yml) so
   # node-pty and the llama.cpp runtime are native — no wine, no cross-compile.

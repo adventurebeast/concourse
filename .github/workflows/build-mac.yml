@@ -1,0 +1,74 @@
+name: Build (macOS signed and notarized)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    env:
+      CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Require protected signing credentials
+        shell: bash
+        run: |
+          missing=0
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Required protected credential $name is not configured"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Install
+        run: npm ci
+      - name: Vendor llama runtime
+        run: npm run fetch:llama
+      - name: Build renderer/main
+        run: npm run build
+      - name: Build, Developer ID sign, notarize, and staple
+        run: npx electron-builder --mac --publish never
+
+      - name: Enforce macOS distribution trust boundary
+        shell: bash
+        run: |
+          app="release/mac-arm64/Concourse.app"
+          dmg="release/Concourse-${GITHUB_REF_NAME#v}-arm64.dmg"
+          codesign --verify --deep --strict --verbose=4 "$app"
+          codesign -d --verbose=4 "$app" 2>signature.txt
+          grep -q '^Authority=Developer ID Application:' signature.txt
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+          hdiutil verify "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+
+      - name: Upload signed installer as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: concourse-macos-arm64-signed
+          path: |
+            release/*.dmg
+            release/*.dmg.blockmap
+            release/latest-mac.yml
+          if-no-files-found: error
+
+      - name: Attach signed installer to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" release/*.dmg release/*.dmg.blockmap release/latest-mac.yml --clobber

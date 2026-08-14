@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-// Publish the already-built DMG in release/ as a GitHub Release — the manual
-// distribution step that turns a local `npm run dist` into something users can
-// download. This does NOT build: run `npm run dist` (or `/build-app`) first, then
-// `npm run release`. Mirrors the hand-rolled convention used through v0.0.20:
-// tag `vX.Y.Z`, title "Concourse X.Y.Z — developer beta", unsigned-beta notes
-// with the one-time Gatekeeper quarantine bypass.
+// Create the GitHub Release + immutable version tag. Native installers are never
+// uploaded from a workstation: the tag triggers build-mac.yml and build-win.yml,
+// which build on native runners and attach verified artifacts. The macOS workflow
+// refuses to upload unless Developer ID signing, notarization, stapling, strict
+// codesign verification, and Gatekeeper assessment all succeed.
 //
 // Usage:
 //   npm run release            # create (or update) the release for package.json's version
@@ -12,15 +11,14 @@
 //   npm run release -- --notes path/to/body.md   # use a hand-written body verbatim
 //   npm run release -- --dry-run # print the tag/title/notes and exit; touch nothing
 //
-// Idempotent: re-running for the same version re-uploads the DMG (--clobber) and
-// updates the notes, so a botched run is safe to repeat. gh auth + a built DMG
-// are the only prerequisites; the release tag is created at HEAD by gh, so run
-// this AFTER the version-bump commit is in place.
+// Idempotent: re-running for the same version updates the notes. The release tag
+// is created at HEAD by gh, so run this AFTER the version-bump commit is in place.
 
-import { readFileSync, existsSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'
 import path from 'path'
+import os from 'os'
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const args = process.argv.slice(2)
@@ -33,9 +31,14 @@ const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
 const version = pkg.version
 const tag = `v${version}`
 const dmgName = `Concourse-${version}-arm64.dmg`
-const dmg = path.join(root, 'release', dmgName)
-// Uploaded by CI (build-win.yml), not this script — the notes just reference it.
 const exeName = `Concourse-${version}-x64.exe`
+const REQUIRED_RELEASE_SECRETS = [
+  'MAC_CSC_LINK',
+  'MAC_CSC_KEY_PASSWORD',
+  'APPLE_API_KEY',
+  'APPLE_API_KEY_ID',
+  'APPLE_API_ISSUER'
+]
 
 function die(msg) {
   console.error(`\n✗ ${msg}\n`)
@@ -57,12 +60,21 @@ function run(cmd, a, { capture = true } = {}) {
   }
 }
 
-// A dry run only previews the notes, so it tolerates a missing DMG / no gh auth.
-if (!existsSync(dmg) && !dryRun) {
-  die(`No DMG at release/${dmgName}.\n  Build it first:  npm run dist   (or /build-app)`)
-}
+// A dry run only previews the tag/notes, so it tolerates missing auth/secrets.
 if (!dryRun && run('gh', ['auth', 'status']) === null) {
   die('gh is not authenticated. Run:  gh auth login')
+}
+if (!dryRun) {
+  const configured = run('gh', ['secret', 'list', '--json', 'name', '-q', '.[].name'])
+  const names = new Set((configured || '').split('\n').filter(Boolean))
+  const missing = REQUIRED_RELEASE_SECRETS.filter((name) => !names.has(name))
+  if (missing.length) {
+    die(
+      `Refusing to create ${tag}: protected macOS distribution credentials are missing:\n` +
+        missing.map((name) => `  - ${name}`).join('\n') +
+        '\nConfigure them as GitHub Actions secrets; never paste their values into release commands or notes.'
+    )
+  }
 }
 
 // Previous release tag = the latest published gh release that isn't this version.
@@ -96,16 +108,12 @@ const body =
     ? readFileSync(notesFile, 'utf8')
     : `**Concourse** — a lightweight, ultrafast, open-source IDE for driving a fleet of CLI coding agents (Claude Code, Codex, and any terminal-native agent) from one workbench.
 
-> ⚠️ **Developer beta.** Apple Silicon (M-series) Macs and 64-bit Windows. **Not yet code-signed** — so macOS Gatekeeper and Windows SmartScreen will each warn on first launch; one-time bypasses below. Signed builds are coming for 1.0. On an Intel Mac, run from source (see the README).
+> ⚠️ **Developer beta.** Apple Silicon (M-series) Macs and 64-bit Windows. macOS builds are Developer ID-signed, Apple-notarized, and Gatekeeper-verified by CI before upload. Windows builds are not yet code-signed, so SmartScreen may warn on first launch. On an Intel Mac, run from source (see the README).
 
 ### Install — macOS (Apple Silicon)
-1. Download **\`${dmgName}\`** below.
+1. Download **\`${dmgName}\`** below. (The signed and notarized CI build appears after the release checks finish.)
 2. Open it and drag **Concourse** into **Applications**.
-3. Clear the download quarantine once, then open normally:
-   \`\`\`bash
-   xattr -dr com.apple.quarantine /Applications/Concourse.app
-   \`\`\`
-   (Or: right-click the app → **Open**, or **System Settings → Privacy & Security → Open Anyway**.)
+3. Open Concourse normally. No quarantine-removal command is required.
 
 ### Install — Windows (x64)
 1. Download **\`${exeName}\`** below. (Built by CI — it appears a few minutes after this release goes live.)
@@ -122,30 +130,29 @@ const title = `Concourse ${version} — developer beta`
 if (dryRun) {
   console.log(`tag:   ${tag}`)
   console.log(`title: ${title}`)
-  console.log(`asset: release/${dmgName}${existsSync(dmg) ? '' : '  (NOT BUILT YET)'}`)
+  console.log(`assets: signed macOS + native Windows installers built by tag-triggered CI`)
   console.log(`\n--- notes ---\n${body}`)
   process.exit(0)
 }
 
 // gh chokes on a multi-line --notes string across shells; hand it a file instead.
-const bodyFile = path.join(root, 'release', `.notes-${version}.md`)
+const notesDir = mkdtempSync(path.join(os.tmpdir(), 'concourse-release-'))
+const bodyFile = path.join(notesDir, `.notes-${version}.md`)
 writeFileSync(bodyFile, body)
 const exists = run('gh', ['release', 'view', tag]) !== null
 
 if (exists) {
-  console.log(`↻ Release ${tag} exists — updating notes and re-uploading DMG…`)
+  console.log(`↻ Release ${tag} exists — updating notes…`)
   if (run('gh', ['release', 'edit', tag, '--title', title, '--notes-file', bodyFile], { capture: false }) === null)
     die(`Failed to update release ${tag}.`)
-  if (run('gh', ['release', 'upload', tag, dmg, '--clobber'], { capture: false }) === null)
-    die(`Failed to upload ${dmgName}.`)
 } else {
   console.log(`↑ Creating release ${tag}…`)
-  const create = ['release', 'create', tag, dmg, '--title', title, '--notes-file', bodyFile]
+  const create = ['release', 'create', tag, '--title', title, '--notes-file', bodyFile]
   if (draft) create.push('--draft')
   if (run('gh', create, { capture: false }) === null) die(`Failed to create release ${tag}.`)
 }
 
 const url = run('gh', ['release', 'view', tag, '--json', 'url', '-q', '.url']) || ''
-console.log(`\n✓ ${draft && !exists ? 'Draft ' : ''}Release ${tag} ready with ${dmgName}`)
+console.log(`\n✓ ${draft && !exists ? 'Draft ' : ''}Release ${tag} created; native CI artifacts are pending`)
 if (url) console.log(`  ${url}`)
 if (!notesFile) console.log('  (auto-generated "What\'s new" — edit on GitHub to polish.)')

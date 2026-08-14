@@ -36,15 +36,9 @@ And it's built to be **ultrafast, lightweight, and easy on your system**: a vani
 
 1. Download the latest `Concourse-<version>-arm64.dmg` from [**Releases**](https://github.com/adventurebeast/concourse/releases).
 2. Open the DMG and drag **Concourse** into **Applications**.
-3. This beta is **not signed or notarized by Apple yet**, so macOS Gatekeeper will block it on first launch (*"Concourse is damaged"* or *"cannot be opened because the developer cannot be verified"*). Clear the download quarantine once:
+3. Open Concourse normally. Public macOS artifacts are Developer ID-signed, Apple-notarized, stapled, and Gatekeeper-verified by CI before they can appear on the release page.
 
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/Concourse.app
-   ```
-
-   Then open it normally. (Alternatively: right-click the app → **Open**, or go to **System Settings → Privacy & Security → Open Anyway**.)
-
-You only need to do this once per install. A signed, notarized build — where it just opens on double-click — is coming for the public 1.0.
+If a release does not include a macOS DMG, its signing/notarization checks have not completed successfully; do not use or redistribute an unsigned local build as a substitute.
 
 ## Quickstart
 

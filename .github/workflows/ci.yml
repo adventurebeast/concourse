@@ -27,6 +27,5 @@ jobs:
       - name: Test
         run: npm test
 
-# Build / sign / notarize / publish run on tagged releases and live in the
-# distribution epic (they need the Apple Developer cert + a macOS runner); this
-# workflow is the fast PR gate: lint + the unit-test safety net.
+# Native build/publish jobs live in build-mac.yml and build-win.yml. This workflow
+# is the fast PR gate: lint + the unit-test safety net.
