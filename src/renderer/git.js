@@ -69,6 +69,73 @@ export function createGit({ onOpenDiff, onStatus } = {}) {
     errorEl.hidden = true
   }
 
+  let discardOverlay = null
+  function confirmDiscard(item) {
+    if (discardOverlay) return Promise.resolve(false)
+    return new Promise((resolve) => {
+      const opener = document.activeElement
+      const overlay = document.createElement('div')
+      overlay.className = 'term-confirm-overlay'
+      const box = document.createElement('div')
+      box.className = 'term-confirm'
+      box.setAttribute('role', 'alertdialog')
+      box.setAttribute('aria-modal', 'true')
+      box.setAttribute('aria-label', 'Discard changes')
+      const title = document.createElement('div')
+      title.className = 'tc-title'
+      title.textContent = `Discard changes to “${splitPath(item.path).name}”?`
+      const message = document.createElement('div')
+      message.className = 'tc-msg'
+      message.textContent =
+        'Your uncommitted changes will be permanently discarded. This cannot be undone.'
+      const actions = document.createElement('div')
+      actions.className = 'tc-actions'
+      const cancel = document.createElement('button')
+      cancel.className = 'btn tc-cancel'
+      cancel.textContent = 'Cancel'
+      const discard = document.createElement('button')
+      discard.className = 'btn tc-danger'
+      discard.textContent = 'Discard Changes'
+      actions.append(cancel, discard)
+      box.append(title, message, actions)
+      overlay.appendChild(box)
+      document.body.appendChild(overlay)
+      discardOverlay = overlay
+      const finish = (proceed) => {
+        if (discardOverlay !== overlay) return
+        discardOverlay = null
+        overlay.remove()
+        document.removeEventListener('keydown', onKey, true)
+        if (opener?.isConnected) opener.focus()
+        resolve(proceed)
+      }
+      const onKey = (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          event.stopPropagation()
+          finish(false)
+        } else if (event.key === 'Tab') {
+          event.preventDefault()
+          ;(document.activeElement === cancel ? discard : cancel).focus()
+        }
+      }
+      document.addEventListener('keydown', onKey, true)
+      cancel.addEventListener('click', () => finish(false))
+      discard.addEventListener('click', () => finish(true))
+      overlay.addEventListener('mousedown', (event) => {
+        if (event.target === overlay) finish(false)
+      })
+      cancel.focus()
+    })
+  }
+
+  async function discardChanges(item) {
+    // Untracked files go to the OS Trash and remain recoverable. Tracked files
+    // are replaced by Git, so require an explicit confirmation for that action.
+    if (item.status !== 'U' && !(await confirmDiscard(item))) return
+    return api.git.discard([item.path])
+  }
+
   function stagedCount() {
     return lastStatus.isRepo && lastStatus.staged ? lastStatus.staged.length : 0
   }
@@ -174,7 +241,7 @@ export function createGit({ onOpenDiff, onStatus } = {}) {
     if (isStaged) {
       addAction('−', 'Unstage Changes', () => api.git.unstage([item.path]))
     } else {
-      addAction('↩', 'Discard Changes', () => api.git.discard([item.path]))
+      addAction('↩', 'Discard Changes', () => discardChanges(item))
       addAction('+', 'Stage Changes', () => api.git.stage([item.path]))
     }
 
@@ -186,7 +253,7 @@ export function createGit({ onOpenDiff, onStatus } = {}) {
       try {
         const { original, modified } = await api.git.diff(item.path, isStaged)
         if (typeof onOpenDiff === 'function') {
-          onOpenDiff({ path: item.path, original, modified, title: name })
+          onOpenDiff({ path: item.path, original, modified, title: name, staged: isStaged })
         }
       } catch {
         // ignore diff failures (e.g. binary / missing blobs)

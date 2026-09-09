@@ -24,26 +24,42 @@ async function canonical(dir) {
 // `watchers` is the recursive fs-watcher manager (src/main/watcher.js): every time
 // a window's root changes we (re)point its watcher at the new folder so the file
 // tree stays in sync with on-disk changes.
-export function registerWorkspace(ctx, watchers) {
+export function registerWorkspace(ctx, watchers, { openWindow } = {}) {
   ipcMain.handle('workspace:get', (e) => ctx.getRoot(e.sender))
 
-  ipcMain.handle('workspace:open', async (e) => {
+  async function openDirectory(e, raw, opts = {}) {
+    const dir = await canonical(raw)
+    // A workbench belongs to one workspace. Switching that root in place would
+    // strand live agents and unsaved editor buffers, then save them under the
+    // wrong project's session. Open another window and keep this one intact.
+    await addRecent(dir)
+    await setLastRoot(dir)
+    refreshAppMenu()
+    // Read the current root after the awaits: two rapid folder-open requests
+    // must not both see an empty window and replace each other's root.
+    const current = ctx.getRoot(e.sender)
+    const separate = (current && current !== dir) || opts?.newWindow === true
+    if (separate && !openWindow) return null
+    if (separate) {
+      openWindow(dir)
+      return null
+    }
+    ctx.setRoot(e.sender, dir)
+    watchers.start(BrowserWindow.fromWebContents(e.sender), dir)
+    return dir
+  }
+
+  ipcMain.handle('workspace:open', async (e, opts) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
     if (result.canceled || result.filePaths.length === 0) return null
-    const dir = await canonical(result.filePaths[0])
-    ctx.setRoot(e.sender, dir)
-    watchers.start(win, dir)
-    await addRecent(dir)
-    await setLastRoot(dir)
-    refreshAppMenu() // Open Recent just changed
-    return ctx.getRoot(e.sender)
+    return openDirectory(e, result.filePaths[0], opts)
   })
 
   // Open a known path (e.g. a click on a recent project, or session restore on
   // launch). Validates that the directory still exists; returns null if it's gone
   // so the renderer can prune.
-  ipcMain.handle('workspace:openPath', async (e, raw) => {
+  ipcMain.handle('workspace:openPath', async (e, raw, opts) => {
     if (!raw) return null
     try {
       const stat = await fs.stat(raw)
@@ -51,13 +67,7 @@ export function registerWorkspace(ctx, watchers) {
     } catch {
       return null
     }
-    const dir = await canonical(raw)
-    ctx.setRoot(e.sender, dir)
-    watchers.start(BrowserWindow.fromWebContents(e.sender), dir)
-    await addRecent(dir)
-    await setLastRoot(dir)
-    refreshAppMenu() // Open Recent just changed
-    return ctx.getRoot(e.sender)
+    return openDirectory(e, raw, opts)
   })
 
   ipcMain.handle('workspace:recents', () => getRecents())

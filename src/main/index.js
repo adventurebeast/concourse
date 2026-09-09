@@ -194,7 +194,7 @@ function titleBarOptions() {
   return {}
 }
 
-function createWindow({ fresh = false } = {}) {
+function createWindow({ fresh = false, root = null } = {}) {
   // Restore the last window's size/position when it's still on a connected display;
   // otherwise fall back to a centered 1400x900 (also the genuine first-run default).
   const restore = !fresh && boundsVisible(savedBounds) ? savedBounds : null
@@ -212,6 +212,13 @@ function createWindow({ fresh = false } = {}) {
       sandbox: false
     }
   })
+  // Workspace IPC validates/canonicalizes a requested folder before creating its
+  // window. Make it boot-authoritative through the trusted per-window context;
+  // the renderer restores this project regardless of the startup preference.
+  if (root) {
+    ctx.setRoot(win.webContents, root)
+    watchers.start(win, root)
+  }
   trackWindowBounds(win)
   // Confirm before the window's close button (X) tears down its terminals. The dialog
   // is async, so we cancel this close, ask, and only re-issue win.close() (now flagged
@@ -365,7 +372,9 @@ app.whenReady().then(async () => {
   purgeLegacyTerminalSessions()
   await purgeCommandHistory()
 
-  registerWorkspace(ctx, watchers)
+  registerWorkspace(ctx, watchers, {
+    openWindow: (root) => createWindow({ fresh: true, root })
+  })
   registerFs(ctx)
   registerGit(ctx)
   registerSearch(ctx)

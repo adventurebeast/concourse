@@ -18,10 +18,12 @@
 //
 // Exit 0 = booted and stayed up; exit 1 = crashed/never started (with the crash
 // report path if one was found). Safe to run inside Concourse: open -n is a
-// separate instance and we never quit anything.
+// separate instance and we never quit anything. Each check uses a fresh temporary
+// profile, so it cannot lock, migrate, save over, or purge shell init files from a
+// user's running instance. The profile is retained for inspection.
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
-import { execFileSync, execSync } from 'child_process'
+import { existsSync, readFileSync, readdirSync, statSync, mkdtempSync } from 'fs'
+import { execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'
 import path from 'path'
 import os from 'os'
@@ -30,8 +32,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const args = process.argv.slice(2)
 const waitIdx = args.indexOf('--wait')
 const waitSec = waitIdx !== -1 ? Number(args[waitIdx + 1]) || 6 : 6
-const appPath =
-  args.find((a) => a.endsWith('.app')) || '/Applications/Concourse.app'
+const appPath = args.find((a) => a.endsWith('.app')) || '/Applications/Concourse.app'
 
 const version = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
 const fail = (msg) => {
@@ -40,8 +41,23 @@ const fail = (msg) => {
 }
 
 if (!existsSync(appPath)) {
-  fail(`app not found at ${appPath}\n  Install it first (e.g. /build-app installs to /Applications).`)
+  fail(
+    `app not found at ${appPath}\n  Install it first (e.g. /build-app installs to /Applications).`
+  )
 }
+let installedVersion
+try {
+  installedVersion = execFileSync(
+    '/usr/libexec/PlistBuddy',
+    ['-c', 'Print :CFBundleShortVersionString', path.join(appPath, 'Contents', 'Info.plist')],
+    { encoding: 'utf8' }
+  ).trim()
+} catch {
+  fail(`cannot read the installed bundle version at ${appPath}`)
+}
+if (installedVersion !== version)
+  fail(`installed bundle is v${installedVersion}; expected v${version}`)
+const smokeProfile = mkdtempSync(path.join(os.tmpdir(), 'concourse-packaged-smoke-'))
 
 // The Mach-O the bundle actually runs — matched by full path so it never collides
 // with this node process or an editor that merely has "Concourse" in a filename.
@@ -49,7 +65,7 @@ const execGlob = `${appPath}/Contents/MacOS/`
 const pids = () => {
   try {
     return new Set(
-      execSync(`pgrep -f ${JSON.stringify(execGlob)}`, { encoding: 'utf8' })
+      execFileSync('pgrep', ['-f', execGlob], { encoding: 'utf8' })
         .split('\n')
         .map((s) => s.trim())
         .filter(Boolean)
@@ -77,21 +93,12 @@ const before = pids()
 const startMs = Date.now()
 console.log(`▶ launching ${appPath} (expecting v${version})…`)
 try {
-  execFileSync('open', ['-n', appPath])
+  execFileSync('open', ['-n', appPath, '--args', `--user-data-dir=${smokeProfile}`])
 } catch (e) {
   fail(`open failed: ${e?.message || e}`)
 }
 
-// Busy-wait without timers (keep the script dependency-free); we only need a coarse
-// settle window, and the loop is idle CPU for a few seconds at most.
-const deadline = startMs + waitSec * 1000
-while (Date.now() < deadline) {
-  try {
-    execSync('sleep 0.5')
-  } catch {
-    break
-  }
-}
+await new Promise((resolve) => setTimeout(resolve, waitSec * 1000))
 
 const after = pids()
 const launched = [...after].filter((p) => !before.has(p))
@@ -107,5 +114,7 @@ if (crash) {
   fail(`a new Concourse crash report appeared during launch:\n  ${crash}`)
 }
 
-console.log(`\n✓ smoke: Concourse booted and stayed up (${launched.length} new process) after ${waitSec}s.`)
-console.log(`  Confirm the bottom-right status bar reads v${version}.`)
+console.log(
+  `\n✓ smoke: Concourse booted and stayed up (${launched.length} new process) after ${waitSec}s.`
+)
+console.log(`  Verified installed bundle v${installedVersion}. Isolated profile: ${smokeProfile}`)

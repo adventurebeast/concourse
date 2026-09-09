@@ -58,9 +58,9 @@ contextBridge.exposeInMainWorld('api', {
 
   workspace: {
     get: () => ipcRenderer.invoke('workspace:get'),
-    open: () => ipcRenderer.invoke('workspace:open'),
-    // Open a known folder path (recent project). Returns the root, or null if gone.
-    openPath: (dir) => ipcRenderer.invoke('workspace:openPath', dir),
+    open: (opts) => ipcRenderer.invoke('workspace:open', opts),
+    // Returns this window's root, or null when cancelled/missing/opened separately.
+    openPath: (dir, opts) => ipcRenderer.invoke('workspace:openPath', dir, opts),
     // Recently-opened folders, most-recent first: [{ path, name }].
     recents: () => ipcRenderer.invoke('workspace:recents')
   },
@@ -77,6 +77,8 @@ contextBridge.exposeInMainWorld('api', {
     createFile: (p) => ipcRenderer.invoke('fs:createFile', p),
     createDir: (p) => ipcRenderer.invoke('fs:createDir', p),
     rename: (oldPath, newPath) => ipcRenderer.invoke('fs:rename', oldPath, newPath),
+    move: (srcPath, destDir) => ipcRenderer.invoke('fs:move', srcPath, destDir),
+    chooseDestination: (startPath) => ipcRenderer.invoke('fs:chooseDestination', startPath),
     delete: (p) => ipcRenderer.invoke('fs:delete', p),
     // Write the bytes of a dropped, pathless item (e.g. an image dragged from a
     // web page) to a temp file and return its absolute path. See ipc-fs.js.
@@ -132,7 +134,13 @@ contextBridge.exposeInMainWorld('api', {
     onExit: (cb) => ipcRenderer.on('term:exit', (_e, payload) => cb(payload)),
     // Cwd is explicit shell-integration metadata used only for session placement.
     // Terminal input and executed command text are never captured or exposed.
-    onCwd: (cb) => ipcRenderer.on('term:cwd', (_e, payload) => cb(payload))
+    onCwd: (cb) => ipcRenderer.on('term:cwd', (_e, payload) => cb(payload)),
+    // Fixed process identities only; no command arguments or terminal text.
+    onContext: (cb) => {
+      const listener = (_e, payload) => cb(payload)
+      ipcRenderer.on('term:context', listener)
+      return () => ipcRenderer.removeListener('term:context', listener)
+    }
   },
 
   // OS shell — handlers in src/main/ipc-shell.js (Reveal in Finder / open path)

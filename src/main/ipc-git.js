@@ -1,5 +1,4 @@
 import { ipcMain, shell } from 'electron'
-import { join } from 'path'
 import { promises as fs } from 'fs'
 import { simpleGit } from 'simple-git'
 import { confineRel } from './paths.js'
@@ -98,10 +97,25 @@ export function registerGit(ctx) {
 
     const git = simpleGit(root)
 
-    // original = HEAD blob
+    // Git status knows the source of a staged rename even though the old file
+    // no longer exists on disk. Derive it in main rather than trusting an extra
+    // renderer path; HEAD contains the source name, the index the destination.
+    let originalPath = relPath
+    if (staged) {
+      try {
+        const status = await git.status()
+        const renamed = status.files.find((file) => file.path === relPath && file.index === 'R')
+        if (renamed?.from) originalPath = renamed.from
+      } catch {
+        // Normal diff still works if a concurrent Git operation prevents status.
+      }
+    }
+
+    // Staged compares HEAD → index; unstaged compares index → working tree.
+    // Using HEAD for both re-displays already staged edits in the Changes view.
     let original = ''
     try {
-      original = await git.show(['HEAD:' + relPath])
+      original = await git.show([staged ? 'HEAD:' + originalPath : ':' + relPath])
     } catch {
       original = ''
     }
@@ -143,7 +157,7 @@ export function registerGit(ctx) {
         }
       })
       if (list.length === 0) return false
-      await git.add(list)
+      await git.raw(['--literal-pathspecs', 'add', '--', ...list])
       return true
     } catch {
       return false
@@ -169,10 +183,10 @@ export function registerGit(ctx) {
       })
       if (list.length === 0) return false
       try {
-        await git.raw(['restore', '--staged', ...list])
+        await git.raw(['--literal-pathspecs', 'restore', '--staged', '--', ...list])
       } catch {
         // Older git / no commits yet: fall back to reset.
-        await git.reset(['--', ...list])
+        await git.raw(['--literal-pathspecs', 'reset', '--', ...list])
       }
       return true
     } catch {
@@ -218,7 +232,7 @@ export function registerGit(ctx) {
           await shell.trashItem(confineRel(root, p))
         } else {
           // Tracked: restore working tree to HEAD/index.
-          await git.checkout(['--', p])
+          await git.raw(['--literal-pathspecs', 'checkout', '--', p])
         }
         acted = true
       } catch {

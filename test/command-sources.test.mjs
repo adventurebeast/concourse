@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import os from 'os'
 import path from 'path'
 import fs from 'fs'
-import { getProjectCommands } from '../src/main/command-sources.js'
+import { getProjectCommands, quoteProjectArgument } from '../src/main/command-sources.js'
+import { execFileSync } from 'node:child_process'
 
 // command-sources.js is pure Node (no electron import), so the project-command
 // parsing — the riskiest read-from-disk logic behind the palette — is
@@ -86,5 +87,29 @@ describe('getProjectCommands — npm / just / make parsing', () => {
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'concourse-empty-'))
     expect(await getProjectCommands(empty)).toEqual([])
     fs.rmSync(empty, { recursive: true, force: true })
+  })
+})
+
+describe('project command argument safety', () => {
+  it.skipIf(process.platform === 'win32')('passes unusual names as a single literal shell argument', () => {
+    const name = "check; printf INJECTED $(printf BAD) `printf BAD` a'b"
+    const quoted = quoteProjectArgument(name, 'darwin')
+    // printf is a harmless stand-in for npm: verify the shell passes the exact
+    // argument and does not execute substitutions or split the command.
+    const received = execFileSync('/bin/sh', ['-c', `printf '%s' ${quoted}`], { encoding: 'utf8' })
+    expect(received).toBe(name)
+  })
+
+  it('keeps ordinary task names readable and rejects terminal control characters/options', () => {
+    expect(quoteProjectArgument('test:unit')).toBe('test:unit')
+    expect(quoteProjectArgument('test\nother')).toBeNull()
+    expect(quoteProjectArgument('test\x1b[2J')).toBeNull()
+    expect(quoteProjectArgument('--if-present')).toBeNull()
+  })
+
+  it('omits shell-dependent names on Windows instead of guessing a quoting dialect', () => {
+    expect(quoteProjectArgument('test:unit', 'win32')).toBe('test:unit')
+    expect(quoteProjectArgument('test & echo injected', 'win32')).toBeNull()
+    expect(quoteProjectArgument('test%ENV%', 'win32')).toBeNull()
   })
 })

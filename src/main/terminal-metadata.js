@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+
 // The only shell metadata Concourse accepts: cwd at a prompt.
 // Payload: ESC ] 5152 ; base64(cwd) BEL (or ST). No command/input marker is parsed.
 const CWD_MARK = '\x1b]5152;'
@@ -14,8 +17,17 @@ function partialMarkTail(value) {
 
 function decodeCwd(payload) {
   try {
-    const cwd = Buffer.from(payload, 'base64').toString('utf8').trim()
-    return cwd && cwd.length <= 4096 ? cwd : null
+    // Buffer's base64 decoder accepts arbitrary junk, and UTF-8 replacement
+    // characters can silently turn damaged metadata into a different path.
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(payload))
+      return null
+    const decoded = Buffer.from(payload, 'base64')
+    const cwd = decoded.toString('utf8')
+    if (!cwd || cwd.length > 4096 || !Buffer.from(cwd, 'utf8').equals(decoded)) return null
+    if (/[\x00-\x1f\x7f]/.test(cwd)) return null
+    // Prompt hooks emit absolute paths. Preserve meaningful surrounding spaces
+    // instead of trimming them, and accept POSIX, drive, and UNC roots.
+    return /^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\])/.test(cwd) ? cwd : null
   } catch {
     return null
   }
@@ -52,4 +64,27 @@ export function extractCwds(buffer) {
     rest = rest.slice(end + terminatorLength)
   }
   return { cwds, rest }
+}
+
+// OSC is untrusted output, even when our prompt hook normally emits it. Only a
+// real directory inside this pane's workspace may become restoration metadata.
+// Resolve symlinks on both sides, and never log a rejected marker or path.
+export async function validateTerminalCwd(root, cwd) {
+  if (
+    !root ||
+    typeof cwd !== 'string' ||
+    !path.isAbsolute(cwd) ||
+    cwd.length > 4096 ||
+    /[\x00-\x1f\x7f]/.test(cwd)
+  )
+    return null
+  try {
+    const [realRoot, realCwd] = await Promise.all([fs.realpath(root), fs.realpath(cwd)])
+    const relative = path.relative(realRoot, realCwd)
+    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative))
+      return null
+    return (await fs.stat(realCwd)).isDirectory() ? realCwd : null
+  } catch {
+    return null
+  }
 }

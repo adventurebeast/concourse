@@ -17,7 +17,7 @@ export const AWAIT_PROMPT_RES = [
   /\b(?:proceed|continue|overwrite|replace|are you sure|do you want|ok to|allow)\b[^\n]*\?\s*$/i,
   /\bpress\s+(?:enter|return|any key)\b[^\n]*$/i, // press enter to continue
   /\b(?:choose|select|enter|type)\b[^?\n]{0,40}:\s*$/i, // choose an option:
-  /[❯➤▶>]\s*\d+[.)]\s+\S/, //                      a numbered menu w/ a cursor (e.g. Claude Code)
+  /(?:^|\n)[❯➤▶>]\s*\d+[.)]\s+[^\n]+(?:\n\s*\d+[.)]\s+[^\n]+)*\s*$/, // parked numbered menu
   /\?\s+(?:\[[^\]]+\]|\([^)]+\))\s*$/ //            trailing "? [a/b]" or "? (default)"
 ]
 

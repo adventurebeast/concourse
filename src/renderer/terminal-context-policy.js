@@ -4,6 +4,27 @@
 // commands, passwords, REPL input, agent prompts, and pasted secrets. It must never be
 // used as label material or persisted for later restoration. Keep the allowed sources
 // small and explicit here so UI changes do not accidentally reintroduce input capture.
+import { processContext } from '../shared/terminal-process.js'
+
+// All automatic presentation is assembled from an ordinal and fixed vocabulary.
+// Even a malformed IPC payload's `label`/`kind` cannot become header material.
+export function terminalPresentation({ ordinal, customLabel, context, status, state }) {
+  const safe = processContext(context?.process, context?.running === true)
+  const number = Number.isSafeInteger(ordinal) && ordinal > 0 ? ordinal : 1
+  const name = customLabel || (safe.process ? `${safe.label} · ${number}` : `Terminal ${number}`)
+  const activity =
+    status === 'exited'
+      ? 'Exited'
+      : state === 'working'
+        ? 'Working'
+        : state === 'awaiting'
+          ? 'Awaiting you'
+          : safe.kind === 'shell' && !safe.running
+            ? 'Shell ready'
+            : 'Quiet'
+  const detail = customLabel && safe.process ? `${safe.label} · ${activity}` : activity
+  return { name, detail }
+}
 
 // Fleet resurrection needs only the identity of a supported agent, never the full
 // command line. Normalize to commands we own so flags, prompts, tokens, and other
@@ -16,6 +37,7 @@ export function safeAgentResumeCommand(command) {
   if (/^gemini(?:\s|$)/.test(value)) return 'gemini'
   if (/^amp(?:\s|$)/.test(value)) return 'amp'
   if (/^goose(?:\s|$)/.test(value)) return 'goose'
+  if (/^opencode(?:\s|$)/.test(value)) return 'opencode'
   return null
 }
 

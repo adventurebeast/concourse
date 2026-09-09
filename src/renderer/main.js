@@ -58,6 +58,7 @@ document.addEventListener('mouseout', (e) => {
 
 // Authoritative current workspace root in the renderer (mirrors the main process).
 let currentRoot = null
+let loadingWorkspace = false
 
 // ---------- Modules ----------
 const editor = createEditor()
@@ -80,7 +81,14 @@ const git = createGit({
 })
 
 const fileTree = createFileTree({
-  onOpenFile: (path) => editor.openFile(path)
+  onOpenFile: (path) => editor.openFile(path),
+  onOpenTerminal: (dir) => terminals.create({ cwd: dir }),
+  onPathChanged: (oldPath, newPath) => editor.handlePathChanged(oldPath, newPath),
+  onGitChanged: () => git.refresh(),
+  onFindInFolder: (dir, name) => {
+    document.querySelector('.activity-btn[data-view="search"]')?.click()
+    search.focusInFolder(dir, name)
+  }
 })
 
 // Live tree: re-read on out-of-app changes (an agent, terminal, or external editor
@@ -174,7 +182,7 @@ function notifyAwait(info) {
     const show = () => {
       awaitNotifs.get(id)?.close?.() // replace only THIS pane's prior note, never another's
       const n = new Notification(`${name} · awaiting you`, {
-        body: info.summary || 'It finished its turn and is waiting for you.'
+        body: 'This terminal is showing an input prompt.'
       })
       n.onclick = () => {
         api.window?.focusSelf?.()
@@ -520,19 +528,35 @@ document
   ?.addEventListener('click', () => api.window?.openSettings?.())
 
 // ---------- Open folder ----------
+// A rootless window may already be running agents after "Empty Window". Keep
+// those shells in place when opening a project, just as main keeps an existing
+// workspace in place when a different folder is selected.
+function workspaceOpenOptions() {
+  return { newWindow: !currentRoot && terminals.getState().tabs.length > 0 }
+}
 async function setWorkspace(root) {
-  if (!root) return
-  if (currentRoot && root !== currentRoot) await saveSession() // persist the outgoing workspace
+  if (!root || root === currentRoot || loadingWorkspace) return
+  loadingWorkspace = true
   currentRoot = root
-  welcome.hide()
   setTitle(root)
-  terminals.cdInto(root) // cd fresh shells (e.g. Shell 1) into the opened folder
-  await fileTree.load(root)
-  git.refresh()
-  lastSavedJSON = null // new root — don't suppress its first save
+  try {
+    await fileTree.load(root)
+    git.refresh()
+    let blob = null
+    try {
+      blob = await api.session.load(root)
+    } catch {
+      // Missing/corrupt stores restore a fresh shell.
+    }
+    await restoreSession(blob)
+    welcome.hide()
+  } finally {
+    loadingWorkspace = false
+    lastSavedJSON = null
+  }
 }
 document.getElementById('open-folder').addEventListener('click', async () => {
-  const root = await api.workspace.open()
+  const root = await api.workspace.open(workspaceOpenOptions())
   await setWorkspace(root)
 })
 
@@ -547,7 +571,7 @@ api.menu?.onCommand?.(async (command, arg) => {
   if (command === 'open-folder') document.getElementById('open-folder')?.click()
   else if (command === 'open-recent') {
     if (!arg) return
-    const root = await api.workspace.openPath(arg)
+    const root = await api.workspace.openPath(arg, workspaceOpenOptions())
     if (root) await setWorkspace(root)
   } else if (command === 'new-file') document.getElementById('ft-new-file')?.click()
   else if (command === 'new-folder') document.getElementById('ft-new-folder')?.click()
@@ -595,17 +619,20 @@ api.update?.onAvailable?.((info) => {
 // Launch / start screen: opens a folder via the dialog or a recent project.
 const welcome = createWelcome({
   onOpenDialog: async () => {
-    const root = await api.workspace.open()
+    const root = await api.workspace.open(workspaceOpenOptions())
     await setWorkspace(root)
   },
   onOpenPath: async (dir) => {
-    const root = await api.workspace.openPath(dir)
+    const root = await api.workspace.openPath(dir, workspaceOpenOptions())
     if (root) await setWorkspace(root)
     else welcome.show() // path was stale and got pruned — re-render recents
   },
   // Dismiss the launch screen without a workspace — land in an empty window and
   // drive agents from the terminal.
-  onEmptyWindow: () => welcome.hide()
+  onEmptyWindow: () => {
+    welcome.hide()
+    if (terminals.getState().tabs.length === 0) terminals.create()
+  }
 })
 
 // ---------- Session save / restore (Tier A: layout + tabs, fresh shells) ----------
@@ -636,12 +663,12 @@ function gatherSession() {
 // Persist only when something changed (cheap dirty check), and never with no folder.
 let lastSavedJSON = null
 async function saveSession() {
-  if (!currentRoot) return
+  if (!currentRoot || loadingWorkspace) return
   const json = JSON.stringify(gatherSession())
   if (json === lastSavedJSON) return
-  lastSavedJSON = json
   try {
     await api.session.save(currentRoot, JSON.parse(json))
+    lastSavedJSON = json
   } catch {
     // best-effort
   }
@@ -666,7 +693,7 @@ document.addEventListener('visibilitychange', () => {
 // unload, so push the blob over the synchronous channel; the main process stages
 // it and the before-quit flush drains it (see ipc-session.js + index.js).
 window.addEventListener('beforeunload', (e) => {
-  if (currentRoot) api.session.saveSync(currentRoot, gatherSession())
+  if (currentRoot && !loadingWorkspace) api.session.saveSync(currentRoot, gatherSession())
   // The session blob persists only path/line, never in-memory edits — so a quit/reload
   // with a dirty editor tab would silently drop the changes. Trigger the native
   // "unsaved changes" confirmation so the user can cancel and save first.
@@ -817,21 +844,12 @@ const isFreshWindow = new URLSearchParams(location.search).get('fresh') === '1'
   // a fresh window (so it doesn't clone the last folder) and when the user prefers the
   // start screen on launch.
   const reopenLast = !isFreshWindow && startupPref === 'last-project'
-  const lastRoot = reopenLast ? await api.session.lastRoot() : null
+  const requestedRoot = await api.workspace.get()
+  const lastRoot = requestedRoot || (reopenLast ? await api.session.lastRoot() : null)
   if (lastRoot) {
-    const root = await api.workspace.openPath(lastRoot)
+    const root = requestedRoot || (await api.workspace.openPath(lastRoot))
     if (root) {
-      currentRoot = root
-      setTitle(root)
-      await fileTree.load(root)
-      git.refresh()
-      let blob = null
-      try {
-        blob = await api.session.load(root)
-      } catch {
-        blob = null
-      }
-      await restoreSession(blob)
+      await setWorkspace(root)
       return
     }
   }
@@ -840,7 +858,8 @@ const isFreshWindow = new URLSearchParams(location.search).get('fresh') === '1'
   setTitle(null)
   await fileTree.load(null)
   git.refresh()
-  terminals.create()
+  // The welcome screen owns no PTY: first-project restore can create precisely
+  // the saved fleet, and "Empty Window" explicitly creates a standalone shell.
   setTerminalsOnly(true) // launch in terminals-only mode; opening a doc reveals the editor
   welcome.show()
 })()

@@ -52,6 +52,7 @@ export function createCommandPalette({
   // Bumped on every close(); open() captures it before awaiting load() so a stale
   // in-flight fetch from a previous open can't repaint a freshly-reopened palette.
   let openGen = 0
+  let opener = null
 
   async function load() {
     if (!listCommands) return
@@ -269,6 +270,7 @@ export function createCommandPalette({
 
   // ---- Open / close ----------------------------------------------------------
   function open() {
+    if (overlay.hidden) opener = document.activeElement
     const gen = ++openGen // claim this open; a later close()/open() invalidates it
     overlay.hidden = false
     search.value = ''
@@ -286,6 +288,9 @@ export function createCommandPalette({
   function close() {
     openGen++ // invalidate any in-flight open() so it can't repaint after we close
     overlay.hidden = true
+    const target = opener
+    opener = null
+    if (target?.isConnected && typeof target.focus === 'function') target.focus()
   }
   function toggle() {
     overlay.hidden ? open() : close()

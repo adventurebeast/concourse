@@ -15,6 +15,7 @@ export function createSearch({ getRoot, onOpenFile } = {}) {
   const clearBtn = document.getElementById('search-clear')
 
   const opts = { caseSensitive: false, wholeWord: false, useRegex: false }
+  let scopeDir = null
   // Groups collapsed by file path, preserved across re-renders within a query.
   const collapsed = new Set()
   let timer = null
@@ -52,6 +53,8 @@ export function createSearch({ getRoot, onOpenFile } = {}) {
     input.value = ''
     autoGrow()
     collapsed.clear()
+    scopeDir = null
+    input.placeholder = 'Search'
     renderEmpty()
     input.focus()
   })
@@ -212,7 +215,7 @@ export function createSearch({ getRoot, onOpenFile } = {}) {
     renderPending()
     let result
     try {
-      result = await api.search.find(query, opts)
+      result = await api.search.find(query, { ...opts, scopeDir })
     } catch {
       result = { files: [], totalMatches: 0, truncated: false, error: 'Search failed.' }
     }
@@ -227,5 +230,12 @@ export function createSearch({ getRoot, onOpenFile } = {}) {
     input.select()
   }
 
-  return { focus, run }
+  function focusInFolder(path, name) {
+    scopeDir = path || null
+    input.placeholder = scopeDir ? `Search in ${name || 'folder'}` : 'Search'
+    input.focus()
+    input.select()
+  }
+
+  return { focus, focusInFolder, run }
 }
