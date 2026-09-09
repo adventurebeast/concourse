@@ -14,6 +14,7 @@ import os from 'os'
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
 const version = pkg.version
+const noLaunch = process.argv.includes('--no-launch')
 const builtApp = path.join(root, 'release', 'mac-arm64', 'Concourse.app')
 const installedApp = '/Applications/Concourse.app'
 const stagingApp = `/Applications/.Concourse-installing-${process.pid}.app`
@@ -115,7 +116,11 @@ try {
   running = false
 }
 
-if (running) {
+if (noLaunch) {
+  console.log(`\n✓ Concourse v${version} installed and verified at ${installedApp}`)
+  console.log('  App launch skipped (--no-launch). Existing windows and agents were left running.')
+  console.log('  Reopen Concourse when your work is finished to load this version.')
+} else if (running) {
   console.log(`\n✓ Concourse v${version} installed and verified at ${installedApp}`)
   console.log('  Quit every currently running Concourse window, then reopen it to load this version.')
 } else {

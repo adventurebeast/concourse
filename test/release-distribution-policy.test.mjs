@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
 
 const read = (relative) => readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8')
 
@@ -43,7 +44,9 @@ describe('macOS release trust boundary', () => {
     const release = read('scripts/release.mjs')
     const installer = read('scripts/install-local.mjs')
 
-    expect(release.indexOf("execFileSync(process.execPath, [localInstaller]")).toBeLessThan(
+    const install = release.indexOf('execFileSync(process.execPath, installerArgs')
+    expect(install).toBeGreaterThan(-1)
+    expect(install).toBeLessThan(
       release.indexOf("run('gh', ['auth', 'status'])")
     )
     expect(installer).toContain("'--config.mac.identity=-'")
@@ -54,5 +57,27 @@ describe('macOS release trust boundary', () => {
       installer.indexOf('renameSync(installedApp, backup)')
     )
     expect(installer).not.toMatch(/\brm(?:Sync)?\b/)
+  })
+
+  it('never opens the app with --no-launch, whether an existing instance is running or not', () => {
+    const release = read('scripts/release.mjs')
+    const installer = read('scripts/install-local.mjs')
+    expect(release).toContain("noLaunch ? [localInstaller, '--no-launch'] : [localInstaller]")
+    const start = installer.indexOf('// Launch only when')
+    expect(start).toBeGreaterThan(-1)
+    for (const runningPid of ['', '123']) {
+      const calls = []
+      runInNewContext(installer.slice(start), {
+        noLaunch: true,
+        version: 'test',
+        installedApp: '/fixture/Concourse.app',
+        console: { log() {} },
+        run(command, args) {
+          calls.push([command, args])
+          return runningPid
+        }
+      })
+      expect(calls.some(([command]) => command === 'open')).toBe(false)
+    }
   })
 })

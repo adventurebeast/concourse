@@ -26,6 +26,8 @@ are authoritative. Do not bypass their distribution trust requirements.
    `npm run smoke:application` to build and exercise an isolated profile/workspace
    with synthetic terminal input. Fix failures before continuing. This POSIX smoke
    requires a C compiler and does not establish Windows runtime compatibility.
+   For terminal scrolling changes, also run `npm run smoke:scroll` to verify that
+   live output and terminal mouse reports preserve the user's reading position.
 4. Commit the intended changes and version bump with a `Co-Authored-By` trailer.
    Push the branch, create a PR, wait for CI green, and merge through the PR.
    Verify the intended source/version on the default branch before public tagging.
@@ -61,6 +63,12 @@ this with recursive forced deletion or silently remove old archives.
 If Concourse is already running, the installer preserves its processes/agents and
 reports that a restart is needed. Replacing the bundle does not update already
 loaded windows. Never terminate the user's agents to load a new build.
+
+Use `npm run release -- --no-launch` (or `install:local -- --no-launch`) when the
+user is working on this Mac and the release must not open or focus any app window.
+This still builds, installs, and verifies the bundle. If the user has asked to stop
+desktop testing, omit GUI smoke commands and report that packaged boot was not
+rechecked; their instruction takes precedence over the verification step below.
 
 ## Verify the packaged app
 
