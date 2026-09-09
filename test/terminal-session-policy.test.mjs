@@ -25,7 +25,7 @@ describe('persisted terminal session privacy policy', () => {
       version: 3,
       terminals: {
         layout: 'grid',
-        tabs: [{ cwd: '/workspace', resumeCommand: 'claude --continue' }]
+        tabs: [{ cwd: '/workspace', resumeCommand: 'claude --continue', customLabel: 'API server' }]
       }
     })
   })
@@ -37,5 +37,14 @@ describe('persisted terminal session privacy policy', () => {
       }
     })
     expect(clean.terminals.tabs).toEqual([{}, {}])
+  })
+
+  it('does not revive custom labels captured by pre-privacy session schemas', () => {
+    const clean = sanitizeSessionBlob({
+      version: 2,
+      terminals: { tabs: [{ customLabel: 'login --password secret' }] }
+    })
+
+    expect(clean.terminals.tabs).toEqual([{}])
   })
 })

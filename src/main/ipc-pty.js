@@ -5,7 +5,9 @@ import path from 'path'
 import crypto from 'crypto'
 import pty from 'node-pty'
 import { confine } from './paths.js'
-import { extractCwds } from './terminal-metadata.js'
+import { extractCwds, validateTerminalCwd } from './terminal-metadata.js'
+import { contextForTerminal, readProcessSnapshot } from './terminal-process.js'
+import { classifyProcessName, processContext } from '../shared/terminal-process.js'
 import { getRaw } from './settings.js'
 
 // Private, per-app directory for the generated shell rc/init files. We write them
@@ -295,6 +297,38 @@ export function registerPty(ctx) {
   // tears down its own shells.
   const terminals = new Map() // "<wcId>:<id>" -> { term, wcId }
   const tkey = (wcId, id) => `${wcId}:${id}`
+  let contextTimer = null
+  let contextPolling = false
+
+  function sendContext(entry, context) {
+    if (entry.wc.isDestroyed()) return
+    const signature = JSON.stringify(context)
+    if (signature === entry.lastContext) return
+    entry.lastContext = signature
+    entry.wc.send('term:context', { id: entry.id, ...context })
+  }
+
+  async function pollContext() {
+    if (contextPolling || !terminals.size) return
+    contextPolling = true
+    const entries = [...terminals.values()]
+    try {
+      const rows = await readProcessSnapshot(entries)
+      for (const entry of entries) {
+        // Exit/kill/recreation may have happened while ps was running.
+        if (terminals.get(tkey(entry.wcId, entry.id)) !== entry) continue
+        sendContext(entry, rows ? contextForTerminal(rows, entry.term.pid) : processContext(null))
+      }
+    } finally {
+      contextPolling = false
+    }
+  }
+
+  function stopContextPollIfEmpty() {
+    if (terminals.size || !contextTimer) return
+    clearInterval(contextTimer)
+    contextTimer = null
+  }
 
   // Whether the user runs their own prompt is a property of their rc files, not
   // of any one terminal — compute it ONCE at startup instead of re-scanning the
@@ -358,6 +392,7 @@ export function registerPty(ctx) {
         if (setup.env) Object.assign(env, setup.env)
       }
     }
+    if (wc.isDestroyed()) return
 
     // Confine the requested cwd to the workspace root so a malicious/buggy
     // renderer can't spawn a shell in an arbitrary directory outside the open
@@ -385,12 +420,42 @@ export function registerPty(ctx) {
       env
     })
 
+    const entry = { term, wcId, wc, id, lastContext: null }
+
     // Route output back to the window that created this shell. Guard against a
     // destroyed WebContents (the window closed while the PTY was still draining).
     // En route, pull out cwd metadata. The sequence is invisible to xterm and is
     // forwarded unchanged; parsing is best-effort and never blocks output.
     let capBuf = ''
     let lastCwd = ''
+    let pendingCwd = ''
+    let cwdTimer = null
+    let checkingCwd = false
+    const queueCwdCheck = () => {
+      if (cwdTimer || checkingCwd || !pendingCwd) return
+      // Coalesce prompt bursts and validate asynchronously. Terminal output must
+      // never block on a slow filesystem or spawn an unbounded queue of stats.
+      cwdTimer = setTimeout(async () => {
+        cwdTimer = null
+        checkingCwd = true
+        const candidate = pendingCwd
+        pendingCwd = ''
+        const cwd = await validateTerminalCwd(root, candidate)
+        if (!pendingCwd && terminals.get(tkey(wcId, id)) === entry && cwd && cwd !== lastCwd) {
+          lastCwd = cwd
+          if (!wc.isDestroyed()) wc.send('term:cwd', { id, cwd })
+        }
+        checkingCwd = false
+        queueCwdCheck()
+      }, 100)
+      cwdTimer.unref?.()
+    }
+    entry.stopMetadata = () => {
+      clearTimeout(cwdTimer)
+      cwdTimer = null
+      pendingCwd = ''
+      capBuf = ''
+    }
     term.onData((data) => {
       if (!wc.isDestroyed()) wc.send('term:data', { id, data })
       try {
@@ -399,21 +464,33 @@ export function registerPty(ctx) {
         // Latest cwd wins; forward only changes so a busy pane doesn't spam IPC.
         const cwd = cwds.length ? cwds[cwds.length - 1] : ''
         if (cwd && cwd !== lastCwd) {
-          lastCwd = cwd
-          if (!wc.isDestroyed()) wc.send('term:cwd', { id, cwd })
+          pendingCwd = cwd
+          queueCwdCheck()
         }
       } catch {
         capBuf = '' // never let capture parsing disturb the terminal
       }
     })
     term.onExit((e) => {
+      entry.stopMetadata()
       // Forward the exit code so the renderer can tell a clean finish (0) from a
       // failure (non-zero) — Pulse maps that to its done/error state.
       if (!wc.isDestroyed()) wc.send('term:exit', { id, exitCode: e?.exitCode ?? 0 })
-      terminals.delete(tkey(wcId, id))
+      if (terminals.get(tkey(wcId, id)) === entry) terminals.delete(tkey(wcId, id))
+      stopContextPollIfEmpty()
     })
 
-    terminals.set(tkey(wcId, id), { term, wcId })
+    terminals.set(tkey(wcId, id), entry)
+    const shellKey = classifyProcessName(shellPath)
+    sendContext(entry, processContext(shellKey))
+    // One batched, bounded name-only query per app, regardless of pane count.
+    // Foreground presence identifies a program; it does not mean an agent is busy
+    // or awaiting input. The renderer owns that separate activity indication.
+    if (!contextTimer) {
+      contextTimer = setInterval(() => void pollContext(), 1500)
+      contextTimer.unref?.()
+    }
+    void pollContext()
   })
 
   ipcMain.on('term:input', (_e, { id, data }) => {
@@ -429,8 +506,12 @@ export function registerPty(ctx) {
   ipcMain.on('term:kill', (_e, { id }) => {
     const key = tkey(_e.sender.id, id)
     const entry = terminals.get(key)
-    if (entry) entry.term.kill()
+    if (entry) {
+      entry.stopMetadata()
+      entry.term.kill()
+    }
     terminals.delete(key)
+    stopContextPollIfEmpty()
   })
 
   // Kill every PTY owned by a window (called when that window closes), leaving
@@ -438,8 +519,10 @@ export function registerPty(ctx) {
   return (wcId) => {
     for (const [key, entry] of terminals) {
       if (entry.wcId !== wcId) continue
+      entry.stopMetadata()
       entry.term.kill()
       terminals.delete(key)
     }
+    stopContextPollIfEmpty()
   }
 }

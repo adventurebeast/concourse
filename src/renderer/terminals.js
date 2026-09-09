@@ -9,13 +9,14 @@ import { matchesAwaitPrompt } from './pulse-detect.js'
 import { RESTING_GRID, STATIC_GRID, MIN_WORKING_GRID, createThinker } from './braille-thinker.js' // working-figure engine
 import { makeFigure, paint } from './dot-figure.js' // SVG dot-matrix renderer for the figure
 import { colorsFor } from './term-palettes.js'
-import { safeAgentResumeCommand } from './terminal-context-policy.js'
+import { safeAgentResumeCommand, terminalPresentation } from './terminal-context-policy.js'
+import { processContext } from '../shared/terminal-process.js'
 
 // The one-time coach mark that explains Pulse the first time a tab starts
 // working. Fired from every path that starts an agent (launcher reuse, '+' preset,
 // or a user-driven shell going active) — coachOnce makes it once-ever regardless.
 const PULSE_COACH =
-  'That pulsing tab is Pulse — it means the agent is working. It calms to a steady colour when the agent is done or waiting on you.'
+  'Pulse shows terminal activity. Working means the screen is changing; Awaiting you means an input prompt is visible. Quiet means there is no recent output.'
 
 const api = window.api
 
@@ -146,14 +147,11 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   const IDLE_AFTER_MS = 800
   // On settle we classify (Layer 1 — deterministic, free, offline). If the visible tail
   // shows an explicit input prompt, the pane is `awaiting` YOU: the agent's resting
-  // state — a y/N, a password, a permission, or just parked at its input box. This is
-  // the high-value signal — ~90% of fleet-driving is waiting to catch an agent back at
-  // rest, so the working→awaiting EDGE is the moment worth a notification (see setState).
-  // Otherwise the pane is calm `idle`; the slow alt-screen tell below may still promote
-  // it. False positives are the cardinal sin: every pattern is anchored
+  // state — a y/N, a password, or a permission menu. Otherwise the pane is quiet:
+  // silence alone cannot distinguish a parked agent from one waiting on a tool.
+  // False positives are the cardinal sin: every pattern is anchored
   // to the END of the tail (where a parked cursor sits), so mid-output mentions of "y/n"
   // or "password" in flowing text don't trip it.
-  const QUIET_MS = 8000 // conservative window for the implicit (alt-screen) awaiting tell
   // Does the settled pane show an explicit input affordance in its visible tail? Reads
   // the last few rendered rows (the cursor parks at the prompt) and runs the anchored
   // patterns in pulse-detect.js. Pure/synchronous — the deterministic floor, no model.
@@ -332,34 +330,62 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     })
   }
 
-  // ---- per-terminal right-click menu (close only) ----
-  // Terminal labels are immutable ordinals. Keeping rename fields out of the
-  // terminal surface makes it impossible for focus/keyboard routing mistakes to
-  // copy terminal input into header metadata.
-  function openTabMenu(x, y, s) {
-    const existing = document.getElementById('term-tab-menu')
-    if (existing) existing.remove()
+  // ---- per-terminal right-click menu ----
+  let dismissTabMenu = null
+  function openTabMenu(x, y, s, labelEl = s.tabLabel) {
+    dismissTabMenu?.()
     const menu = document.createElement('div')
     menu.className = 'term-menu'
     menu.id = 'term-tab-menu'
-
-    const close = document.createElement('div')
-    close.className = 'term-menu-item danger'
-    close.textContent = 'Close Terminal'
-    close.addEventListener('click', () => {
+    menu.setAttribute('role', 'menu')
+    menu.setAttribute('aria-label', 'Terminal actions')
+    const dismiss = () => {
       menu.remove()
-      confirmClose(s)
-    })
-
-    menu.append(close)
-    document.body.appendChild(menu)
-    // clamp to viewport
-    menu.style.left = Math.min(x, window.innerWidth - menu.offsetWidth - 8) + 'px'
-    menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 8) + 'px'
-    const dismiss = (e) => {
-      if (!menu.contains(e.target)) menu.remove()
+      document.removeEventListener('mousedown', outside, true)
+      dismissTabMenu = null
     }
-    setTimeout(() => document.addEventListener('mousedown', dismiss, { once: true }), 0)
+    const outside = (e) => {
+      if (!menu.contains(e.target)) dismiss()
+    }
+    dismissTabMenu = dismiss
+    const item = (label, action, danger = false) => {
+      const button = document.createElement('button')
+      button.className = 'term-menu-item' + (danger ? ' danger' : '')
+      button.type = 'button'
+      button.setAttribute('role', 'menuitem')
+      button.textContent = label
+      button.addEventListener('click', () => {
+        dismiss()
+        action()
+      })
+      menu.appendChild(button)
+    }
+    item('Rename…', () => renameStart(s, labelEl))
+    if (s.customLabel)
+      item('Use Automatic Name', () => {
+        s.customLabel = null
+        refreshIdentity(s)
+      })
+    item('New Terminal Here', () => create({ cwd: s.cwd || getRoot() }))
+    item('Close Terminal', () => confirmClose(s), true)
+    menu.addEventListener('keydown', (e) => {
+      const items = [...menu.querySelectorAll('button')]
+      const index = items.indexOf(document.activeElement)
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        dismiss()
+        s.term.focus()
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        items[(index + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus()
+      } else if (e.key === 'Tab') dismiss()
+    })
+    document.body.appendChild(menu)
+    menu.style.left = Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8)) + 'px'
+    menu.style.top = Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8)) + 'px'
+    document.addEventListener('mousedown', outside, true)
+    menu.querySelector('button').focus()
   }
 
   // The new-tab affordance ('+' button and Cmd+T): just open a new tab — no menu
@@ -453,7 +479,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     const box = document.createElement('div')
     box.className = 'term-confirm'
     const name = s.tabLabel.textContent
-    // Render the immutable ordinal literally with textContent.
+    // Render the explicit or fixed automatic identity literally with textContent.
     const title = document.createElement('div')
     title.className = 'tc-title'
     title.textContent = `Close “${name}”?`
@@ -811,9 +837,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     if (s.state !== 'working') paintFigure(s, RESTING_GRID)
     // A just-in-time reminder of what the state means, surfaced on hover. The
     // status-bar fleet count carries the full Pulse legend; this is the hover gloss.
-    const tip = s.state === 'working' ? 'Working' : s.state === 'awaiting' ? 'Awaiting you' : 'Idle'
-    s.cellDot.dataset.tip = tip
-    s.tabEl.dataset.tip = tip
+    refreshIdentity(s)
     emitFleet()
   }
 
@@ -837,12 +861,13 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // `cwd` and `resumeCommand` arrive on restored panes (from the session blob):
   // the shell reopens in its old directory and, when resumeCommand is a known
   // agent, the pane offers to resume it (mountResumeCard).
-  function create({ command, restored, cwd, resumeCommand } = {}) {
+  function create({ command, restored, cwd, resumeCommand, customLabel } = {}) {
     const id = 'term-' + ++counter
-    // Security boundary: this is the terminal's only display identity. It is
-    // derived from an internal counter, written once, and never sourced from
-    // terminal input/output, OSC titles, commands, agents, or restored labels.
-    const displayName = `Terminal ${counter}`
+    // Security boundary: the display identity comes only from the internal
+    // ordinal or an explicitly user-authored label. It is never sourced from
+    // terminal input/output, OSC titles, commands, agents, or generated text.
+    const ordinalName = `Terminal ${counter}`
+    const displayName = cleanCustomLabel(customLabel) || ordinalName
     // Stable per-pane colour slot: store the raw ordinal so recolorAll() can re-pick
     // this pane's hue from any palette/theme (modulo its length) and keep it on its
     // OWN slot across palette swaps, light/dark toggles and drag-reorders.
@@ -890,7 +915,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     cellClose.className = 'close'
     cellClose.innerHTML = icon('close', 12)
     cellClose.title = 'Close Terminal'
-    cellHeader.append(cellDot, cellLabel, cellClose)
+    const cellContext = document.createElement('span')
+    cellContext.className = 'cell-context'
+    cellHeader.append(cellDot, cellLabel, cellContext, cellClose)
     const cellBody = document.createElement('div')
     cellBody.className = 'cell-body'
     cell.append(cellHeader, cellBody)
@@ -911,7 +938,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     const cardLabel = document.createElement('span')
     cardLabel.className = 'card-label'
     cardLabel.textContent = displayName
-    cardText.append(cardLabel)
+    const cardContext = document.createElement('span')
+    cardContext.className = 'card-context'
+    cardText.append(cardLabel, cardContext)
     card.append(cardDot, cardText)
     card.addEventListener('click', () => selectCell(id))
     panesEl.appendChild(card)
@@ -951,12 +980,16 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       tabDot,
       tabLabel,
       cellLabel,
+      cellContext,
       cellDot,
       color,
       colorIndex,
       card,
       cardDot,
       cardLabel,
+      cardContext,
+      processContext: null,
+      ordinal: counter,
       status: 'running',
       // Three states: `working` (output flowing — pulsing), `awaiting` (at rest, your
       // move) or `idle` (gone quiet, nothing pending). An agent preset (command)
@@ -967,7 +1000,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       workT: 0, // frames since the current working phase began (drives thinker.draw); reset on pick
       unseen: false, // came to rest (awaiting) while you were looking elsewhere → come-look
       idleTimer: null, // debounce handle: classifies the pane on settle after IDLE_AFTER_MS
-      quietTimer: null, // slower settle timer for the conservative alt-screen awaiting tell
       follow: true, // sticky-bottom intent: keep the newest line (prompt / agent input box)
       //              visible. True until the user scrolls up to read history (see onScroll),
       //              Every write/fit re-asserts the bottom while it is set.
@@ -976,7 +1008,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       lastScreenSig: null, // signature of the last VISIBLE screen — drives the settle debounce
       //                      so output that doesn't change what's on screen (a blinking cursor,
       //                      OSC-title pings, a no-op redraw) can't pin the pane in `working`
-      used: false, // true once an explicit app action runs — then we won't auto-cd it
+      used: false, // boolean interaction signal only; no keystrokes or pasted bytes retained
       isShell: !command, // plain shell vs an agent preset — gates untouched-shell state detection
       resumeCommand:
         safeAgentResumeCommand(command) || safeAgentResumeCommand(resumeCommand) || null,
@@ -984,7 +1016,9 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       //                 arbitrary shell input or arguments (see terminal-context-policy.js).
       cwd: cwd || null, // shell's cwd at the last prompt (OSC 5152) — persisted with the blob
       resumeCmd: null, // set while a restored pane's resume card is up (see mountResumeCard)
-      baseName: displayName // immutable ordinal identity used by notifications
+      baseName: displayName, // current user-visible identity used by notifications
+      ordinalName,
+      customLabel: cleanCustomLabel(customLabel) || null
     }
     sessions.set(id, s)
     // Watch this pane's body so it refits itself on any size change (see the
@@ -1073,11 +1107,23 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       },
       { capture: true }
     )
+    // Observe only that a user interacted with the terminal. Do not read the event's
+    // key/data/clipboard. This unlocks Pulse and prevents workspace auto-cd from
+    // interrupting a shell the user is driving, while stdin stays transport-only.
+    const interacted = () => {
+      s.used = true
+      if (s.resumeCmd) s.resumeCommand = null
+      dismissPaneLauncher(s)
+    }
+    cellBody.addEventListener('keydown', interacted, true)
+    cellBody.addEventListener('paste', interacted, true)
     // Drop files from Finder onto this pane to insert their paths as text.
     wireCellDrop(cell, s)
     // Click selects. In flow mode, clicking a side preview brings it to centre;
     // clicking the centre (or any other layout) just focuses it.
-    cell.addEventListener('mousedown', () => selectCell(id))
+    cell.addEventListener('mousedown', (e) => {
+      if (e.button === 0) selectCell(id)
+    })
     // The pane's own X. Swallow the mousedown so the cell doesn't select/centre
     // the pane out from under the confirm dialog, then confirm on click.
     cellClose.addEventListener('mousedown', (e) => e.stopPropagation())
@@ -1096,14 +1142,31 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     })
     // Drag to reorder tabs; the grid/stack order follows the tab order.
     wireTabDrag(tabEl, s)
-    // Right-click offers close only. Terminal labels are intentionally immutable.
+    // Explicit user action is the only way a pane name can change. Neither this
+    // path nor renameStart reads from the terminal byte stream.
     tabEl.addEventListener('contextmenu', (e) => {
       e.preventDefault()
       openTabMenu(e.clientX, e.clientY, s)
     })
     cellHeader.addEventListener('contextmenu', (e) => {
       e.preventDefault()
-      openTabMenu(e.clientX, e.clientY, s)
+      openTabMenu(e.clientX, e.clientY, s, cellLabel)
+    })
+    card.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      openTabMenu(e.clientX, e.clientY, s, cardLabel)
+    })
+    tabLabel.addEventListener('dblclick', (e) => {
+      e.stopPropagation()
+      renameStart(s, tabLabel)
+    })
+    cardLabel.addEventListener('dblclick', (e) => {
+      e.stopPropagation()
+      renameStart(s, cardLabel)
+    })
+    cellLabel.addEventListener('dblclick', (e) => {
+      e.stopPropagation()
+      renameStart(s, cellLabel)
     })
     applyLayout()
     // In album flow a brand-new terminal becomes the centre; elsewhere just focus.
@@ -1128,14 +1191,91 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     return id
   }
 
+  // ---- rename ----
+  function cleanCustomLabel(value) {
+    if (typeof value !== 'string') return ''
+    return value
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .trim()
+      .slice(0, 80)
+  }
+
+  function setDisplayName(s, name) {
+    if (s.baseName === name) return
+    s.baseName = name
+    s.tabLabel.textContent = name
+    s.cellLabel.textContent = name
+    s.cardLabel.textContent = name
+    requestAnimationFrame(() => {
+      measureMarquee(s.tabLabel)
+      measureMarquee(s.cellLabel)
+    })
+  }
+
+  function refreshIdentity(s) {
+    const { name, detail } = terminalPresentation({ ...s, context: s.processContext })
+    setDisplayName(s, name)
+    s.cellContext.textContent = detail
+    s.cardContext.textContent = detail
+    const tip = `${s.baseName} — ${detail}`
+    s.tabEl.dataset.tip = tip + ' · Double-click to rename'
+    s.cellDot.dataset.tip = detail
+    for (const el of [s.tabEl, s.card]) el.setAttribute('aria-label', tip)
+    s.card.title = tip
+  }
+
+  let activeRename = null
+  function renameStart(s, labelEl) {
+    if (!labelEl?.isConnected) return
+    activeRename?.()
+    const input = document.createElement('input')
+    input.className = 'rename-input'
+    input.value = s.customLabel || s.baseName
+    input.maxLength = 80
+    input.autocomplete = 'off'
+    input.spellcheck = false
+    input.setAttribute('aria-label', 'Terminal name')
+    input.placeholder = 'Automatic name'
+    labelEl.replaceWith(input)
+    let finished = false
+    const finish = (commit, focusTerminal = false) => {
+      if (finished) return
+      finished = true
+      activeRename = null
+      input.replaceWith(labelEl)
+      if (commit) s.customLabel = cleanCustomLabel(input.value) || null
+      refreshIdentity(s)
+      // Wait until Enter/Escape has finished dispatching before returning to xterm.
+      if (focusTerminal)
+        requestAnimationFrame(() => {
+          if (sessions.get(s.id) === s && s.status !== 'exited') s.term.focus()
+        })
+    }
+    activeRename = () => finish(true)
+    input.addEventListener('mousedown', (e) => e.stopPropagation())
+    input.addEventListener('click', (e) => e.stopPropagation())
+    input.addEventListener('dblclick', (e) => e.stopPropagation())
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation()
+      if (e.key === 'Enter' || e.key === 'Escape') {
+        e.preventDefault()
+        finish(e.key === 'Enter', true)
+      }
+    })
+    input.addEventListener('blur', () => finish(true))
+    input.focus()
+    input.select()
+  }
+
   // ---- session restore (Tier A: fresh shells, same layout) ----
-  // Snapshot layout, cwd, and normalized agent-resume commands only. Labels and
-  // terminal input are never captured or persisted.
+  // Snapshot only explicit application state. customLabel is written solely by
+  // renameStart; terminal input/output and generated text are never captured.
   function getState() {
     const list = [...sessions.values()]
     const tabs = list.map((s) => ({
       cwd: s.cwd || null,
-      resumeCommand: s.resumeCommand || null
+      resumeCommand: s.resumeCommand || null,
+      customLabel: s.customLabel || null
     }))
     const active = Math.max(
       0,
@@ -1152,7 +1292,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       create({
         restored: true,
         cwd: t.cwd,
-        resumeCommand: t.resumeCommand
+        resumeCommand: t.resumeCommand,
+        customLabel: t.customLabel
       })
     }
     if (state.layout) setLayout(state.layout)
@@ -1163,13 +1304,13 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function destroy(id) {
     const s = sessions.get(id)
     if (!s) return
+    s.status = 'exited'
     // The right-click tab menu closed over this session would act on a dead pane
     // after it's gone — dismiss it now.
-    document.getElementById('term-tab-menu')?.remove()
+    dismissTabMenu?.()
     // The pane is going away; clear any awaiting notification/title flag it posted.
     onAwaitClear?.(id)
     clearTimeout(s.idleTimer)
-    clearTimeout(s.quietTimer)
     resizeObserver.unobserve(s.body)
     dirty.delete(s)
     api.term.kill(id)
@@ -1261,8 +1402,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     s.term.focus()
   }
 
-  // Terminal labels are written only during create(). The remaining helper is
-  // presentation-only and never changes label content.
+  // Presentation-only overflow measurement; never reads terminal content.
   // Mark a clip as overflowing (so :hover can marquee it) and hand the keyframes the exact
   // pixel distance + a distance-scaled duration. Read-only layout query; safe in rAF/RO.
   function measureMarquee(clipEl) {
@@ -1462,10 +1602,37 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     for (const entry of entries) measureMarquee(entry.target)
   })
   // ---- pty output -> terminal: drives the two-state (working/idle) indicator ----
-  // Fleet-resurrection bookkeeping uses cwd metadata only. Command/input capture is disabled.
+  // Cwd positions restored shells; fixed process keys identify agents. Input capture stays disabled.
   api.term.onCwd?.(({ id, cwd }) => {
     const s = sessions.get(id)
     if (s && cwd) s.cwd = cwd
+  })
+
+  const offContext = api.term.onContext?.(({ id, process, running }) => {
+    const s = sessions.get(id)
+    if (!s || s.status === 'exited') return
+    // Revalidate the key against our fixed vocabulary; never trust a supplied label.
+    const previous = s.processContext
+    const context = processContext(process, running === true)
+    s.processContext = context
+    if (context.running) {
+      s.used = true
+      if (context.kind === 'agent') s.resumeCommand = safeAgentResumeCommand(context.process)
+      if (!previous?.running || previous.process !== context.process) {
+        setState(s, 'working')
+        armSettle(s)
+      }
+    } else if (context.kind === 'shell') {
+      // A known shell has regained the foreground. Stale agent resumes should not
+      // survive an agent's exit; preserve only an as-yet-unaccepted restore card.
+      if (!s.resumeCmd) s.resumeCommand = null
+      if (previous?.running) {
+        clearTimeout(s.idleTimer)
+        s.idleTimer = null
+        setState(s, 'idle')
+      }
+    }
+    refreshIdentity(s)
   })
 
   api.term.onData(({ id, data }) => {
@@ -1474,6 +1641,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // Classify AFTER the write is parsed into the buffer (the callback), so the working /
     // settle decision reads the post-write screen. pinBottom keeps scroll-follow regardless.
     s.term.write(data, () => {
+      if (sessions.get(id) !== s || s.status === 'exited') return
       pinBottom(s)
       classifyOutput(s)
     })
@@ -1527,30 +1695,15 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // no timer ever armed (the lazy per-burst arm never fires if nothing visible changes).
   function armSettle(s) {
     clearTimeout(s.idleTimer)
-    clearTimeout(s.quietTimer)
-    s.quietTimer = null
     s.idleTimer = setTimeout(() => {
       s.idleTimer = null
       if (s.status === 'exited') return // the exit handler owns the final state
       // Layer 1 classify on settle. An explicit prompt in the tail ⇒ awaiting you now
-      // (fast path, high confidence). Otherwise calm: settle to idle, and for a
-      // full-screen TUI arm the conservative QUIET_MS alt-screen tell (the no-LLM floor).
+      // (fast path, high confidence). Silence alone remains quiet, including TUIs.
       if (looksAwaitingPrompt(s)) {
         setState(s, 'awaiting')
       } else {
         setState(s, 'idle')
-        if (s.term.buffer.active.type === 'alternate') {
-          s.quietTimer = setTimeout(() => {
-            s.quietTimer = null
-            if (
-              s.status !== 'exited' &&
-              s.state === 'idle' &&
-              s.term.buffer.active.type === 'alternate'
-            ) {
-              setState(s, 'awaiting') // a TUI silent past QUIET_MS is almost certainly at rest
-            }
-          }, QUIET_MS - IDLE_AFTER_MS)
-        }
       }
     }, IDLE_AFTER_MS)
   }
@@ -1563,8 +1716,6 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     onAwaitClear?.(id) // a finished process isn't awaiting — drop any stale notification
     clearTimeout(s.idleTimer) // settled — never leave it pulsing
     s.idleTimer = null
-    clearTimeout(s.quietTimer)
-    s.quietTimer = null
     updateIndicators(s)
     s.tabEl.classList.add('exited')
   })
@@ -1573,12 +1724,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   // Pure-decoration glyphs that survive xterm's translateToString (which already drops
   // ANSI) but carry NO meaning for Pulse: spinner animation frames (Braille U+2800–28FF),
   // TUI box borders (U+2500–257F), and progress-bar block/shade elements (U+2580–259F).
-  // Stripping them does three things: packs more real signal into the 2500-char tail,
-  // lets Layer-1 match permission prompts that were buried in a box border, and — because
-  // a spinner advancing changes the raw tail every frame — STABILISES the dedup hash, so a
-  // pane just animating a spinner no longer burns a model call per frame. The meaningful
-  // Claude Code status bullet ● (U+25CF) and the menu cursors ❯➤▶ sit OUTSIDE these ranges
-  // and are preserved, so the few-shot prompt and the await detector keep working.
+  // Strip decoration so box borders cannot hide a parked permission prompt. Menu
+  // cursors ❯➤▶ sit outside these ranges and remain available to the detector.
   const PULSE_NOISE_RE = /[\u2500-\u259f\u2800-\u28ff]/g
   function cleanTailLine(str) {
     return str
@@ -1588,13 +1735,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   }
   // Read the last lines the pane shows locally for deterministic await-prompt matching.
   // The text is never persisted, sent to a model, or used as a header.
-  function tailOf(s, maxLines) {
+  function tailOf(s, maxLines = 6) {
     const buf = s.term.buffer.active
-    // Default tail: 24 lines is plenty for a settled shell verdict and keeps the model
-    // payload small. A full-screen TUI on the alternate buffer (vim, a dashboard, an
-    // agent's alt-screen UI) packs meaning across the whole screen, so give it a larger
-    // window (~40) or its verdict degrades.
-    if (maxLines == null) maxLines = buf.type === 'alternate' ? 40 : 24
     const end = buf.baseY + buf.cursorY
     const lines = []
     // Count CONTENT lines toward the budget, not decoration/blank rows: a clean line that
@@ -1802,8 +1944,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
   function dispose() {
     for (const s of sessions.values()) {
       clearTimeout(s.idleTimer)
-      clearTimeout(s.quietTimer)
-      s.idleTimer = s.quietTimer = null
+      s.idleTimer = null
     }
     // Module-owned intervals and window-level listeners. Without clearing these a
     // re-instantiation (a future multi-window / workspace refactor) would stack a second
@@ -1811,6 +1952,8 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     // the flow and re-running drop swallowing N times. dispose() promises "nothing
     // running", so honor it for these too, not just the per-pane timers.
     clearInterval(animTimer)
+    offContext?.()
+    dismissTabMenu?.()
     panesResizeObserver.disconnect()
     window.removeEventListener('keydown', onFlowArrowKey)
     window.removeEventListener('dragover', swallowStrayFileDrag)

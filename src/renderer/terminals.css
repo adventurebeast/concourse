@@ -46,7 +46,7 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
   color: var(--text-faint);
 }
 
-/* ---------- Immutable tab labels ---------- */
+/* ---------- Tab labels / explicit rename ---------- */
 .term-tab-label {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -55,6 +55,37 @@ html[data-tab-status='dots'] .term-tab.active .dot:not(.working) {
 }
 .term-tab.exited .term-tab-label {
   opacity: 0.55;
+}
+.rename-input {
+  flex: 1;
+  min-width: 72px;
+  max-width: 200px;
+  width: 100%;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  font: inherit;
+  padding: 1px 4px;
+  outline: none;
+}
+.cell-context,
+.card-context {
+  font-size: 10px;
+  font-weight: 400;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cell-context {
+  flex-shrink: 1;
+  max-width: 45%;
+}
+.term-cell[data-state='awaiting'] .cell-context,
+.term-card[data-state='awaiting'] .card-context {
+  opacity: 1;
+  font-weight: 600;
 }
 
 /* ---- stable label + hover marquee -----------------------------------------------
@@ -576,6 +607,11 @@ body.rail-dragging {
   min-width: 200px;
 }
 .term-menu-item {
+  width: 100%;
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  text-align: left;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -590,11 +626,13 @@ body.rail-dragging {
   display: inline-flex;
   opacity: 0.85;
 }
-.term-menu-item:hover {
+.term-menu-item:hover,
+.term-menu-item:focus-visible {
   background: var(--accent);
   color: #fff;
 }
-.term-menu-item.danger:hover {
+.term-menu-item.danger:hover,
+.term-menu-item.danger:focus-visible {
   background: var(--red);
   color: #fff;
 }

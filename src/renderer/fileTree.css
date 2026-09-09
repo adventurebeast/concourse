@@ -36,7 +36,7 @@
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-/* ---------- External file drop (copy into workspace) ---------- */
+/* ---------- File drop (internal move / external copy) ---------- */
 /* The whole tree gets a soft inset ring while a file drag hovers it; the folder
    the drop would land in is tinted so the target is unambiguous (root over empty
    space shows just the container ring). */
@@ -47,6 +47,9 @@
 .ft-row.ft-drop-into {
   background: var(--select-hi);
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+.ft-row.ft-dragging {
+  opacity: 0.45;
 }
 
 /* ---------- Twisty (chevron) ---------- */
@@ -136,6 +139,9 @@
   position: fixed;
   z-index: 1000;
   min-width: 180px;
+  max-width: calc(100vw - 12px);
+  max-height: calc(100vh - 12px);
+  overflow-y: auto;
   padding: 4px 0;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
@@ -149,18 +155,42 @@
   display: flex;
   align-items: center;
   height: 26px;
-  padding: 0 26px 0 12px;
+  padding: 0 12px;
+  gap: 28px;
   cursor: pointer;
   white-space: nowrap;
+  outline: none;
 }
-.ft-menu-item:hover {
+.ft-menu-item > :first-child {
+  flex: 1;
+}
+.ft-menu-shortcut {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.ft-menu-item:hover .ft-menu-shortcut,
+.ft-menu-item:focus .ft-menu-shortcut {
+  color: inherit;
+}
+.ft-menu-item.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ft-menu-item.disabled:hover,
+.ft-menu-item.disabled:focus {
+  background: transparent;
+  color: inherit;
+}
+.ft-menu-item:not(.disabled):hover,
+.ft-menu-item:not(.disabled):focus {
   background: var(--accent);
   color: #fff;
 }
 .ft-menu-item.danger {
   color: var(--red);
 }
-.ft-menu-item.danger:hover {
+.ft-menu-item.danger:hover,
+.ft-menu-item.danger:focus {
   background: var(--red);
   color: #fff;
 }

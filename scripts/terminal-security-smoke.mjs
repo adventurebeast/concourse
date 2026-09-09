@@ -35,14 +35,23 @@ function call(method, params = {}) {
 }
 
 async function evaluate(expression) {
-  const result = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
+  const result = await call('Runtime.evaluate', {
+    expression,
+    returnByValue: true,
+    awaitPromise: true
+  })
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || 'Evaluation failed')
   return result.result.value
 }
 
 async function pressEnter() {
   const key = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 36 }
-  await call('Input.dispatchKeyEvent', { type: 'keyDown', text: '\r', unmodifiedText: '\r', ...key })
+  await call('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    text: '\r',
+    unmodifiedText: '\r',
+    ...key
+  })
   await call('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
 }
 
@@ -58,10 +67,11 @@ const headerSnapshot = `(() => {
 try {
   await call('Runtime.enable')
   await evaluate(`document.querySelector('.xterm-helper-textarea')?.focus()`)
+  // Let the first process-name poll replace the launch placeholder before taking
+  // the baseline. Automatic fixed labels and explicit user names are both valid.
+  await sleep(1800)
   const before = await evaluate(headerSnapshot)
-  if (!before.labels.length || before.labels.some((label) => !/^Terminal \d+$/.test(label))) {
-    throw new Error(`Unexpected initial terminal labels: ${JSON.stringify(before.labels)}`)
-  }
+  if (!before.labels.length) throw new Error('No terminal labels found')
 
   await call('Input.insertText', { text: 'read -s terminal_security_probe' })
   await pressEnter()
@@ -71,17 +81,23 @@ try {
   await sleep(1500)
 
   const after = await evaluate(headerSnapshot)
-  if (JSON.stringify(after.labels) !== JSON.stringify(before.labels)) {
-    throw new Error(`Terminal headers changed: ${JSON.stringify({ before, after })}`)
-  }
   if ([...after.labels, ...after.titles].some((value) => value.includes(secret))) {
     throw new Error('Synthetic password reached terminal header metadata')
+  }
+  if (JSON.stringify(after.labels) !== JSON.stringify(before.labels)) {
+    throw new Error('Terminal labels changed during password entry')
   }
 
   // Allow the normal session autosave interval to run; the caller can scan the
   // isolated user-data directory after this process exits.
   await sleep(5000)
-  console.log(JSON.stringify({ ok: true, before, after, secret }, null, 2))
+  console.log(
+    JSON.stringify(
+      { ok: true, labelsChecked: after.labels.length, titlesChecked: after.titles.length },
+      null,
+      2
+    )
+  )
 } finally {
   socket.close()
 }

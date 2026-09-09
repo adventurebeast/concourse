@@ -5,6 +5,7 @@ node_modules/
 out/
 dist/
 release/
+.build-archive/
 *.log
 
 # Internal notes

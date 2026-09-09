@@ -4,7 +4,8 @@ const SAFE_RESUME_COMMANDS = new Set([
   'aider',
   'gemini',
   'amp',
-  'goose'
+  'goose',
+  'opencode'
 ])
 
 // Main-process allowlist for persisted terminal state. This is intentionally
@@ -22,6 +23,15 @@ export function sanitizeSessionBlob(blob) {
         const safe = {}
         if (typeof tab.cwd === 'string' && tab.cwd) safe.cwd = tab.cwd
         if (SAFE_RESUME_COMMANDS.has(tab.resumeCommand)) safe.resumeCommand = tab.resumeCommand
+        // This field is written only by the explicit rename UI. It is never derived
+        // from PTY input/output, commands, OSC titles, or model-generated text.
+        if (blob?.version >= 3 && typeof tab.customLabel === 'string') {
+          const label = tab.customLabel
+            .replace(/[\u0000-\u001f\u007f]/g, ' ')
+            .trim()
+            .slice(0, 80)
+          if (label) safe.customLabel = label
+        }
         return safe
       })
     }

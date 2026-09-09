@@ -1,103 +1,45 @@
-# Pulse engine
+# Pulse: useful context without terminal input capture
 
-How Concourse decides, for every terminal pane, **what state it's in** and **what it's
-doing** — so you can run a fleet of agents without reading scrollback.
+Concourse should answer three questions at a glance: which agent is in this pane, which task did I give it, and does it need me? These are separate data sources. A command line or a screen scrape must not silently become a pane's identity.
 
-## North star: the agent's resting state
+## Current implementation
 
-An agent's life is an oscillation between two states:
+**Identity:** `src/main/terminal-process.js` queries executable accounting names for Concourse-owned PTY devices. On macOS it requests `ucomm`; on Linux it requests `comm`. It never requests arguments, environment variables, shell history, or node-pty's title/process getter. One bounded query runs every 1.5 seconds across the app's panes, and only changed results are sent to their owning windows. Foreground process groups exclude background jobs. A known agent takes priority over its Node/Python wrapper or helper tools.
 
-- **`working`** — actively producing output (or animating a spinner while it thinks/runs a tool).
-- **`awaiting`** ("Awaiting User Input") — it has **come to rest**; the ball is in your court.
+`src/shared/terminal-process.js` maps those names into a fixed vocabulary. Unknown names are discarded. The renderer validates the key again, so even a malformed event's free-form `label` cannot reach a header. Examples: `Codex · 1`, `Claude · 2`, `Bash · 3`. Unsupported platforms, unrecognized wrappers, and denied process queries fall back to `Terminal N`. This is an identity hint, not proof of process authenticity or agent progress.
 
-~90% of the time, the job isn't *watching* an agent work — it's **waiting to catch it back
-at rest**. So `awaiting` is the dominant, highest-value signal, not an edge case. And the
-thing of value is the **`working → awaiting` edge**: the *moment* an agent comes to rest is
-an event worth **notifying** on — you've context-switched away, and the pane should pull you
-back. You should never have to babysit the status bar.
+**Task:** double-click the tab, pane name, or rail-card name; or choose Rename from its context menu. Explicit names such as “Checkout tests” override the automatic identity. “Use Automatic Name” clears the override. Only explicit names persist. Automatic process names and activity remain transient. Existing cwd placement and allowlisted agent resume commands remain available; arbitrary command lines and legacy captured titles remain excluded from session storage.
 
-`awaiting` covers two flavors that look identical when you're scanning the bar — keep them
-**one state, one color**, with the difference only in the text label:
+Cwd markers are untrusted too: strict decoding, realpath resolution, and an existing-directory check confine them to the owning workspace before persistence. Validation is asynchronous and coalesced so terminal rendering does not wait on filesystem reads.
 
-- **mid-task await** — paused *inside* a turn, needs an answer to continue (`y/N`, a
-  permission prompt, a password).
-- **end-of-turn await** — the turn finished; it's parked, waiting for your next instruction.
+**Activity:** local screen changes drive Working. Recognized prompts drive Awaiting you after settling. Otherwise the header says Quiet or Shell ready. A quiet foreground process may still be computing or waiting on a network request. Merely entering an alternate screen or going silent does not establish that a program needs input. A password prompt can yield the fixed state Awaiting you, but its text and the password cannot supply a title or notification body.
 
-For an agent there is effectively no "done" — it oscillates `working` ↔ `awaiting`.
-`done`/`error` remain meaningful only for **one-shot shell commands** (run `npm test`, it
-finishes and the shell returns).
+The privacy fix had left `classifyOutput` gated on `used`, while ordinary terminal input no longer set that flag. Keyboard-launched agents consequently stayed idle. The repaired gate observes only a boolean DOM interaction or foreground-process transition; it never reads a key, pasted text, or stdin bytes. The xterm input callback remains a one-way transport to the PTY.
 
-**False positives are the cardinal sin.** An edge that fires while the agent is still
-thinking trains you to ignore it, and then the whole mechanism is worthless. The detector
-must fail toward "still working," never toward crying wolf.
+This fallback is useful for arbitrary tools and agents, but it cannot reliably distinguish thinking, a slow tool, a completed turn, or a silent failure. Agent lifecycle events should become authoritative when a supported integration supplies them.
 
-## State vocabulary
+## Codex integration direction
 
-`working | quiet | awaiting | done | error | idle`
+The installed CLI inspected during this audit is **0.153.4**. Its help supports app-server and a TUI connection using `--remote`, including Unix sockets. The official protocol documents `thread/status/changed`, `turn/started`, `turn/completed`, active flags for approval/input waits, typed work items, and agent messages. The CLI can generate schemas matching its own version. [Codex app-server documentation](https://learn.chatgpt.com/docs/app-server)
 
-- `working` — output is flowing (or recently flowed). The spinner ring animates only while
-  bytes are *actively* streaming (`streaming` flag); a working-but-paused pane shows a calm
-  solid dot.
-- `quiet` — went silent but we can't yet classify it (no prompt detected, not obviously an
-  agent at rest). A transient "the model is about to look" state.
-- `awaiting` — at rest, your move. The important one.
-- `done` / `error` — a one-shot command finished (exit 0 / non-zero).
-- `idle` — a bare shell prompt, nothing pending.
+Recommended next implementation:
 
-## Three layers + a memory
+1. Add an explicit **New Codex Terminal** action. Concourse owns a local app-server instance and a private Unix socket for that pane, then connects the normal Codex TUI. Preserve existing arbitrary-shell terminals.
+2. Bind the pane to the server/thread created through that action. Do not correlate by cwd alone, inspect global chat history, or attach indiscriminately to an existing daemon.
+3. Consume only validated lifecycle enums into Pulse: active → Working; approval/input wait → Awaiting you; a completed turn → Ready; failure → Failed; interrupted/disconnected → an explicit corresponding state. These events take precedence over screen heuristics until the connection is lost.
+4. Use typed work-item categories for optional fixed descriptions such as “Running a command” or “Editing files.” Discard command arguments, diffs, tool output, prompts, free-form errors, and reasoning before renderer IPC. Never automatically answer an approval request.
+5. Offer the agent's commentary or final answer in an explicitly opened details view. A chat summary can repeat a secret from the task. Treat it as sensitive conversation content: no automatic header, notification, or session-store copy; no secondary model required.
+6. Validate the second-client subscription behavior against a real owned server before shipping. The inspected schema has no read-only `thread/subscribe` capability. `thread/read` does not subscribe; `thread/resume` is control-capable even when turn content is excluded. Calling a client “read-only” is an application rule, not a server-enforced permission. Test that observing events cannot steal or duplicate approval handling from the TUI.
 
-```
-Layer 0  Shell integration (OSC 133/633)  → command boundaries + exit codes.
-         Deterministic, instant, free, offline.                         [planned: step 3]
-Layer 1  Pattern + buffer signals over the live stream → awaiting/error
-         detection. Regex-cheap, instant, offline. The deterministic floor. [step 1]
-Layer 2  Model summariser (ipc-pulse.js) — the LABEL, and the genuinely
-         ambiguous cases Layers 0–1 can't resolve. Fed previous-verdict +
-         delta, not a cold snapshot. Behind a fleet-wide scheduler.     [partly built; step 4]
-   +     Per-pane event log (transitions + timestamps) = the "context"
-         half. The transition IS the log entry the edge fires on.       [step 2]
-```
+A candidate that avoids the extra subscriber is a private local transport gateway between the TUI and its owned server. Forward TUI traffic opaquely and unchanged; reduce only server-to-TUI lifecycle messages to fixed enums. The TUI stays the sole approval handler, and the gateway originates no protocol requests. The documented Unix transport uses a WebSocket handshake. This candidate still needs framing, backpressure, disconnect, approval-routing, and pane-ownership tests. [Transport specification](https://learn.chatgpt.com/docs/app-server#protocol)
 
-### The deterministic `awaiting` tell (Layer 1)
+Codex hooks are another supported seam: turn submission, permission requests, stop, and interruption can signal lifecycle changes. Their payloads can include prompts and tool inputs; transcript files are not a stable interface. A hook adapter would have to discard content immediately, bind events to the correct pane, preserve existing hooks, and honor Codex's hook trust process. [Codex hooks documentation](https://learn.chatgpt.com/docs/hooks)
 
-A genuinely working agent **keeps emitting bytes** — its spinner/`✻` animation, an elapsed
-timer, progress repaints. Byte flow never fully stops while it's alive and computing. So:
+This adapter is a proposed follow-up, **not enabled by the process-identity changes**. The current build makes no Codex API calls, reads no Codex chat history, and installs no Codex hooks.
 
-- **sustained byte-silence + an input affordance** ⇒ `awaiting`
-- **ongoing bytes** ⇒ `working`
+## Verification
 
-Signals, cheapest first:
-
-1. **Explicit prompt patterns** in the visible tail — high confidence, surfaces fast
-   (~1s after output settles): `(y/N)`, `[Y/n]`, `yes/no`, `Password:`, `proceed?`,
-   `continue?`, `do you want to …?`, `overwrite …?`, `press enter`, `choose …:`. Plus
-   optional per-agent matchers (e.g. Claude Code's permission prompt). Harness-agnostic core,
-   optional adapters on top — see the auto-title harness-agnostic principle.
-2. **Alternate-screen buffer + sustained silence** — a full-screen TUI app (`buffer.type ===
-   'alternate'`) that's gone byte-silent past the quiet window is almost certainly at rest.
-3. Everything else that's gone quiet with no clear tell stays `quiet` and is handed to
-   **Layer 2** (the model) to call — that's what it's for.
-
-Timing: the explicit-prompt path may fire on the short settle window (`STREAM_IDLE_MS`,
-~1s) because those patterns are unambiguous. The implicit rest/alt-screen path waits the
-conservative `QUIET_MS` (8s) silence window, to stay on the "still working" side.
-
-### The edge (the notify seam)
-
-All semantic transitions go through one setter so the `working → awaiting` edge can't be
-missed. On entry to `awaiting` while the pane is unfocused, it (a) flags the pane `unseen`
-(a soft come-look pulse on the dot) and (b) calls an `onAwait(session)` hook. Today that hook
-is the seam; the actual surface (OS notification / sound / loud fleet badge) is a later,
-explicit product choice.
-
-## Build order
-
-1. **Deterministic `awaiting` detector + rename `blocked` → `awaiting`** (enum, dot CSS,
-   fleet bucket) + the edge hook. Renderer-only, no app rebuild, degrades gracefully with no
-   LLM. Broaden the Layer 2 prompt to name the resting state explicitly (today it mislabels
-   end-of-turn rest as `done`/`idle`, under-signaling that you should engage). ← **this step**
-2. Per-pane event log (transition history → durations + better model context).
-3. OSC 133 shell integration (Layer 0).
-4. Fleet scheduler for Layer 2 at 10+ panes.
-
-Keep the deterministic floor working with **no LLM configured** at every step.
+- Policy tests reject unknown process names, forged labels, terminal-derived session fields, stale menu matches, and arbitrary resume arguments.
+- Filesystem tests verify that Explorer deletion uses Trash with no permanent fallback.
+- `npm run smoke:application` builds and runs the isolated workbench smoke with synthetic terminal input and a separate app profile/workspace. It checks rename, process transitions, Pulse, layouts, and persisted state without using a live user terminal. The macOS/Linux harness requires a C compiler to build its harmless agent fixture; it leaves its temporary artifacts for inspection.
+- Before adding an agent adapter, require synthetic secrets in every discarded event field, two simultaneous panes, reconnect/exit behavior, and approval routing tests. Unsupported protocol versions must return to the generic terminal fallback.

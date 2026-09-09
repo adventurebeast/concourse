@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { Worker } from 'worker_threads'
 import { join } from 'path'
+import { confine } from './paths.js'
 
 // Workspace search. The file-walk + regex matching runs in a worker_threads Worker
 // (search-worker.js) so a pathological user regex can't freeze the main process —
@@ -43,6 +44,15 @@ export function registerSearch(ctx) {
       return { files: [], totalMatches: 0, truncated: false, error: 'Invalid pattern' }
     }
 
+    let searchRoot = root
+    if (opts.scopeDir) {
+      try {
+        searchRoot = confine(root, opts.scopeDir)
+      } catch {
+        return { files: [], totalMatches: 0, truncated: false, error: 'Invalid search folder' }
+      }
+    }
+
     return await new Promise((resolve) => {
       let settled = false
       let worker = null
@@ -66,7 +76,7 @@ export function registerSearch(ctx) {
       )
       try {
         worker = new Worker(workerPath, {
-          workerData: { root, regexSource: regex.source, regexFlags: regex.flags }
+          workerData: { root: searchRoot, regexSource: regex.source, regexFlags: regex.flags }
         })
       } catch {
         return finish({ files: [], totalMatches: 0, truncated: false, error: 'Search unavailable' })

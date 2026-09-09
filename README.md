@@ -28,7 +28,7 @@ It's agent-agnostic by design. Anything you can run in a shell — `claude`, `co
 
 And it's built to be **ultrafast, lightweight, and easy on your system**: a vanilla-JS renderer with no UI framework and only a handful of runtime dependencies, so the workbench stays snappy and leaves your machine's resources for the agents you're actually running.
 
-> **Terminal privacy boundary.** Concourse forwards keystrokes directly to the PTY but never inspects, retains, or derives metadata from those bytes. Terminal input, output, shell history, OSC titles, restored labels, commands, and generated summaries cannot name a tab. Headers are immutable ordinal identities such as `Terminal 1`.
+> **Terminal privacy boundary.** Concourse forwards keystrokes directly to the PTY but never inspects, retains, or derives metadata from those bytes. Terminal input, output, shell history, OSC titles, commands, and generated summaries cannot name a tab. Known foreground processes supply fixed names such as `Codex · 1` or `Bash · 2`; unknown processes fall back to `Terminal 1`. Explicit task names override the automatic identity and are the only names persisted.
 
 ## Install (developer beta)
 
@@ -55,6 +55,7 @@ Build and preview a production bundle:
 npm run build    # bundle main + preload + renderer into ./out
 npm start        # preview the built app
 npm run dist     # package a macOS .app (electron-builder)
+npm run smoke:application # isolated workbench + terminal privacy runthrough
 ```
 
 Install the current source as your local production app:
@@ -85,7 +86,7 @@ Every agent runs in a real PTY-backed terminal. The difference is how you arrang
 | **Stack** | `⌘O` | One agent large, the rest compact in a rail |
 | **Flow** | `⌘P` | Album-style — center pane live, neighbors previewed |
 
-Cycle layouts with `⌘⇧L`. Jump to any pane with `⌘1`–`⌘9`, cycle with `⌘⇧←/→`, open a new one with `⌘T`, and drag tabs to reorder. Each pane has an immutable ordinal name and carries its own identity color across every view. Toggle the sidebar with `⌘B`, the bottom panel with `⌘J`, and call up the command palette with `⌘K`.
+Cycle layouts with `⌘⇧L`. Jump to any pane with `⌘1`–`⌘9`, cycle with `⌘⇧←/→`, open a new one with `⌘T`, and drag tabs to reorder. Each pane carries its own ordinal and identity color across every view. Double-click its name, or right-click → Rename, to label a task; “Use Automatic Name” returns to the detected process identity. Toggle the sidebar with `⌘B`, the bottom panel with `⌘J`, and call up the command palette with `⌘K`.
 
 <div align="center">
 
@@ -106,11 +107,11 @@ Cycle layouts with `⌘⇧L`. Jump to any pane with `⌘1`–`⌘9`, cycle with 
 
 Watching ten scrollbacks is impossible. Pulse uses only local, deterministic signals:
 
-- **Working:** visible terminal activity continues after the user's prompt echo.
-- **Awaiting you:** a settled screen ends in a high-confidence input prompt, or an alternate-screen TUI has gone quiet.
-- **Idle:** the pane has settled without an explicit request for input.
+- **Working:** the screen is changing, or a foreground process has just started.
+- **Awaiting you:** a settled screen ends in a recognized input prompt or permission menu.
+- **Quiet / Shell ready:** output has settled; silence alone never claims an agent has finished or needs approval.
 
-This preserves the useful attention signal without turning terminal content into labels or sending it to a model. Tabs use stable names (`Tab 1`, `Claude`, `Codex`, etc.); double-click a tab when you want an explicit custom name.
+This preserves the useful attention signal without turning terminal content into labels or sending it to a model. On macOS and Linux, a bounded process-name query identifies supported agents and tools without collecting arguments or environment variables. Unrecognized or unavailable process metadata stays generic. Headers and rail cards show the activity in words; custom task names survive process changes and session restore.
 
 An optional model can curate the command palette from commands declared in `package.json`, Justfiles, and Makefiles. Those candidates are allowlisted before and after the model call; terminal text and command history are never inputs.
 
@@ -118,7 +119,7 @@ An optional model can curate the command palette from commands declared in `pack
 
 Concourse is a full workbench, not just a terminal grid:
 
-- **Explorer** — file-type icons, lazy expand, right-click New / Rename / Delete, refresh & collapse-all.
+- **Explorer** — file-type icons, lazy expand, keyboard-accessible right-click menus for New / Rename / Copy / Cut / Paste / Move / Duplicate, terminal and search actions, Git actions, and recoverable Move to Trash (Recycle Bin on Windows), plus refresh & collapse-all.
 - **Source Control** — VS Code-style git: branch and ahead/behind in the status bar, staged / changed groups, stage · unstage · discard, a commit box (`⌘Enter`), and click-to-open inline diffs.
 - **Editor** — Monaco with multi-file tabs, dirty indicators, `⌘S` to save, broad syntax highlighting, and read-only git diff tabs.
 - **Search** — fast workspace-wide search with case / whole-word / regex toggles; click a result to jump to the exact line.
@@ -200,6 +201,7 @@ Built on Electron + Monaco + xterm.js + node-pty — the same core tech as VS Co
 
 ## Roadmap
 
+- **Structured Codex status** — consume app-server lifecycle events alongside the interactive TUI; keep chat summaries in an explicit detail view. See [Pulse design](docs/pulse-engine.md).
 - **Curated agent presets** — saved presets and per-project defaults without exposing terminal input.
 - **Richer git** — branch switching, push / pull, stash.
 - **Fleet arrangements** — purpose-built layouts for 10+ agents and a queue for pending work.

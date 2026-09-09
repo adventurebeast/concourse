@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import fs from 'fs/promises'
 import path from 'path'
 import os from 'os'
@@ -28,18 +28,69 @@ async function uniqueDest(dir, name) {
   const stem = ext ? name.slice(0, -ext.length) : name
   for (let n = 1; n < 1000; n++) {
     try {
-      await fs.access(candidate)
-    } catch {
-      return candidate // access threw → nothing there → free to use
+      await fs.lstat(candidate)
+    } catch (err) {
+      if (err.code === 'ENOENT') return candidate
+      throw err
     }
     candidate = path.join(dir, `${stem} (${n})${ext}`)
   }
   throw new Error('ETOOMANY')
 }
 
+// Validate the target and its parent, while preserving the final directory
+// entry. Resolving the entire path before rename/trash would act on a symlink's
+// target instead of the link the user selected in the explorer.
+function entryPath(root, value) {
+  const absolute = path.resolve(value)
+  confine(root, absolute)
+  return path.join(confine(root, path.dirname(absolute)), path.basename(absolute))
+}
+
+function protectRoot(root, target) {
+  if (confine(root, target) === confine(root, root)) {
+    throw new Error('The workspace root cannot be renamed, moved, or deleted.')
+  }
+}
+
+async function requireUnused(destination, source) {
+  let existing
+  try {
+    existing = await fs.lstat(destination)
+  } catch (err) {
+    if (err.code === 'ENOENT') return
+    throw err
+  }
+  // Permit case-only renames on a case-insensitive filesystem, but never treat
+  // another existing entry (including a dangling symlink) as an empty target.
+  if (source && source.toLowerCase() === destination.toLowerCase()) {
+    const original = await fs.lstat(source)
+    if (existing.dev === original.dev && existing.ino === original.ino) return
+  }
+  throw new Error('An item with that name already exists.')
+}
+
 // Filesystem IPC handlers. Mutations return `true` on success or throw, and the
 // renderer is responsible for surfacing any failures.
 export function registerFs(ctx) {
+  ipcMain.handle('fs:chooseDestination', async (e, startPath) => {
+    const root = ctx.getRoot(e.sender)
+    if (!root) return null
+    let start = root
+    try {
+      start = confine(root, startPath || root)
+    } catch {
+      start = confine(root, root)
+    }
+    const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender), {
+      title: 'Choose a destination inside the workspace',
+      defaultPath: start,
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    return confine(root, result.filePaths[0])
+  })
+
   ipcMain.handle('fs:readDir', async (_e, dirPath) => {
     dirPath = confine(ctx.getRoot(_e.sender), dirPath)
     const dirents = await fs.readdir(dirPath, { withFileTypes: true })
@@ -100,15 +151,44 @@ export function registerFs(ctx) {
 
   ipcMain.handle('fs:rename', async (_e, oldPath, newPath) => {
     const root = ctx.getRoot(_e.sender)
-    oldPath = confine(root, oldPath)
-    newPath = confine(root, newPath)
+    protectRoot(root, oldPath)
+    oldPath = entryPath(root, oldPath)
+    newPath = entryPath(root, newPath)
+    if (oldPath === newPath) return true
+    await requireUnused(newPath, oldPath)
     await fs.rename(oldPath, newPath)
     return true
   })
 
+  // Move an existing workspace entry into another workspace folder. Unlike an
+  // external import, a move never invents a suffixed name or overwrites a clash:
+  // the user's project structure should change only exactly as the drop implies.
+  ipcMain.handle('fs:move', async (_e, srcPath, destDir) => {
+    const root = ctx.getRoot(_e.sender)
+    protectRoot(root, srcPath)
+    const src = entryPath(root, srcPath)
+    const dir = confine(root, destDir)
+    const dirStat = await fs.stat(dir)
+    if (!dirStat.isDirectory()) throw new Error('ENOTDIR')
+    const dest = entryPath(root, path.join(dir, path.basename(src)))
+    if (dest === src) return src
+    const srcStat = await fs.lstat(src)
+    if (srcStat.isDirectory()) {
+      const rel = path.relative(src, dest)
+      if (rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..')) {
+        throw new Error('A folder cannot be moved into itself.')
+      }
+    }
+    await requireUnused(dest)
+    await fs.rename(src, dest)
+    return dest
+  })
+
   ipcMain.handle('fs:delete', async (_e, p) => {
-    p = confine(ctx.getRoot(_e.sender), p)
-    await fs.rm(p, { recursive: true, force: true })
+    const root = ctx.getRoot(_e.sender)
+    protectRoot(root, p)
+    p = entryPath(root, p)
+    await shell.trashItem(p)
     return true
   })
 
@@ -128,7 +208,7 @@ export function registerFs(ctx) {
     const src = path.resolve(String(srcPath || ''))
     const stat = await fs.stat(src) // throws if missing/unreadable — surfaced to the renderer
     const dest = confine(root, await uniqueDest(destDir, path.basename(src)))
-    await fs.cp(src, dest, { recursive: stat.isDirectory() })
+    await fs.cp(src, dest, { recursive: stat.isDirectory(), force: false, errorOnExist: true })
     return dest
   })
 
@@ -138,7 +218,10 @@ export function registerFs(ctx) {
   ipcMain.handle('fs:importBytes', async (_e, destDir, name, type, bytes) => {
     const root = ctx.getRoot(_e.sender)
     destDir = confine(root, destDir)
-    let safe = String(name || '').replace(/[^A-Za-z0-9._-]/g, '_').replace(/^[_.]+/, '').slice(-80)
+    let safe = String(name || '')
+      .replace(/[^A-Za-z0-9._-]/g, '_')
+      .replace(/^[_.]+/, '')
+      .slice(-80)
     const ext = MIME_EXT[type] || ''
     if (!safe) safe = ext ? `image.${ext}` : 'dropped-file'
     else if (!safe.includes('.') && ext) safe = `${safe}.${ext}`
@@ -150,7 +233,10 @@ export function registerFs(ctx) {
   ipcMain.handle('fs:saveDrop', async (_e, name, type, bytes) => {
     const dir = path.join(os.tmpdir(), 'concourse-drops')
     await fs.mkdir(dir, { recursive: true })
-    let safe = String(name || '').replace(/[^A-Za-z0-9._-]/g, '_').replace(/^[_.]+/, '').slice(-80)
+    let safe = String(name || '')
+      .replace(/[^A-Za-z0-9._-]/g, '_')
+      .replace(/^[_.]+/, '')
+      .slice(-80)
     const ext = MIME_EXT[type] || ''
     if (!safe) safe = ext ? `image.${ext}` : 'dropped-file'
     else if (!safe.includes('.') && ext) safe = `${safe}.${ext}`

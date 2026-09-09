@@ -68,7 +68,7 @@ function langForPath(p) {
 
 function baseName(p) {
   if (!p) return ''
-  return (p.split(/[\\/]/).pop() || p)
+  return p.split(/[\\/]/).pop() || p
 }
 
 // Cheap renderer-side guard: decide whether a string we just read looks like
@@ -151,6 +151,18 @@ export function createEditor() {
   const tabs = new Map()
   let activeKey = null
   let diffSeq = 0
+  const pathChanges = []
+
+  function remappedPath(path, oldPath, newPath) {
+    if (path === oldPath) return newPath
+    const separator = api.platform === 'win32' ? '\\' : '/'
+    const prefix = oldPath.replace(/[\\/]$/, '') + separator
+    return path.startsWith(prefix) ? newPath + path.slice(oldPath.length) : path
+  }
+
+  function isOpen(tab) {
+    return tabs.get(tab.key) === tab
+  }
 
   const saveListeners = []
   const tabsListeners = []
@@ -327,7 +339,7 @@ export function createEditor() {
     const saveThenClose = () => {
       finish()
       saveTab(tab).then((ok) => {
-        if (ok) proceed() // a failed write keeps the tab open + dirty (toast already shown)
+        if (ok && !tab.dirty) proceed() // edits made while saving must stay open
       })
     }
     const onKey = (e) => {
@@ -354,6 +366,7 @@ export function createEditor() {
   function buildTabEl({ marker, label, key, title }) {
     const el = document.createElement('div')
     el.className = 'etab'
+    el.dataset.editorKey = key
     el.title = title || label
 
     let markerEl = null
@@ -385,16 +398,16 @@ export function createEditor() {
       // Middle-click closes (VS Code behavior); ignore close-button target.
       if (e.button === 1) {
         e.preventDefault()
-        closeTab(key)
+        closeTab(el.dataset.editorKey)
       }
     })
     el.addEventListener('click', (e) => {
       if (close.contains(e.target)) {
         e.stopPropagation()
-        closeTab(key)
+        closeTab(el.dataset.editorKey)
         return
       }
-      activate(key)
+      activate(el.dataset.editorKey)
     })
 
     return { el, labelEl, dotEl: dot, closeEl: close }
@@ -424,6 +437,7 @@ export function createEditor() {
   // opts: { line, column, endColumn } — when given, scroll to and select that span.
   async function openFile(path, opts = {}) {
     if (!path) return
+    const pathGeneration = pathChanges.length
     const key = fileKey(path)
     const existing = tabs.get(key)
     if (existing) {
@@ -446,12 +460,14 @@ export function createEditor() {
 
     let readOnly = false
     if (readError != null) {
-      const msg = (readError && readError.message) ? readError.message : String(readError)
+      const msg = readError && readError.message ? readError.message : String(readError)
       content =
         '// This file could not be read and is shown read-only to avoid\n' +
         '// accidentally overwriting it.\n' +
         '//\n' +
-        '// ' + msg + '\n'
+        '// ' +
+        msg +
+        '\n'
       readOnly = true
     } else if (content == null) {
       content = ''
@@ -471,6 +487,14 @@ export function createEditor() {
       const st = await api.fs.stat(path)
       initialMtime = st ? st.mtimeMs : null
     }
+
+    // An explorer move may finish while the read is in flight. Open the new
+    // location instead of creating a stale tab that could recreate the old file.
+    let currentPath = path
+    for (const change of pathChanges.slice(pathGeneration)) {
+      currentPath = remappedPath(currentPath, change.oldPath, change.newPath)
+    }
+    if (currentPath !== path) return openFile(currentPath, opts)
 
     // A concurrent openFile(path) for the same not-yet-open path (fast double-click,
     // or a reveal racing session-restore) may have created the tab while we awaited
@@ -523,10 +547,10 @@ export function createEditor() {
   }
 
   // ---------- Public: openDiff ----------
-  async function openDiff({ path, original, modified, title }) {
+  async function openDiff({ path, original, modified, title, staged = false }) {
     // Focus an existing diff tab for the same path if present.
     for (const [k, t] of tabs) {
-      if (t.kind === 'diff' && t.path === path) {
+      if (t.kind === 'diff' && t.path === path && t.staged === staged) {
         // Refresh contents in case the working tree changed.
         if (t.originalModel) t.originalModel.setValue(original == null ? '' : original)
         if (t.modifiedModel) t.modifiedModel.setValue(modified == null ? '' : modified)
@@ -540,7 +564,8 @@ export function createEditor() {
     const modifiedModel = monaco.editor.createModel(modified == null ? '' : modified, lang)
 
     const key = 'diff:' + path + ':' + diffSeq++
-    const labelText = (title || baseName(path) || 'diff') + ' (Working Tree)'
+    const labelText =
+      (title || baseName(path) || 'diff') + (staged ? ' (Staged)' : ' (Working Tree)')
 
     const { el, dotEl, closeEl, labelEl } = buildTabEl({
       marker: '⇄',
@@ -553,6 +578,7 @@ export function createEditor() {
       kind: 'diff',
       key,
       path,
+      staged,
       originalModel,
       modifiedModel,
       viewState: null,
@@ -578,40 +604,58 @@ export function createEditor() {
     // Never write back read-only tabs (read-error / binary previews); their
     // model holds a placeholder notice, not the real file contents.
     if (tab.readOnly) return true
+    // Serialize saves of a single buffer. Two Cmd+S presses must not let an older
+    // write land after the newer version or race the watcher's reload.
+    while (tab.saving) await tab.saving
+    if (!isOpen(tab)) return false
+    const pending = writeTab(tab)
+    tab.saving = pending
+    try {
+      return await pending
+    } finally {
+      if (tab.saving === pending) tab.saving = null
+    }
+  }
+
+  async function writeTab(tab) {
+    const path = tab.path
 
     // Stale-write guard: if the file changed on disk since we loaded/last-saved it
     // (an agent or terminal wrote to it while it was open here), a blind overwrite
     // would destroy that work. Ask first. Cancel aborts; Reload adopts the disk
     // copy; Overwrite falls through to the write below.
     if (tab.diskMtime != null) {
-      const st = await api.fs.stat(tab.path)
+      const st = await api.fs.stat(path)
+      if (!isOpen(tab) || tab.path !== path) return false
       if (st && st.mtimeMs !== tab.diskMtime) {
         const choice = await confirmOverwrite(tab)
         if (choice === 'cancel') return false
         if (choice === 'reload') {
-          await reloadTab(tab)
-          return true // disk copy is now loaded and clean; nothing to write
+          return reloadTab(tab) // only close if the disk copy really loaded
         }
         // choice === 'overwrite' → fall through
       }
     }
 
+    if (!isOpen(tab) || tab.path !== path) return false
     const value = tab.model.getValue()
+    const version = tab.model.getVersionId()
     try {
-      await api.fs.writeFile(tab.path, value)
+      await api.fs.writeFile(path, value)
     } catch (err) {
       // Keep the tab dirty (the change is NOT on disk) and tell the user, instead
       // of silently swallowing the failure.
-      const reason = (err && err.message) ? err.message : String(err)
+      const reason = err && err.message ? err.message : String(err)
       showToast('Could not save ' + baseName(tab.path) + ': ' + reason, { kind: 'error' })
       return false
     }
-    setDirty(tab, false)
+    if (!isOpen(tab) || tab.path !== path) return false
+    setDirty(tab, tab.model.getVersionId() !== version)
     // Re-baseline the mtime to what we just wrote, so the next save compares against
     // our own write (and the watcher echo of it doesn't look like an external edit).
     try {
-      const st = await api.fs.stat(tab.path)
-      if (st) tab.diskMtime = st.mtimeMs
+      const st = await api.fs.stat(path)
+      if (st && isOpen(tab) && tab.path === path) tab.diskMtime = st.mtimeMs
     } catch {
       /* best-effort; a failed re-stat just leaves the old baseline */
     }
@@ -623,34 +667,39 @@ export function createEditor() {
         /* ignore listener errors */
       }
     }
-    return true
+    return !tab.dirty
   }
 
   // Replace a tab's buffer with the current on-disk contents (used by the conflict
   // dialog's "Reload" and by auto-reconcile for clean tabs). Preserves cursor/scroll
   // best-effort and never flips the tab dirty (the reloading flag suppresses that).
   async function reloadTab(tab) {
-    if (!tab || tab.kind !== 'file' || tab.readOnly) return
+    if (!tab || tab.kind !== 'file' || tab.readOnly || !isOpen(tab)) return false
+    const path = tab.path
+    const version = tab.model.getVersionId()
     let content
+    let st
     try {
-      content = await api.fs.readFile(tab.path)
+      const before = await api.fs.stat(path)
+      content = await api.fs.readFile(path)
+      st = await api.fs.stat(path)
+      // Never associate bytes from one disk revision with a later revision's
+      // mtime. A subsequent watcher/poll will retry a file that's still moving.
+      if (!before || !st || before.mtimeMs !== st.mtimeMs) return false
     } catch {
-      return // file vanished/unreadable — leave the buffer as-is
+      return false // file vanished/unreadable — leave the buffer as-is
     }
+    if (!isOpen(tab) || tab.path !== path || tab.model.getVersionId() !== version) return false
     if (content == null) content = ''
+    if (looksBinary(content)) return false
     // Identical bytes (a touch, or our own write echoing back): re-baseline the
     // mtime but never call setValue — that would jolt the viewport and clear the
     // undo stack for nothing.
     if (content === tab.model.getValue()) {
-      try {
-        const st = await api.fs.stat(tab.path)
-        if (st) tab.diskMtime = st.mtimeMs
-      } catch {
-        /* best-effort */
-      }
+      tab.diskMtime = st.mtimeMs
       setDirty(tab, false)
       tab.conflictNotified = false
-      return
+      return true
     }
     const isActive = activeKey === tab.key
     const vs = isActive ? fileEditor.saveViewState() : tab.viewState
@@ -661,12 +710,8 @@ export function createEditor() {
     tab.conflictNotified = false
     if (isActive && vs) fileEditor.restoreViewState(vs)
     else if (vs) tab.viewState = vs
-    try {
-      const st = await api.fs.stat(tab.path)
-      if (st) tab.diskMtime = st.mtimeMs
-    } catch {
-      /* best-effort */
-    }
+    tab.diskMtime = st.mtimeMs
+    return true
   }
 
   // "This file changed on disk" resolver, shown before a save that would clobber a
@@ -752,13 +797,15 @@ export function createEditor() {
   }
   async function doReconcile() {
     for (const tab of tabs.values()) {
-      if (tab.kind !== 'file' || tab.readOnly) continue
+      if (tab.kind !== 'file' || tab.readOnly || tab.saving) continue
+      const path = tab.path
       let st
       try {
         st = await api.fs.stat(tab.path)
       } catch {
         continue
       }
+      if (!isOpen(tab) || tab.path !== path || tab.saving) continue
       if (!st) continue
       // No baseline yet (the stat at open failed, e.g. the file didn't exist yet):
       // adopt this one silently rather than skipping the tab forever.
@@ -772,7 +819,8 @@ export function createEditor() {
       } else if (!tab.conflictNotified) {
         tab.conflictNotified = true
         showToast(
-          baseName(tab.path) + ' changed on disk — your unsaved edits are kept; saving will ask before overwriting.',
+          baseName(tab.path) +
+            ' changed on disk — your unsaved edits are kept; saving will ask before overwriting.',
           { kind: 'warn' }
         )
       }
@@ -780,7 +828,37 @@ export function createEditor() {
   }
   async function save() {
     if (!activeKey) return
-    await saveTab(tabs.get(activeKey))
+    return saveTab(tabs.get(activeKey))
+  }
+
+  // Keep open buffers, their dirty state and their tab order when the explorer
+  // renames a file or moves a folder. Re-key the same model so Save targets the
+  // new location and clicking the existing tab still activates/closes it.
+  function handlePathChanged(oldPath, newPath) {
+    if (!oldPath || !newPath || oldPath === newPath) return
+    pathChanges.push({ oldPath, newPath })
+    const entries = [...tabs.values()]
+    tabs.clear()
+    for (const tab of entries) {
+      if (tab.kind === 'file') {
+        const nextPath = remappedPath(tab.path, oldPath, newPath)
+        if (nextPath !== tab.path) {
+          const wasActive = activeKey === tab.key
+          tab.path = nextPath
+          tab.key = fileKey(nextPath)
+          tab.tabEl.dataset.editorKey = tab.key
+          tab.tabEl.title = nextPath
+          tab.tabEl.dataset.tip = nextPath
+          tab.labelEl.textContent = baseName(nextPath)
+          monaco.editor.setModelLanguage(
+            tab.model,
+            tab.readOnly ? 'plaintext' : langForPath(nextPath)
+          )
+          if (wasActive) activeKey = tab.key
+        }
+      }
+      tabs.set(tab.key, tab)
+    }
   }
   // Any open file tab with unsaved edits? main.js consults this in beforeunload to
   // trigger the native "unsaved changes" prompt so quitting/reloading can't silently
@@ -813,10 +891,12 @@ export function createEditor() {
   function applySettings(opts = {}) {
     const o = {}
     if (typeof opts.fontSize === 'number') o.fontSize = opts.fontSize
-    if (typeof opts.fontFamily === 'string') o.fontFamily = opts.fontFamily.trim() || DEFAULT_FONT_FAMILY
+    if (typeof opts.fontFamily === 'string')
+      o.fontFamily = opts.fontFamily.trim() || DEFAULT_FONT_FAMILY
     if (typeof opts.minimap === 'boolean') o.minimap = { enabled: opts.minimap }
     if (typeof opts.smoothScrolling === 'boolean') o.smoothScrolling = opts.smoothScrolling
-    if (typeof opts.scrollBeyondLastLine === 'boolean') o.scrollBeyondLastLine = opts.scrollBeyondLastLine
+    if (typeof opts.scrollBeyondLastLine === 'boolean')
+      o.scrollBeyondLastLine = opts.scrollBeyondLastLine
     if (Object.keys(o).length === 0) return
     fileEditor.updateOptions(o)
     if (diffEditor) diffEditor.updateOptions(o)
@@ -878,5 +958,16 @@ export function createEditor() {
 
   syncWelcome()
 
-  return { openFile, openDiff, save, onSave, onTabsChange, setTheme, applySettings, listOpenFiles, hasUnsavedTabs }
+  return {
+    openFile,
+    openDiff,
+    save,
+    onSave,
+    onTabsChange,
+    setTheme,
+    applySettings,
+    listOpenFiles,
+    hasUnsavedTabs,
+    handlePathChanged
+  }
 }

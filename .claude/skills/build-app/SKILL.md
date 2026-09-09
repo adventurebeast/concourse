@@ -1,120 +1,112 @@
 ---
 name: build-app
-description: Build the launchable Concourse macOS app (.app / .dmg). Use when the user says "build app", wants a packaged/installable build, or a real launched app to double-click — not the dev server.
+description: Build, install, verify, and release Concourse's packaged macOS app. Use for build-app, local installation, or /release requests; use npm run dev for the development server.
 ---
 
-# Build App
+# Build and release Concourse
 
-Produce the packaged macOS Concourse app from source.
+Produce a verified app at `/Applications/Concourse.app`, record source and version
+through a branch and PR, and complete the requested release workflow. Public macOS
+artifacts must be built, Developer ID-signed, notarized, stapled, and verified by
+GitHub Actions. Local installation and public publication are separate outcomes.
 
-## Steps
+The current `scripts/release.mjs`, `scripts/install-local.mjs`,
+`scripts/clean-build.mjs`, `.github/workflows/build-mac.yml`,
+`.github/workflows/build-win.yml`, and `test/release-distribution-policy.test.mjs`
+are authoritative. Do not bypass their distribution trust requirements.
 
-Run all six steps in order: build → locate → commit → install → smoke → publish. The
-process is end-to-end every time: it builds the DMG, records it in the repo, installs it
-locally, verifies it boots, AND publishes it to GitHub so the newest version is always
-downloadable. Installing to /Applications is what makes it a real, Spotlight-launchable
-app; the smoke step always uses `open -n` (a separate instance, safe even when this
-session runs inside Concourse); the publish step uploads the DMG as a GitHub Release.
+## Prepare source and version
 
-1. From the project root, run the build. **Default to the DMG** — it produces both the
-   installable `.app` AND the `.dmg` in one pass, so the install (step 4) and publish
-   (step 6) work off the same artifact with no second build:
-   - **DMG (default — installable + publishable):** `npm run dist`
-   - **Unpacked `.app` (throwaway local-only build, no DMG to publish):** `npm run pack` —
-     only when explicitly asked for a quick local build that will NOT be shipped; it skips
-     publish (step 6) since there's no DMG.
+1. Inspect the working tree and preserve unrelated user changes. Work on a feature
+   or release branch, never commit directly to `main`.
+2. Run `npm run bump` once for a new release version. Verify `package.json` and
+   `package-lock.json` agree. Build, pack, install, and release commands do **not**
+   bump automatically; rebuilding an already selected version needs no second bump.
+3. Run `npm run preflight` for the lint/test gate used by PR CI. Run
+   `npm run smoke:application` to build and exercise an isolated profile/workspace
+   with synthetic terminal input. Fix failures before continuing. This POSIX smoke
+   requires a C compiler and does not establish Windows runtime compatibility.
+4. Commit the intended changes and version bump with a `Co-Authored-By` trailer.
+   Push the branch, create a PR, wait for CI green, and merge through the PR.
+   Verify the intended source/version on the default branch before public tagging.
 
-   Both run, in order: **`npm run preflight`** (`npm run lint && npm test` — the
-   EXACT gate CI runs; the build ABORTS here on any lint error or failing test, so
-   you never package, install, or ship code that CI would reject — green preflight
-   ⇒ green PR), `npm run bump` (auto-increments the patch version in
-   `package.json`), `npm run clean` (`rm -rf out release` — deletes stale
-   compiled output and old packages so nothing old leaks into the new build),
-   `electron-vite build` (recompiles ALL of `src/` → `out/`), then
-   `electron-builder --mac` (packages `out/` + `package.json`).
+Local installation can proceed while PR checks run. Public publication waits for
+reviewed, CI-green source to merge. The release script does not enforce this Git
+workflow and its `gh release create` call does not pin an explicit target SHA.
+Verify the default branch contains the intended release before creating its tag.
 
-   Because of `clean`, every build is from scratch — whatever is in `src/` is
-   what ships. New modules are picked up automatically as long as they're
-   imported from an entry point (`src/main/index.js`, `src/preload/index.js`,
-   or reachable from `src/renderer/index.html`).
+## Build and install
 
-2. Output lands in `release/`:
-   - `.app`: `release/mac-arm64/Concourse.app`
-   - `.dmg`: `release/Concourse-<version>-arm64.dmg`
+Use `npm run install:local` for local-only installation. Use `npm run release` for
+an authorized release: it invokes the same installer before checking GitHub access
+or distribution credentials. Running `npm run dist` first is unnecessary.
 
-3. **Commit the result** — the build is not "done" until the repo records it. The
-   build wrote `package.json` + `package-lock.json` (version bump), and there are
-   usually feature changes in `src/` too. Per the repo's standard flow, work goes via
-   a **branch + PR, never direct to `main`**:
-   - `git switch -c <feat-branch>` (skip if already on a feature branch).
-   - Commit the feature change(s) and the version bump — separate commits is cleaner
-     (`feat: …` then `chore: bump version to X.Y.Z`). End commit messages with the
-     `Co-Authored-By` trailer.
-   - `git push -u origin <feat-branch>` → `gh pr create` → wait for **CI green**
-     (`gh pr checks <n>`) → `gh pr merge <n> --merge --delete-branch`.
-   - If you're only re-packing with no source changes, at minimum commit the bump so
-     the repo version tracks the latest build.
+The installer runs preflight, vendors the optional llama runtime, cleans outputs,
+builds with electron-vite, and packages `release/mac-arm64/Concourse.app`. Its
+local-only overrides are `--config.mac.identity=-` and
+`--config.mac.notarize=false`. This ad-hoc signature is for this Mac; never copy
+these overrides into public build configuration or upload this local app as a
+public installer.
 
-4. **Install to /Applications** so the app is a permanent, Spotlight-launchable install
-   (⌘-Space → "Concourse") rather than something buried in `release/`. Replace any old copy
-   and use `ditto`, which copies macOS app bundles faithfully (preserves symlinks/permissions
-   that a plain `cp -R` can mangle):
-   ```
-   rm -rf /Applications/Concourse.app
-   ditto release/mac-arm64/Concourse.app /Applications/Concourse.app
-   ```
-   /Applications is auto-indexed, but you can make it searchable immediately:
-   `mdimport /Applications/Concourse.app`. (Because the app is unsigned, the FIRST launch may
-   need right-click → Open, or `xattr -dr com.apple.quarantine /Applications/Concourse.app`
-   to clear Gatekeeper.)
+The installer checks signature and version, uses `ditto` to stage a complete copy
+in `/Applications`, clears that local copy's quarantine, and verifies it before
+replacement. It moves the previous app to the user's Trash and restores it if
+replacement fails. Do not manually delete the installed app.
 
-5. Smoke-launch the installed app — verifies it actually boots before it goes live to users:
-   ```
-   npm run smoke
-   ```
-   `npm run smoke` snapshots the running Concourse PIDs, launches a NEW instance with `open -n`,
-   waits a few seconds, then **fails loudly if that instance crashed or never started** (printing
-   any crash-report path). A compile-clean build can still die on launch (a node-pty native
-   mismatch, a missing bundled asset, a bad llama path) — this catches it before you install over
-   a known-good copy or ship it. Use `npm run smoke -- --wait 10` to allow a slower boot.
-   - **ALWAYS via `open -n`** (which `smoke` uses): the NEW build runs as a *separate* instance, so
-     it never kills a Concourse that may be hosting this very session (this app sets no
-     `requestSingleInstanceLock`, so instances coexist). Never `osascript -e 'quit app "Concourse"'`
-     or plain `open -a`. Raw launch without the check is still `open -n /Applications/Concourse.app`.
-   - **Confirm the new build loaded:** the bumped version shows as `vX.Y.Z` at the far-right of
-     the bottom status bar of the newly-opened window. It must match the `version` in
-     `package.json`.
+`npm run clean` moves existing `out/` and `release/` directories into a unique
+`.build-archive/<stamp>/` on the same filesystem. Archives are ignored by Git and
+retained for recovery. Cleanup does not permanently remove them. Do not replace
+this with recursive forced deletion or silently remove old archives.
 
-6. **Publish the DMG to GitHub** so the newest version is always downloadable — this is
-   the finisher for every DMG build (skip ONLY for a `npm run pack` throwaway, which has no
-   DMG). Publish only what you've verified: smoke (step 5) must have passed and CI must be
-   green on `main` (`gh run list --branch main --limit 1` / `gh pr checks` if a PR was used)
-   before uploading, since this DMG goes to real users.
-   ```
-   npm run release             # publish (or update) the GitHub Release for the current version
-   ```
-   Useful variants when needed:
-   ```
-   npm run release -- --dry-run  # preview the tag/title/auto-notes first, touch nothing
-   npm run release -- --draft    # publish as a draft to review on GitHub before going live
-   npm run release -- --notes path/to/body.md   # supply hand-written notes verbatim
-   ```
-   After it finishes, confirm the release is live and at the new version:
-   `gh release list --limit 1` should show `vX.Y.Z` matching `package.json`.
+If Concourse is already running, the installer preserves its processes/agents and
+reports that a restart is needed. Replacing the bundle does not update already
+loaded windows. Never terminate the user's agents to load a new build.
 
-   `scripts/release.mjs` does NOT build — it runs AFTER `npm run dist` and after the
-   version-bump commit is pushed (it tags `vX.Y.Z` at HEAD). It mirrors the existing
-   convention: title `Concourse X.Y.Z — developer beta`, the unsigned-beta notes with the
-   one-time `xattr -dr com.apple.quarantine` bypass, and a "What's new" changelog
-   auto-generated from commits since the previous release tag (edit on GitHub to polish).
-   Re-running for the same version is safe — it re-uploads the DMG (`--clobber`) and
-   refreshes the notes. Requires `gh auth`. Builds stay **unsigned** until the
-   sign/notarize work lands, so users still need the quarantine bypass.
+## Verify the packaged app
 
-## Notes
+Verify installed signature/version and confirm a newly launched packaged instance
+boots and stays alive. `npm run smoke` verifies the bundle version, creates a fresh
+temporary profile, launches with `open -n` and `--user-data-dir`, compares new PIDs,
+and checks fresh crash reports. This keeps profile locks, migrations, and shell
+init cleanup separate from existing agents. The temporary profile is retained.
 
-- Target is arm64, unsigned (`identity: null`) — for personal use, no notarization.
-- The version bump writes `package.json` (and `package-lock.json`) — step 3 commits it. To build WITHOUT bumping (e.g. a re-pack of the same version), run the steps manually: `npm run preflight && npm run clean && electron-vite build && electron-builder --mac --dir` (keep the preflight gate even when bypassing the bump).
-- `node-pty` is a native module: if you hit a runtime load error, run `npm install` (its `postinstall` rebuilds node-pty for this Electron via `electron-rebuild`). `npm run smoke` is what surfaces this class of failure — a mismatched node-pty compiles but crashes the app on boot.
-- `npm run fetch:llama` (auto-run by dist/pack) needs network on the FIRST build to vendor the llama-server binary into `build/bin`, but it's already safe for frequent builds: it **caches** (skips when the binary is present) and is **non-fatal** offline/rate-limited (it warns and ships without the bundled runtime, falling back to Ollama / deterministic Pulse — packaging never breaks). Delete `build/bin/llama-server` to force a re-fetch.
-- Config: `electron-builder.yml`. For the dev server instead, use `npm run dev`.
+An old running process is not proof the new build booted. Preserve existing user
+windows. The integrated application smoke and this
+packaged boot check serve different purposes; compilation alone proves neither.
+
+## Complete the public release
+
+After local installation, `npm run release` checks GitHub authentication and these
+five GitHub Actions secret **names**:
+
+- `MAC_CSC_LINK`
+- `MAC_CSC_KEY_PASSWORD`
+- `APPLE_API_KEY`
+- `APPLE_API_KEY_ID`
+- `APPLE_API_ISSUER`
+
+Never print/request credential values in chat or place them in commands, notes, or
+the repository. Missing authentication or secret names means local installation
+succeeds and public publication is skipped. Report that distinction; do not upload
+a workstation DMG or weaken signing requirements to claim completion.
+
+With credentials and source/CI gates satisfied, the script creates or updates
+release notes for `v<version>`. Its tag triggers native workflows. The macOS upload
+must follow strict codesign verification, Developer ID authority verification,
+notarization/stapling, Gatekeeper assessment, and DMG verification. Windows artifacts
+come from the native Windows runner. Wait for the relevant workflows and verify
+assets for the expected version before saying public downloads are ready.
+
+```bash
+npm run release -- --notes /absolute/path/to/release-notes.md
+npm run release -- --draft
+npm run release -- --dry-run
+```
+
+`--dry-run` previews notes without installing/publishing; previous-tag discovery
+may still fetch a Git tag. `--draft` still installs locally and requires public
+credentials. Re-running a version updates its notes; never move a published tag
+to change its source.
+
+Finish with the version, installed path/restart status, PR/CI outcome, packaged
+smoke result, and either verified public assets or the reason publication skipped.

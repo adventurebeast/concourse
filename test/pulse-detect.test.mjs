@@ -12,7 +12,7 @@ describe('matchesAwaitPrompt — true positives (parked at a prompt)', () => {
     'Delete 3 items? [Y/n]',
     'Continue? yes/no',
     'Enter passphrase for key /Users/me/.ssh/id_ed25519:',
-    "[sudo] password for me:",
+    '[sudo] password for me:',
     'Do you want to proceed?',
     'Are you sure you want to remove node_modules?',
     'Press ENTER to continue',
@@ -45,7 +45,9 @@ describe('matchesAwaitPrompt — false positives are the cardinal sin', () => {
     'console.log("press enter handler wired")\nWiring done.', // "press enter" mid-output, more after
     '$ ', // a bare shell prompt is idle, not awaiting
     'me@host ~/project % ', // zsh prompt — idle, not awaiting
-    'error: continue statement not in loop' // "continue" but no question
+    'error: continue statement not in loop', // "continue" but no question
+    'Example menu:\n> 1) Yes\n  2) No\nContinuing the build...',
+    'The log includes > 1) main as an example.'
   ]
   for (const tail of no) {
     it(`stays quiet on: ${JSON.stringify(tail).slice(0, 60)}`, () => {

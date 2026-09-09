@@ -63,7 +63,7 @@ export function createStatusBar({ onOpenScm } = {}) {
   const BUCKETS = [
     { key: 'working', label: 'working' },
     { key: 'awaiting', label: 'awaiting you' },
-    { key: 'idle', label: 'idle' }
+    { key: 'idle', label: 'quiet' }
   ]
 
   function setFleet(fleet) {
@@ -130,11 +130,11 @@ export function createStatusBar({ onOpenScm } = {}) {
     legendEl.className = 'pulse-legend'
     legendEl.innerHTML =
       '<div class="pulse-legend-title">Pulse</div>' +
-      '<div class="leg-row"><i class="fleet-dot working"></i><span>Working — the agent is busy (the tab breathes)</span></div>' +
-      '<div class="leg-row"><i class="fleet-dot awaiting"></i><span>Awaiting you — at a prompt, or parked at its turn</span></div>' +
-      '<div class="leg-row"><i class="fleet-dot idle"></i><span>Idle — quiet, nothing pending</span></div>' +
+      '<div class="leg-row"><i class="fleet-dot working"></i><span>Working — recent terminal activity</span></div>' +
+      '<div class="leg-row"><i class="fleet-dot awaiting"></i><span>Awaiting you — an input prompt is visible</span></div>' +
+      '<div class="leg-row"><i class="fleet-dot idle"></i><span>Quiet — no recent output; a process may still be running</span></div>' +
       '<div class="leg-row"><span class="leg-swatch"></span><span>Each colour marks one agent — across every layout</span></div>' +
-      '<div class="leg-row"><span class="leg-chip">abc</span><span>Stable labels identify panes without reading terminal text</span></div>'
+      '<div class="leg-row"><span class="leg-chip">abc</span><span>Names follow known processes. Double-click a name to label your task.</span></div>'
     document.body.appendChild(legendEl)
     const r = fleetEl.getBoundingClientRect()
     const bar = document.getElementById('status-bar').getBoundingClientRect()

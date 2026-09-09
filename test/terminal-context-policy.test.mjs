@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
   safeAgentResumeCommand,
+  terminalPresentation,
   stripLegacyTerminalContext
 } from '../src/renderer/terminal-context-policy.js'
 
@@ -21,16 +22,67 @@ describe('terminal context privacy policy', () => {
     expect(source).not.toMatch(/onTitleChange|api\.pulse\.summarize|api\.term\.onCommand/)
   })
 
-  it('uses immutable ordinal labels and exposes no terminal rename path', () => {
+  it('supports explicit names without any terminal text/title capture', () => {
     const source = readFileSync(new URL('../src/renderer/terminals.js', import.meta.url), 'utf8')
 
-    expect(source).toContain('const displayName = `Terminal ${counter}`')
+    expect(source).toContain('const ordinalName = `Terminal ${counter}`')
+    expect(source).toContain("tabLabel.addEventListener('dblclick'")
+    expect(source).toContain('function renameStart(s, labelEl)')
     expect(source).not.toMatch(
-      /customLabel|renameStart|Rename…|safeAgentLabel|automaticTerminalLabel|persistedCustomLabel|applyTitle/
+      /safeAgentLabel|automaticTerminalLabel|persistedCustomLabel|applyTitle/
     )
-    expect(source.match(/tabLabel\.textContent\s*=/g)).toHaveLength(1)
-    expect(source.match(/cellLabel\.textContent\s*=/g)).toHaveLength(1)
-    expect(source.match(/cardLabel\.textContent\s*=/g)).toHaveLength(1)
+  })
+
+  it('builds automatic identity only from fixed keys and an ordinal', () => {
+    expect(
+      terminalPresentation({
+        ordinal: 3,
+        context: {
+          process: 'claude',
+          label: 'password=DO_NOT_DISPLAY',
+          kind: 'secret',
+          running: true
+        },
+        state: 'working'
+      })
+    ).toEqual({ name: 'Claude · 3', detail: 'Working' })
+    expect(
+      terminalPresentation({
+        ordinal: 4,
+        context: {
+          process: 'password=DO_NOT_DISPLAY',
+          label: 'password=DO_NOT_DISPLAY'
+        }
+      })
+    ).toEqual({ name: 'Terminal 4', detail: 'Quiet' })
+  })
+
+  it('preserves an explicit task name while process identity and activity change', () => {
+    const pane = { ordinal: 2, customLabel: 'Checkout tests' }
+    expect(
+      terminalPresentation({
+        ...pane,
+        context: { process: 'codex', running: true },
+        state: 'awaiting'
+      })
+    ).toEqual({ name: 'Checkout tests', detail: 'Codex · Awaiting you' })
+    expect(terminalPresentation({ ...pane, context: { process: 'bash' }, state: 'idle' })).toEqual({
+      name: 'Checkout tests',
+      detail: 'Bash · Shell ready'
+    })
+    expect(terminalPresentation({ ...pane, status: 'exited' })).toEqual({
+      name: 'Checkout tests',
+      detail: 'Exited'
+    })
+  })
+
+  it('does not confuse a quiet foreground process with a ready shell', () => {
+    expect(
+      terminalPresentation({ ordinal: 1, context: { process: 'bash', running: true } }).detail
+    ).toBe('Quiet')
+    expect(
+      terminalPresentation({ ordinal: 1, context: { process: 'vim', running: true } }).detail
+    ).toBe('Quiet')
   })
 
   it('does not mount the removed beginner controls around terminal panes', () => {

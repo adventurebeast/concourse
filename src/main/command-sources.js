@@ -10,6 +10,18 @@ import fs from 'fs/promises'
 // Cap project commands so a repo with hundreds of npm scripts can't flood the list.
 const PROJECT_LIMIT = 60
 
+// Script names are data, even when a package author puts shell syntax in one.
+// Common names remain readable; unusual POSIX names become one literal argument.
+// Windows panes can use either cmd or PowerShell, whose escaping rules differ,
+// so omit unusual names there until the palette knows the target pane's shell.
+export function quoteProjectArgument(name, platform = process.platform) {
+  if (typeof name !== 'string' || !name || /^-/.test(name) || /[\x00-\x1f\x7f]/.test(name))
+    return null
+  if (/^[a-zA-Z0-9_][a-zA-Z0-9_.:/-]*$/.test(name)) return name
+  if (platform === 'win32') return null
+  return "'" + name.replace(/'/g, "'\\''") + "'"
+}
+
 // --- project command files -------------------------------------------------
 
 async function readMaybe(file) {
@@ -28,11 +40,10 @@ async function npmScripts(root) {
     const pkg = JSON.parse(text)
     const scripts = pkg && pkg.scripts
     if (!scripts || typeof scripts !== 'object') return []
-    return Object.keys(scripts).map((name) => ({
-      cmd: `npm run ${name}`,
-      label: name,
-      source: 'npm'
-    }))
+    return Object.keys(scripts).flatMap((name) => {
+      const argument = quoteProjectArgument(name)
+      return argument == null ? [] : [{ cmd: `npm run ${argument}`, label: name, source: 'npm' }]
+    })
   } catch {
     return [] // malformed package.json — skip rather than throw
   }
@@ -55,7 +66,7 @@ async function justRecipes(root) {
     // followed by '=' the line is an assignment (`name := value`), not a recipe.
     // Scanning for the colon (vs. one regex) keeps recipes whose params carry a
     // default value, e.g. `serve port="8080":`.
-    const m = /^([a-zA-Z][\w-]*)/.exec(line)
+    const m = /^([a-zA-Z][\w-]*)(?=\s|:)/.exec(line)
     if (!m) continue
     const colon = line.indexOf(':')
     if (colon === -1 || line[colon + 1] === '=') continue
