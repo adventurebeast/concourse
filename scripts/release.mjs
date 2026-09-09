@@ -9,6 +9,7 @@
 //   npm run release            # install locally, then publish if distribution credentials exist
 //   npm run release -- --draft # create as a draft so you can review/edit before publishing
 //   npm run release -- --notes path/to/body.md   # use a hand-written body verbatim
+//   npm run release -- --no-launch # install without opening or focusing the app
 //   npm run release -- --dry-run # print the tag/title/notes and exit; touch nothing
 //
 // Idempotent: re-running for the same version updates the notes. The release tag
@@ -24,6 +25,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const args = process.argv.slice(2)
 const draft = args.includes('--draft')
 const dryRun = args.includes('--dry-run')
+const noLaunch = args.includes('--no-launch')
 const notesArg = args.indexOf('--notes')
 const notesFile = notesArg !== -1 ? args[notesArg + 1] : null
 
@@ -72,7 +74,8 @@ function run(cmd, a, { capture = true } = {}) {
 // leave the developer running an old local build again.
 if (!dryRun) {
   try {
-    execFileSync(process.execPath, [localInstaller], { cwd: root, stdio: 'inherit' })
+    const installerArgs = noLaunch ? [localInstaller, '--no-launch'] : [localInstaller]
+    execFileSync(process.execPath, installerArgs, { cwd: root, stdio: 'inherit' })
   } catch {
     die('local build/install failed; refusing to continue to the public release step')
   }

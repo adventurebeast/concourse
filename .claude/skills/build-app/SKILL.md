@@ -64,6 +64,12 @@ If Concourse is already running, the installer preserves its processes/agents an
 reports that a restart is needed. Replacing the bundle does not update already
 loaded windows. Never terminate the user's agents to load a new build.
 
+Use `npm run release -- --no-launch` (or `install:local -- --no-launch`) when the
+user is working on this Mac and the release must not open or focus any app window.
+This still builds, installs, and verifies the bundle. If the user has asked to stop
+desktop testing, omit GUI smoke commands and report that packaged boot was not
+rechecked; their instruction takes precedence over the verification step below.
+
 ## Verify the packaged app
 
 Verify installed signature/version and confirm a newly launched packaged instance
