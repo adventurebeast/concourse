@@ -1,6 +1,6 @@
 {
   "name": "concourse",
-  "version": "0.0.40",
+  "version": "0.0.41",
   "description": "A lightweight, ultrafast IDE built for driving AI coding agents.",
   "main": "./out/main/index.js",
   "type": "module",
@@ -30,6 +30,7 @@
     "install:local": "node scripts/install-local.mjs",
     "smoke": "node scripts/smoke.mjs",
     "smoke:application": "npm run build && node scripts/application-smoke.mjs",
+    "smoke:scroll": "npm run build && node scripts/terminal-scroll-smoke.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src",

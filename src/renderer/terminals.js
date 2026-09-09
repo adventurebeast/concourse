@@ -325,6 +325,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       const text = paths.map(shellEscapePath).join(' ') + ' '
       activate(s.id)
       s.used = true // hands-on now — don't auto-cd this pane later
+      resumeFollow(s)
       api.term.input(s.id, text)
       s.term.focus()
     })
@@ -452,6 +453,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     s.resumeCommand = safeAgentResumeCommand(command)
     setState(s, 'working') // pulse the tab the instant they click — immediate feedback
     coachOnce('pulse', PULSE_COACH)
+    resumeFollow(s)
     api.term.input(s.id, command + '\r')
     s.term.focus()
   }
@@ -951,9 +953,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       theme: TERM_THEMES[themeName],
       cursorBlink: termSettings.cursorBlink,
       scrollback: termSettings.scrollback,
-      // Default-true, pinned explicitly so xterm owns scroll-follow behavior for
-      // genuine user input without Concourse retaining input bytes or timings.
-      scrollOnUserInput: true,
+      // xterm also counts mouse protocol reports as user input. Those must not
+      // pull someone reading history back to the live prompt. Rejoin on actual
+      // keyboard/paste/IME interaction below, without inspecting input bytes.
+      scrollOnUserInput: false,
       allowProposedApi: true
     })
     const fit = new FitAddon()
@@ -1057,6 +1060,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     term.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown' && e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'Backspace') {
         s.used = true
+        resumeFollow(s)
         api.term.input(id, '\x05\x15')
         return false
       }
@@ -1069,43 +1073,58 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
       api.term.input(id, data)
     })
     term.onResize(({ cols, rows }) => api.term.resize(id, cols, rows))
-    // Track the user's scroll intent so sticky-bottom never fights them. Every scroll —
-    // wheel, scrollbar drag, Shift+PageUp — fires onScroll; if they've parked the view
-    // above the buffer bottom they're reading history, so stop following. Back at the
-    // bottom re-engages it. Our own re-pins set s.pinning first, so a programmatic scroll
-    // (or the transient one a reflow emits) is ignored here and can't flip the intent.
-    term.onScroll(() => {
-      if (s.pinning) return
+    // xterm 5.5 suppresses its public onScroll event for native viewport scrolling
+    // (wheel/scrollbar/touch). Observe the DOM scroll too, after xterm has updated
+    // its buffer position, or the next output write will wrongly re-pin the view.
+    const syncFollow = () => {
+      if (s.pinning || term.buffer.active.type === 'alternate') return
       const buf = s.term.buffer.active
       s.follow = buf.viewportY >= buf.baseY
-    })
-    // Wheel-scroll the scrollback even while an agent grabs the mouse. Interactive
-    // programs (an agent's thinking UI, vim, etc.) enable mouse tracking, which tells
-    // xterm to forward the wheel to the program AS mouse events — so the wheel stops
-    // scrolling our history. That's correct in a full-screen (alternate-buffer) TUI,
-    // but in the NORMAL buffer it's the "can't scroll up while the agent is thinking"
-    // bug: the conversation is sitting right there in the scrollback, unreachable.
-    // Match iTerm/Terminal.app — in the normal buffer the wheel ALWAYS scrolls OUR
-    // scrollback; only the alternate buffer hands it to the program. When nothing is
-    // tracking the mouse we fall through to xterm's own native wheel handling.
+    }
+    term.onScroll(syncFollow)
+    term.element.querySelector('.xterm-viewport')?.addEventListener('scroll', syncFollow)
+    // onKey excludes xterm's local history shortcuts (e.g. Shift+PageUp). These
+    // callbacks observe only the interaction, never the key or clipboard contents.
+    term.onKey(() => resumeFollow(s))
+    term.element.addEventListener('paste', () => resumeFollow(s), true)
+    for (const event of ['input', 'compositionstart']) {
+      term.textarea.addEventListener(event, () => resumeFollow(s), true)
+    }
+    // Scroll normal-buffer history synchronously, even when an agent tracks the
+    // mouse. Native wheel scrolling changes DOM scrollTop before its deferred
+    // scroll event updates the buffer; a concurrent redraw can overwrite it in
+    // that gap. Full-screen TUIs keep their native mouse/arrow scrolling controls.
+    let wheelRemainder = 0
     cellBody.addEventListener(
       'wheel',
       (e) => {
-        if (term.buffer.active.type === 'alternate') return
-        const tracking = term.modes && term.modes.mouseTrackingMode
-        if (!tracking || tracking === 'none') return
+        if (
+          term.buffer.active.type === 'alternate' ||
+          term.buffer.active.baseY === 0 ||
+          e.deltaY === 0 ||
+          e.shiftKey
+        )
+          return
         e.preventDefault()
         e.stopPropagation()
-        const perRow = term.element && term.rows ? term.element.clientHeight / term.rows : 16
+        const height = term.element.querySelector('.xterm-screen')?.clientHeight
+        const perRow = height && term.rows ? height / term.rows : 16
         let lines
         if (e.deltaMode === 1)
           lines = e.deltaY // already in lines
         else if (e.deltaMode === 2)
           lines = e.deltaY * term.rows // pages
         else lines = e.deltaY / (perRow || 16) // pixels → rows
-        term.scrollLines(Math.round(lines) || (e.deltaY > 0 ? 1 : -1))
+        lines *= term.options.scrollSensitivity
+        const modifier = term.options.fastScrollModifier
+        if ((modifier === 'alt' && e.altKey) || (modifier === 'ctrl' && e.ctrlKey))
+          lines *= term.options.fastScrollSensitivity
+        wheelRemainder += lines
+        const wholeLines = Math.trunc(wheelRemainder)
+        wheelRemainder -= wholeLines
+        if (wholeLines) term.scrollLines(wholeLines)
       },
-      { capture: true }
+      { capture: true, passive: false }
     )
     // Observe only that a user interacted with the terminal. Do not read the event's
     // key/data/clipboard. This unlocks Pulse and prevents workspace auto-cd from
@@ -1513,6 +1532,10 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     s.pinning = true
     s.term.scrollToBottom()
     s.pinning = false
+  }
+  function resumeFollow(s) {
+    s.follow = true
+    pinBottom(s)
   }
   // Fit every primary pane AFTER the browser has settled the new layout. Toggling
   // layout classes doesn't reach final geometry until the next layout pass, so fitting
@@ -1932,6 +1955,7 @@ export function createTerminals({ getRoot, onFleet, onAwait, onAwaitClear }) {
     const s = sessions.get(activeId)
     if (!s || !text) return false
     s.used = true
+    resumeFollow(s)
     api.term.input(s.id, run ? text + '\r' : text)
     s.term.focus()
     return true

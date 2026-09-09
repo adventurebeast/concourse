@@ -26,6 +26,8 @@ are authoritative. Do not bypass their distribution trust requirements.
    `npm run smoke:application` to build and exercise an isolated profile/workspace
    with synthetic terminal input. Fix failures before continuing. This POSIX smoke
    requires a C compiler and does not establish Windows runtime compatibility.
+   For terminal scrolling changes, also run `npm run smoke:scroll` to verify that
+   live output and terminal mouse reports preserve the user's reading position.
 4. Commit the intended changes and version bump with a `Co-Authored-By` trailer.
    Push the branch, create a PR, wait for CI green, and merge through the PR.
    Verify the intended source/version on the default branch before public tagging.
